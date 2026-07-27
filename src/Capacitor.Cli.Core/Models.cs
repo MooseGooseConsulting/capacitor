@@ -1166,6 +1166,7 @@ public static class AcpEventKind {
     public const string ToolResult         = "tool_result";
     public const string SessionTitle       = "session_title";
     public const string SessionEnded       = "session_ended";
+    public const string Usage              = "usage";
 }
 
 /// <summary>
@@ -1182,6 +1183,10 @@ public static class AcpEventKind {
 /// <c>AcpEventEnvelopeWireCompatTests</c> for the locked-in per-field wire-compat guard. Exactly one
 /// per-kind field group is populated for a given <see cref="Kind"/> (see
 /// <c>AcpEventTranslator.Translate</c>, which never sets a field outside its kind's group).
+/// <c>Model</c> is the one exception: it is SHARED attribution metadata rather than a member of a
+/// single kind's group — <c>session_started</c> carries it, and so does <c>usage</c>, because the
+/// server's mapper is a pure per-envelope function with no session-fold access, so the resolved
+/// model has to ride the wire on every reading that needs attribution.
 /// </summary>
 public readonly record struct AcpEventEnvelope(
         int     ContractVersion   = 1,
@@ -1209,6 +1214,12 @@ public readonly record struct AcpEventEnvelope(
 
         // session_ended
         string? EndReason         = null,
+
+        // usage — context occupancy from the ACP Session Usage RFD. Additive and nullable, so
+        // ContractVersion stays 1: an older server ignores them. The resolved model rides the
+        // Model field above, stamped on every usage envelope.
+        long?   ContextUsedTokens   = null,
+        long?   ContextWindowTokens = null,
 
         // transcript-authoritative time (ISO-8601); server falls back to now if absent
         string? TimestampIso      = null
