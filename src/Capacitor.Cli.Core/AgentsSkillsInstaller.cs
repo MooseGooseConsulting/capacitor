@@ -26,7 +26,8 @@ public static class AgentsSkillsInstaller {
         "hide",
         "disable",
         "validate-plan",
-        "review-flows"
+        "review-flows",
+        "guided-tour"
     ];
 
     /// <summary>
@@ -100,6 +101,15 @@ public static class AgentsSkillsInstaller {
 
         return Directory.Exists(targetDir) && SourceNames.Any(name => Directory.Exists(Path.Combine(targetDir, "kcap-" + name)));
     }
+
+    /// <summary>
+    /// True when one specific owned skill is usable under <paramref name="targetDir"/> — narrower
+    /// than <see cref="IsInstalled"/>. Checks the SKILL.md file, not the folder: a failed copy
+    /// can leave an empty folder behind.
+    /// </summary>
+    public static bool HasSkill(string targetDir, string sourceName) =>
+        !string.IsNullOrEmpty(targetDir)
+     && File.Exists(Path.Combine(targetDir, "kcap-" + sourceName, "SKILL.md"));
 
     /// <summary>
     /// Returns the version string from the marker file, or null when the

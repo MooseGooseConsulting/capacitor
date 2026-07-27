@@ -26,7 +26,7 @@ public static class PiMcpExtensionInstaller {
 
         import { spawn } from "node:child_process";
 
-        const KCAP_MCP_SERVERS = ["review", "sessions", "flows", "memory"];
+        const KCAP_MCP_SERVERS = ["review", "sessions", "flows", "memory", "analytics"];
         const HANDSHAKE_TIMEOUT_MS = 10000;
         // Generous — above the flows server's own round timeouts; only a backstop against a
         // stalled-but-not-exited server. A timeout surfaces as a tool failure (execute throws).
@@ -303,8 +303,8 @@ public static class PiMcpExtensionInstaller {
           }
 
           // Start (or re-establish) every server CONCURRENTLY — one 10s handshake budget each, so
-          // four hung servers add ~10s wall-clock, not 4x. Healthy servers register + route; a bad
-          // one is logged and skipped. Idempotent: a server already live is left as-is.
+          // hung servers add ~10s wall-clock total, not 10s per server. Healthy servers register +
+          // route; a bad one is logged and skipped. Idempotent: a server already live is left as-is.
           async function startBridge(): Promise<void> {
             if (startInFlight) return startInFlight;
             startInFlight = (async () => {

@@ -252,6 +252,289 @@ public class SetupCommandTests {
     }
 
     [Test]
+    public async Task GuidedTourCallToAction_is_the_exact_agreed_wording() {
+        // Pinned wording — this is the only discovery path for the guided-tour skill, and the
+        // prompt it names must appear verbatim in that skill's description (asserted below)
+        // or the phrase we tell users to type won't reliably fire it.
+        await Assert.That(SetupCommand.GuidedTourCallToAction).IsEqualTo(
+            "Prompt \"Start kcap guided tour\" in your agent for a guided tour of Capacitor");
+    }
+
+    [Test]
+    public async Task GuidedTourCallToAction_prompt_is_a_trigger_in_the_skill_description() {
+        // Vendors match a user's message against the frontmatter `description:` only — the body
+        // is read after the skill fires. So asserting the phrase is somewhere in the file would
+        // pass even if it moved below the fences, where it can no longer trigger anything.
+        var skill = Path.Combine(RepoRoot(), "kcap", "skills", "guided-tour", "SKILL.md");
+
+        await Assert.That(File.Exists(skill)).IsTrue();
+
+        var description = FrontmatterDescription(await File.ReadAllTextAsync(skill));
+
+        await Assert.That(description).Contains("Start kcap guided tour");
+    }
+
+    /// <summary>
+    /// The value of the YAML frontmatter's <c>description:</c> field, flattened to one line.
+    /// Throws when there is no frontmatter — an unparseable SKILL.md must fail the test, not
+    /// silently return an empty string that a Contains assertion would report as a mismatch.
+    /// </summary>
+    static string FrontmatterDescription(string content) {
+        var lines = content.Replace("\r\n", "\n").Split('\n');
+
+        if (lines.Length < 2 || lines[0].Trim() != "---")
+            throw new InvalidOperationException("SKILL.md has no YAML frontmatter block.");
+
+        var value    = new List<string>();
+        var inValue  = false;
+
+        for (var i = 1; i < lines.Length; i++) {
+            var line = lines[i];
+
+            if (line.Trim() == "---") break;
+
+            if (line.StartsWith("description:", StringComparison.Ordinal)) {
+                inValue = true;
+                // Covers `description: text` as well as the block form `description: >-`.
+                value.Add(line["description:".Length..].Trim().TrimEnd('>', '|', '-').Trim());
+
+                continue;
+            }
+
+            if (!inValue) continue;
+
+            // An unindented line is the next top-level key, which ends this value.
+            if (line.Length > 0 && !char.IsWhiteSpace(line[0])) break;
+
+            value.Add(line.Trim());
+        }
+
+        if (!inValue) throw new InvalidOperationException("SKILL.md frontmatter has no description field.");
+
+        return string.Join(' ', value).Trim();
+    }
+
+    /// <summary>Walks up from the test binary to the repo root (the directory holding `kcap/`).</summary>
+    static string RepoRoot() {
+        var dir = AppContext.BaseDirectory;
+
+        while (dir is not null && !Directory.Exists(Path.Combine(dir, "kcap", "skills")))
+            dir = Path.GetDirectoryName(dir);
+
+        return dir ?? throw new DirectoryNotFoundException("Could not locate the repo root from the test binary.");
+    }
+
+    [Test]
+    public async Task ShouldOfferGuidedTour_false_when_nothing_carries_the_skill() {
+        using var tmp = new TempDir();
+
+        await Assert.That(SetupCommand.ShouldOfferGuidedTour(
+            true, Path.Combine(tmp.Path, ".claude", "settings.json"), GuidedTourPaths(tmp.Path))).IsFalse();
+    }
+
+    [Test]
+    public async Task ShouldOfferGuidedTour_false_when_no_agent_is_detected_even_if_skills_exist() {
+        // A machine carrying the skill but running no agent CLI has nothing to type the prompt
+        // into. Skill-presence alone is not enough — both halves are required.
+        using var tmp   = new TempDir();
+        var       paths = GuidedTourPaths(tmp.Path);
+
+        Directory.CreateDirectory(Path.Combine(paths.AgentsSkillsDir, "kcap-guided-tour"));
+
+        await Assert.That(SetupCommand.ShouldOfferGuidedTour(
+            false, Path.Combine(tmp.Path, ".claude", "settings.json"), paths)).IsFalse();
+    }
+
+    [Test]
+    public async Task ShouldOfferGuidedTour_true_when_the_registered_plugin_ships_the_skill() {
+        using var tmp          = new TempDir();
+        var       settingsPath = Path.Combine(tmp.Path, ".claude", "settings.json");
+        var       marketplace  = Path.Combine(tmp.Path, "plugin");
+
+        SetupCommand.InstallPlugin(settingsPath, marketplace);
+        Directory.CreateDirectory(Path.Combine(marketplace, "skills", "guided-tour"));
+        await File.WriteAllTextAsync(Path.Combine(marketplace, "skills", "guided-tour", "SKILL.md"), "skill");
+
+        await Assert.That(SetupCommand.ShouldOfferGuidedTour(true, settingsPath, GuidedTourPaths(tmp.Path))).IsTrue();
+    }
+
+    [Test]
+    public async Task ShouldOfferGuidedTour_uses_a_legacy_registered_marketplace_path() {
+        // IsInstalled recognises pre-rename keys (kurrent/kapacitor); the path reader must use
+        // the same key set, or the gate falls back to THIS build's plugin dir — which ships the
+        // skill — while Claude actually loads the legacy dir, which does not.
+        using var tmp          = new TempDir();
+        var       settingsPath = Path.Combine(tmp.Path, ".claude", "settings.json");
+        var       legacyDir    = Path.Combine(tmp.Path, "legacy-plugin");
+
+        Directory.CreateDirectory(Path.GetDirectoryName(settingsPath)!);
+        await File.WriteAllTextAsync(settingsPath, $$"""
+            {
+              "extraKnownMarketplaces": {
+                "kapacitor": { "source": { "source": "directory", "path": {{System.Text.Json.JsonSerializer.Serialize(legacyDir)}} } }
+              },
+              "enabledPlugins": { "kapacitor@kapacitor": true }
+            }
+            """);
+        Directory.CreateDirectory(Path.Combine(legacyDir, "skills", "recap"));
+
+        // Current build's plugin dir DOES ship the skill — the wrong fallback target.
+        var modernPlugin = Path.Combine(tmp.Path, "modern-plugin");
+        Directory.CreateDirectory(Path.Combine(modernPlugin, "skills", "guided-tour"));
+        await File.WriteAllTextAsync(Path.Combine(modernPlugin, "skills", "guided-tour", "SKILL.md"), "skill");
+
+        var paths = GuidedTourPaths(tmp.Path) with { PluginDir = modernPlugin };
+
+        await Assert.That(SetupCommand.ShouldOfferGuidedTour(true, settingsPath, paths)).IsFalse();
+    }
+
+    [Test]
+    public async Task ShouldOfferGuidedTour_false_when_an_old_plugin_is_registered_and_pluginDir_is_null() {
+        // Codex round 4: an older kcap plugin registered in settings, run from a layout where
+        // ResolvePluginPath finds nothing. Registration alone must not advertise a skill the
+        // registered directory does not ship.
+        using var tmp          = new TempDir();
+        var       settingsPath = Path.Combine(tmp.Path, ".claude", "settings.json");
+        var       oldPlugin    = Path.Combine(tmp.Path, "old-plugin");
+
+        SetupCommand.InstallPlugin(settingsPath, oldPlugin);
+        Directory.CreateDirectory(Path.Combine(oldPlugin, "skills", "recap")); // pre-guided-tour layout
+
+        var paths = GuidedTourPaths(tmp.Path); // PluginDir stays null
+
+        await Assert.That(SetupCommand.ShouldOfferGuidedTour(true, settingsPath, paths)).IsFalse();
+
+        // The registered dir gaining the skill flips it — the gate tracks what Claude loads.
+        Directory.CreateDirectory(Path.Combine(oldPlugin, "skills", "guided-tour"));
+        await File.WriteAllTextAsync(Path.Combine(oldPlugin, "skills", "guided-tour", "SKILL.md"), "skill");
+
+        await Assert.That(SetupCommand.ShouldOfferGuidedTour(true, settingsPath, paths)).IsTrue();
+    }
+
+    [Test]
+    public async Task ShouldOfferGuidedTour_true_when_shared_agent_skills_are_present() {
+        // The case a "was it installed THIS run?" gate gets wrong: skills already on disk mean a
+        // wired-up machine, but every installer reports false because there was no work to do.
+        using var tmp    = new TempDir();
+        var       paths  = GuidedTourPaths(tmp.Path);
+
+        Directory.CreateDirectory(Path.Combine(paths.AgentsSkillsDir, "kcap-guided-tour"));
+        await File.WriteAllTextAsync(
+            Path.Combine(paths.AgentsSkillsDir, "kcap-guided-tour", "SKILL.md"), "skill");
+
+        await Assert.That(SetupCommand.ShouldOfferGuidedTour(
+            true, Path.Combine(tmp.Path, ".claude", "settings.json"), paths)).IsTrue();
+    }
+
+    [Test]
+    public async Task ShouldOfferGuidedTour_false_when_the_skill_folder_is_empty() {
+        // A failed copy creates the folder before writing SKILL.md, so an empty folder means a
+        // broken install, not a usable skill.
+        using var tmp   = new TempDir();
+        var       paths = GuidedTourPaths(tmp.Path);
+
+        Directory.CreateDirectory(Path.Combine(paths.AgentsSkillsDir, "kcap-guided-tour"));
+
+        await Assert.That(SetupCommand.ShouldOfferGuidedTour(
+            true, Path.Combine(tmp.Path, ".claude", "settings.json"), paths)).IsFalse();
+    }
+
+    [Test]
+    public async Task HasSkill_empty_targetDir_is_false_not_a_cwd_probe() {
+        // Paths defaults some skill dirs to "" — Path.Combine("", ...) would otherwise probe a
+        // relative kcap-guided-tour against whatever directory setup was run from.
+        await Assert.That(AgentsSkillsInstaller.HasSkill("", "guided-tour")).IsFalse();
+    }
+
+    [Test]
+    public async Task ShouldOfferGuidedTour_true_from_the_kiro_and_antigravity_skill_dirs() {
+        using var kiro = new TempDir();
+        using var anti = new TempDir();
+
+        Directory.CreateDirectory(Path.Combine(kiro.Path, "kiro-skills", "kcap-guided-tour"));
+        await File.WriteAllTextAsync(
+            Path.Combine(kiro.Path, "kiro-skills", "kcap-guided-tour", "SKILL.md"), "skill");
+        await Assert.That(SetupCommand.ShouldOfferGuidedTour(
+            true, Path.Combine(kiro.Path, "none.json"), GuidedTourPaths(kiro.Path))).IsTrue();
+
+        Directory.CreateDirectory(Path.Combine(anti.Path, "antigravity-skills", "kcap-guided-tour"));
+        await File.WriteAllTextAsync(
+            Path.Combine(anti.Path, "antigravity-skills", "kcap-guided-tour", "SKILL.md"), "skill");
+        await Assert.That(SetupCommand.ShouldOfferGuidedTour(
+            true, Path.Combine(anti.Path, "none.json"), GuidedTourPaths(anti.Path))).IsTrue();
+    }
+
+    [Test]
+    public async Task ShouldOfferGuidedTour_false_when_only_older_skills_are_installed() {
+        // An upgrade from a kcap that predates guided-tour leaves kcap-recap and friends on disk.
+        // "Has this installer ever run here" is true there; "can the user run the tour" is not.
+        using var tmp   = new TempDir();
+        var       paths = GuidedTourPaths(tmp.Path);
+
+        Directory.CreateDirectory(Path.Combine(paths.AgentsSkillsDir, "kcap-recap"));
+        Directory.CreateDirectory(Path.Combine(paths.AgentsSkillsDir, "kcap-errors"));
+
+        await Assert.That(AgentsSkillsInstaller.IsInstalled(paths.AgentsSkillsDir)).IsTrue();
+        await Assert.That(SetupCommand.ShouldOfferGuidedTour(
+            true, Path.Combine(tmp.Path, ".claude", "settings.json"), paths)).IsFalse();
+    }
+
+    [Test]
+    public async Task ShouldOfferGuidedTour_false_when_the_claude_plugin_dir_lacks_the_skill() {
+        // Registration alone isn't enough when the resolved plugin dir is a stale install.
+        using var tmp          = new TempDir();
+        var       settingsPath = Path.Combine(tmp.Path, ".claude", "settings.json");
+        var       pluginDir    = Path.Combine(tmp.Path, "stale-plugin");
+
+        SetupCommand.InstallPlugin(settingsPath, pluginDir);
+        Directory.CreateDirectory(Path.Combine(pluginDir, "skills", "recap"));
+
+        var paths = GuidedTourPaths(tmp.Path) with { PluginDir = pluginDir };
+
+        await Assert.That(SetupCommand.ShouldOfferGuidedTour(true, settingsPath, paths)).IsFalse();
+
+        Directory.CreateDirectory(Path.Combine(pluginDir, "skills", "guided-tour"));
+
+        // Folder alone is still not enough — the file is the skill.
+        await Assert.That(SetupCommand.ShouldOfferGuidedTour(true, settingsPath, paths)).IsFalse();
+
+        await File.WriteAllTextAsync(
+            Path.Combine(pluginDir, "skills", "guided-tour", "SKILL.md"), "skill");
+
+        await Assert.That(SetupCommand.ShouldOfferGuidedTour(true, settingsPath, paths)).IsTrue();
+    }
+
+    /// <summary>Paths record carrying only the four fields GuidedTourReachable reads.</summary>
+    static CodingAgentsStep.Paths GuidedTourPaths(string root) =>
+        new(ClaudeSettingsPath:   Path.Combine(root, ".claude", "settings.json"),
+            ClaudeScopeLabel:     "user",
+            PluginDir:            null,
+            CodexHooksPath:       Path.Combine(root, "codex-hooks.json"),
+            CursorHooksPath:      Path.Combine(root, "cursor-hooks.json"),
+            CopilotHooksPath:     Path.Combine(root, "copilot-hooks.json"),
+            GeminiSettingsPath:   Path.Combine(root, "gemini-settings.json"),
+            AgentsSkillsDir:      Path.Combine(root, "agents-skills"),
+            LegacyCodexSkillsDir: Path.Combine(root, "legacy-codex-skills"),
+            KiroHooksPath:        Path.Combine(root, "kiro-hooks.json"),
+            PiExtensionPath:      Path.Combine(root, "pi-ext.ts"),
+            OpenCodeExtensionPath: Path.Combine(root, "oc-ext.ts"),
+            AntigravityHooksPath: Path.Combine(root, "antigravity-hooks.json"),
+            CodexConfigTomlPath:  Path.Combine(root, "config.toml"),
+            CursorMcpPath:        Path.Combine(root, "cursor-mcp.json"),
+            CopilotMcpPath:       Path.Combine(root, "copilot-mcp.json"),
+            CopilotInstructionsPath: Path.Combine(root, "copilot-instructions.md"),
+            GeminiInstructionsPath: Path.Combine(root, "GEMINI.md"),
+            AntigravityMcpPath:   Path.Combine(root, "antigravity-mcp.json"),
+            AntigravityInstructionsPath: Path.Combine(root, "antigravity-instructions.md"),
+            AntigravitySkillsDir: Path.Combine(root, "antigravity-skills"),
+            OpenCodeMcpPath:      Path.Combine(root, "oc-mcp.json"),
+            OpenCodeInstructionsPath: Path.Combine(root, "AGENTS.md"),
+            KiroMcpPath:          Path.Combine(root, "kiro-mcp.json"),
+            KiroSkillsDir:        Path.Combine(root, "kiro-skills"),
+            PiMcpExtensionPath:   Path.Combine(root, "pi-mcp.ts"),
+            PiAgentsMdPath:       Path.Combine(root, "pi-AGENTS.md"));
+
+    [Test]
     public async Task ResolveTenantArg_expands_bare_label_to_kcap_subdomain() {
         await Assert.That(SetupCommand.ResolveTenantArg("eventuous")).IsEqualTo("https://eventuous.kcap.ai");
     }

@@ -537,8 +537,56 @@ public static class SetupCommand {
         AnsiConsole.MarkupLine("\n[dim]Optional:[/] start the daemon with [cyan]kcap daemon start -d[/]");
         AnsiConsole.MarkupLine("[dim]Optional:[/] import past sessions with [cyan]kcap import --org[/]");
 
+        if (ShouldOfferGuidedTour(detectedSummary is not null, claudeSettingsPath, stepPaths)) {
+            AnsiConsole.Write(
+                new Panel($"[bold]{Markup.Escape(GuidedTourCallToAction)}[/]")
+                    .BorderColor(Color.Green)
+                    .Padding(1, 0));
+        }
+
         return 0;
     }
+
+    /// <summary>
+    /// Whether to point the user at the guided tour. Both halves are required: an agent to type
+    /// the prompt into, and the skill actually on disk for one of them. Skill presence is read
+    /// from the filesystem rather than the install result, because the installers report false
+    /// when work was skipped as already-current — a wired-up machine re-running setup, which
+    /// must still get the CTA.
+    /// </summary>
+    internal static bool ShouldOfferGuidedTour(
+            bool anyAgentDetected, string claudeSettingsPath, CodingAgentsStep.Paths paths) =>
+        anyAgentDetected
+     && (ClaudeCarriesGuidedTour(claudeSettingsPath, paths.PluginDir)
+      || AgentsSkillsInstaller.HasSkill(paths.AgentsSkillsDir,      GuidedTourSkillName)
+      || AgentsSkillsInstaller.HasSkill(paths.KiroSkillsDir,        GuidedTourSkillName)
+      || AgentsSkillsInstaller.HasSkill(paths.AntigravitySkillsDir, GuidedTourSkillName));
+
+    /// <summary>
+    /// The plugin is registered AND the directory Claude loads it from ships the skill. The
+    /// registered marketplace path in settings is the artifact that matters — <paramref
+    /// name="pluginDir"/> is only where THIS build would install from, and after an upgrade the
+    /// two can differ. Falls back to it when nothing is registered; false when neither resolves,
+    /// because an unverifiable skill must not be advertised.
+    /// </summary>
+    static bool ClaudeCarriesGuidedTour(string claudeSettingsPath, string? pluginDir) {
+        if (!ClaudePluginInstaller.IsInstalled(claudeSettingsPath)) return false;
+
+        var dir = ClaudePluginInstaller.RegisteredMarketplacePath(claudeSettingsPath) ?? pluginDir;
+
+        return dir is not null
+            && File.Exists(Path.Combine(dir, "skills", GuidedTourSkillName, "SKILL.md"));
+    }
+
+    /// <summary>Source folder name under <c>kcap/skills/</c>; <c>kcap-</c>-prefixed once installed.</summary>
+    internal const string GuidedTourSkillName = "guided-tour";
+
+    /// <summary>
+    /// A prompt rather than a slash command, because the invocation differs per vendor. Pinned
+    /// against the skill's trigger list by <c>SetupCommandTests</c>.
+    /// </summary>
+    internal const string GuidedTourCallToAction =
+        "Prompt \"Start kcap guided tour\" in your agent for a guided tour of Capacitor";
 
     /// <summary>
     /// Whether Step 6's import eligibility auth requirement is met: provider <c>None</c> needs no
