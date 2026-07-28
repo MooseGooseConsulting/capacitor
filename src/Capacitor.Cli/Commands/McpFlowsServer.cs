@@ -839,6 +839,8 @@ static class McpFlowsServer {
             sb.Append("Multi-participant flow started — no round is in flight yet. Address a role with " +
                       "send_to_participant(flow_run_id, participant, message); each role's agent launches " +
                       "lazily on its first message.");
+            sb.AppendLine();
+            AppendWorkspaceDiagnostics(sb, node);
             pendingIds = AppendPendingMessages(sb, node);
             return sb.ToString();
         } catch {
@@ -1091,6 +1093,7 @@ static class McpFlowsServer {
             sb.Append("reviewer_vendor_source: "); AppendLine(sb, vendorSource);
         }
         AppendReviewerModelAudit(sb, node);
+        AppendWorkspaceDiagnostics(sb, node);
         if (!string.IsNullOrEmpty(resultText)) { sb.AppendLine(); sb.Append(resultText); }
 
         pendingIds = AppendPendingMessages(sb, node);
@@ -1127,6 +1130,7 @@ static class McpFlowsServer {
             if (appliedVendor is not null) { sb.Append("applied_reviewer_vendor: "); AppendLine(sb, appliedVendor); }
             if (vendorSource is not null) { sb.Append("reviewer_vendor_source: "); AppendLine(sb, vendorSource); }
             AppendReviewerModelAudit(sb, node);
+            AppendWorkspaceDiagnostics(sb, node);
 
             if (!string.IsNullOrEmpty(resultText)) {
                 sb.AppendLine();
@@ -1175,6 +1179,7 @@ static class McpFlowsServer {
             if (appliedVendor is not null) { sb.Append("applied_reviewer_vendor: "); AppendLine(sb, appliedVendor); }
             if (vendorSource is not null) { sb.Append("reviewer_vendor_source: "); AppendLine(sb, vendorSource); }
             AppendReviewerModelAudit(sb, node);
+            AppendWorkspaceDiagnostics(sb, node);
 
             if (!string.IsNullOrEmpty(lastResultKind)) {
                 sb.Append("result_kind: "); AppendLine(sb, lastResultKind);
@@ -1229,6 +1234,9 @@ static class McpFlowsServer {
             var sb = new StringBuilder();
             sb.Append("flow_run_id: "); AppendLine(sb, flowRunId);
             sb.Append("status: ");      AppendLine(sb, status);
+            // Close is often the LAST thing a caller reads, so it is the surface most likely to be
+            // the only record of what the reviewer actually saw.
+            AppendWorkspaceDiagnostics(sb, node);
 
             pendingIds = AppendPendingMessages(sb, node);
             return sb.ToString();
@@ -1292,6 +1300,52 @@ static class McpFlowsServer {
         if (TryGetString(node, "applied_reviewer_model")   is { } applied)   { sb.Append("applied_reviewer_model: ");   AppendLine(sb, applied); }
         if (TryGetString(node, "resolved_reviewer_model")  is { } resolved)  { sb.Append("resolved_reviewer_model: ");  AppendLine(sb, resolved); }
         if (TryGetString(node, "reviewer_model_source")    is { } source)    { sb.Append("reviewer_model_source: ");    AppendLine(sb, source); }
+    }
+
+    /// <summary>Renders the run's reviewer workspace decision. ONE helper, reached from every surface
+    /// that formats a flow response, so no path can disagree with another about what the reviewer read.
+    /// <para>An absent decision renders <c>unknown</c> and NEVER <c>borrowed</c> — guessing borrowed is
+    /// the one wrong answer that reads as reassurance. Reasons render verbatim: nothing here
+    /// enumerates them, so a reason added server-side reaches the user unchanged.</para></summary>
+    static void AppendWorkspaceDiagnostics(StringBuilder sb, JsonObject node) {
+        var mode = TryGetString(node, "workspace_mode");
+
+        switch (mode) {
+            case "borrowed":
+                sb.AppendLine("workspace: borrowed (the reviewer saw your working tree, uncommitted changes included)");
+                break;
+            case "fallback": {
+                var reason = TryGetString(node, "fallback_reason");
+                sb.Append("workspace: fallback");
+                if (reason is not null) { sb.Append(" ("); sb.Append(reason); sb.Append(')'); }
+                sb.AppendLine();
+                // Says only what is true for EVERY reason, and only about the WORKING TREE.
+                //
+                // Two earlier wordings were both wrong in the same direction — asserting more than the
+                // CLI can know. "read a checkout at the last commit" is false for
+                // context_only_requested (no repository is read at all). "did not see uncommitted
+                // work" is ALSO false there: the caller may have inlined an uncommitted diff into the
+                // submitted context, so the reviewer saw uncommitted work — just not from the tree.
+                //
+                // The only claim that holds for every reason is about the automatic channel: the tree
+                // was not borrowed, so nothing uncommitted arrived that way. Naming reasons
+                // individually would fix each case and reintroduce the allowlist this feature exists
+                // without.
+                sb.AppendLine("  ⚠ Your working tree was NOT borrowed — uncommitted changes were not " +
+                              "included automatically. Anything uncommitted the reviewer saw came from " +
+                              "the context you submitted.");
+                break;
+            }
+            case null:
+                sb.AppendLine("workspace: unknown");
+                break;
+            default:
+                // An owned worktree, or a mode this build has not heard of. Report it verbatim rather
+                // than collapsing it into one of the cases above — inventing a category is how a
+                // caller ends up trusting a decision the server never made.
+                sb.Append("workspace: "); AppendLine(sb, mode);
+                break;
+        }
     }
 
     /// <summary> E-c: deliver-once ack for pending messages. Callers must invoke this
@@ -1412,7 +1466,7 @@ static class McpFlowsServer {
                     ["target_kind"]  = new("string", "What is being reviewed: 'pr', 'branch', 'file', 'spec', 'plan', etc."),
                     ["target_ref"]   = new("string", "A reference to the target (PR URL, branch name, file path, etc.)."),
                     ["target_title"] = new("string", "Human-readable title for the target (PR title, spec name, etc.)."),
-                    ["context"]      = new("string", "Background context for the reviewer: what to focus on, constraints, definition of done. State where the changes live — the reviewer sees a mirror of the working tree you launched from only; if the changeset is elsewhere or incomplete there, say so and inline the relevant diffs."),
+                    ["context"]      = new("string", "Background context for the reviewer: what to focus on, constraints, definition of done. State where the changes live — the reviewer sees a mirror of the working tree you launched from only; if the changeset is elsewhere or incomplete there, say so and inline the relevant diffs. Whether it sees your UNCOMMITTED work is conditional: only when the run actually borrows your checkout. Responses report this as workspace: borrowed | fallback (<reason>) | unknown — for the reserved review aliases; other flow kinds report unknown. On fallback your working tree was NOT borrowed, so inline anything uncommitted that matters."),
                     ["instructions"] = new("string", "Optional additional instructions for the reviewer agent."),
                     ["mode"]         = new("string", "Optional. Pass 'context-only' to have the reviewer treat the submitted context/diff as authoritative rather than reading the repository. By default the reviewer runs in a worktree mirrored from your working tree (uncommitted changes included) when it runs on the same machine, so it can ground the review in the actual source; passing 'context-only' opts out of that."),
                     ["vendor"]       = new("string", "Optional reviewer vendor for the reserved alias, independent of the driver harness. Omit to use the server's Flows:Review:DefaultVendor. The selected vendor must be installed and certified unattended on an eligible daemon; there is no silent fallback. Pass the lowercase canonical vendor token (e.g. 'claude', 'codex')."),
