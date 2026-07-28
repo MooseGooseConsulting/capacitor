@@ -427,9 +427,13 @@ static class ImportCommand {
     /// The single aggregation boundary — what outcome should this routed call count as for
     /// the Done-grid's counters, per-vendor tracker, and printed line (
     /// <c>null</c> = suppressed, don't count at all). This is a COUNTING-ONLY boundary: it
-    /// deliberately does NOT drive <c>importedSessionIds</c> / <c>--private</c> membership, which
-    /// stays governed by the pre-existing suppression check and outcome switch, unchanged from
-    /// before this ticket — see the call sites below for the exact membership condition.
+    /// deliberately does NOT drive <c>importedSessionIds</c> membership, which stays governed by
+    /// the pre-existing suppression check and outcome switch — see the call sites below for the
+    /// exact membership condition. <c>--private</c> no longer rides on that membership alone
+    /// either: sources that can attach child content on a replay are captured outcome-independently
+    /// into <c>privateScopeSessionIds</c>, precisely because this resolver's inputs can't be
+    /// trusted to reveal an attach (a hardcoded Skipped, or a Failed lifecycle POST after the
+    /// content already persisted).
     /// <see cref="IsLifecycleOnlyRoutedReplay"/> requires <c>!sentChildContent</c> and
     /// <see cref="IsSkippedChildContentOverride"/> requires <c>sentChildContent</c>, so the two
     /// are mutually exclusive by construction — there's no ordering ambiguity between them.
@@ -1167,7 +1171,7 @@ static class ImportCommand {
         };
 
         ImportChainsResult importResult;
-        // Counts for routed-source imports (Cursor). These add on top of the
+        // Counts for routed-source imports. These add on top of the
         // chain-worker counts when both phases run.
         var routedLoaded   = 0;
         var routedErrored  = 0;
@@ -1178,25 +1182,30 @@ static class ImportCommand {
         // sub-grid attributes Skipped-at-import to Excluded (not Errored).
         var routedOutcomesByVendor = new ConcurrentDictionary<string, (int Loaded, int Skipped, int Failed)>(StringComparer.Ordinal);
 
-        // a SEPARATE tracker from `importedSessionIds`, used
-        // ONLY to decide what gets privatized under --private — never fed into the Done-grid
-        // counting (`importedSessionIds`/`doneBySource` stay exactly as they were; the
-        // cosmetic double-count concern is intentionally left alone). `importedSessionIds`
-        // only gains a Cursor session id when this run did "real new work" by the
-        // Loaded/Failed/AlreadyLoaded + SentChildContent accounting — but privacy must NOT
-        // depend on that classification: a lifecycle POST (subagent-stop/session-end) can fail
-        // AFTER a child transcript has already persisted new content (this run's own
-        // ImportSessionAsync then returns Failed), or a later retry can see the child read as
-        // already-complete (SentChildContent=false) even though a PRIOR run attached new
-        // content that was never privatized. Either way `importedSessionIds` would exclude the
-        // session and a public session would stay public. So every Cursor routed classification
-        // this run touches — regardless of its outcome — is unconditionally captured here when
-        // --private is requested, and privatized at the end independent of Loaded/Failed/
-        // AlreadyLoaded/SentChildContent. Scoped to Cursor (vendor == "cursor") because
-        // SentChildContent/this lifecycle-after-content-persisted shape is Cursor-specific;
-        // every other routed vendor's own default_visibility-on-session-start stamp already
-        // privatizes atomically and isn't exposed to this gap.
+        // A SEPARATE tracker from `importedSessionIds`, feeding ONLY the --private pass and never
+        // the Done-grid counting. Membership in `importedSessionIds` keys off the raw
+        // ImportOutcome, but privacy must not: a source can report a hardcoded Skipped for a repair
+        // that DID attach a child, a lifecycle POST can fail AFTER that child's content persisted,
+        // and a later retry can read the child as already-complete even though a PRIOR run
+        // attached content that was never privatized. Each case would exclude the session and
+        // leave a public session public, so every routed classification touched here is captured
+        // regardless of outcome.
+        //
+        // Scoped by AttachesChildContentOnReplay, not a vendor name: the source owning the
+        // child-import pass is what knows. Excluding a source claims only that its AlreadyLoaded
+        // call posts no transcript CONTENT — not that it posts nothing: Copilot/Kiro/Pi still
+        // replay session-start/session-end lifecycle there and simply have no child import, while
+        // OpenCode alone returns before any POST. Nor does it claim the source can never add
+        // content — all of them post on New and Partial, and a lifecycle POST failing after that
+        // content persisted leaves the same kind of gap for every routed vendor. That residual is
+        // deliberately a separate issue, not something this gate covers.
         var privateScopeSessionIds = new ConcurrentBag<string>();
+
+        // Read-only inside the parallel loops below; resolved from the sources actually in play.
+        var replayChildContentVendors = byVendor.Values
+            .Where(s => s.AttachesChildContentOnReplay)
+            .Select(s => s.Vendor)
+            .ToHashSet(StringComparer.Ordinal);
 
         static (int Loaded, int Skipped, int Failed) AddRoutedOutcome(
                 (int Loaded, int Skipped, int Failed) prev,
@@ -1344,7 +1353,7 @@ static class ImportCommand {
             importResult = new(0, 0, 0);
         }
 
-        // --- Routed-source import phase (Cursor) ---
+        // --- Routed-source import phase (every non-chain source) ---
         // Sessions without a FilePath are imported directly via the source's
         // ImportSessionAsync. They share the 4-worker concurrency budget with
         // the chain phase but run sequentially after it; the TTY renderer is
@@ -1372,6 +1381,65 @@ static class ImportCommand {
                 }
             }
 
+            // Every non-rendering effect of a routed call lives here — the privatize capture, the
+            // counting resolution, the per-vendor tracker, importedSessionIds membership and the
+            // aggregate totals — so the TTY and non-TTY branches below differ ONLY in how they
+            // draw. Duplicating any of it across both branches let them drift independently, and a
+            // regression in just one was invisible to tests that exercise a single display mode.
+            // Returns the resolved outcome for the caller's switch, plus the raw one (its
+            // `null when outcome is Skipped` arm needs it).
+            async Task<(ImportOutcome? Resolved, ImportOutcome Raw)> RecordRoutedResultAsync(SessionClassification c) {
+                var result  = await ImportOne(c);
+                var outcome = result.Outcome;
+
+                // Capture for privatization BEFORE any Loaded/Failed/AlreadyLoaded classification
+                // — see the declaration comment on privateScopeSessionIds. Deliberately
+                // unconditional: even a Failed outcome (lifecycle POST failed after content
+                // already persisted) must still get privatized.
+                if (forcePrivate && replayChildContentVendors.Contains(c.Vendor)) {
+                    privateScopeSessionIds.Add(c.SessionId);
+                }
+
+                // An AlreadyLoaded session's routed call is a lifecycle/repo-backfill replay (or,
+                // for a nested child, an inline-handled no-op), not a new import — it must not
+                // double-count on top of the classify-time AlreadyLoaded bucket. sentChildContent
+                // overrides this for an AlreadyLoaded parent that attached a brand-new nested
+                // child — that IS real new work.
+                //
+                // `resolved` — not the raw `outcome` — is the single aggregation boundary driving
+                // every counting/display consumer. This is what fixes a Skipped AlreadyLoaded call
+                // (e.g. Antigravity's) that attached genuinely-new child content: it resolves to
+                // Loaded for counting even though its own raw outcome stays Skipped.
+                //
+                // importedSessionIds membership is explicitly EXCLUDED from that — it keeps
+                // switching on the raw `outcome`, gated by the same suppression. Pinned by
+                // RoutedPrivatizeMembershipTests. See ResolveRoutedOutcomeForCounting's doc.
+                var resolved = ResolveRoutedOutcomeForCounting(c.Status, outcome, result.SentChildContent);
+
+                if (resolved is { } resolvedForVendor) {
+                    routedOutcomesByVendor.AddOrUpdate(
+                        c.Vendor,
+                        addValueFactory: _ => AddRoutedOutcome((0, 0, 0), resolvedForVendor),
+                        updateValueFactory: (_, prev) => AddRoutedOutcome(prev, resolvedForVendor)
+                    );
+                }
+
+                if (resolved is not null && outcome is ImportOutcome.Loaded or ImportOutcome.Resumed) {
+                    importedSessionIds.Add(c.SessionId);
+                }
+
+                // Aggregate Done-grid totals. Also a non-rendering effect, so it belongs here
+                // rather than once per renderer — the suppressed (`null`) cases contribute to no
+                // bucket, which is what keeps a replay off the totals.
+                switch (resolved) {
+                    case ImportOutcome.Loaded or ImportOutcome.Resumed: Interlocked.Increment(ref routedLoaded);   break;
+                    case ImportOutcome.Skipped:                         Interlocked.Increment(ref routedExcluded); break;
+                    case ImportOutcome.Failed:                          Interlocked.Increment(ref routedErrored);  break;
+                }
+
+                return (resolved, outcome);
+            }
+
             if (display.Tty) {
                 await AnsiConsole.Progress()
                     .AutoClear(false)
@@ -1384,74 +1452,23 @@ static class ImportCommand {
                                 routed,
                                 new ParallelOptions { MaxDegreeOfParallelism = ImportWorkerCount },
                                 async (c, _) => {
-                                    var result  = await ImportOne(c);
-                                    var outcome = result.Outcome;
-
-                                    // capture for privatization BEFORE
-                                    // any Loaded/Failed/AlreadyLoaded classification below — see the
-                                    // declaration comment on privateScopeSessionIds. Deliberately
-                                    // unconditional: even a Failed outcome (lifecycle POST failed
-                                    // after content already persisted) must still get privatized.
-                                    if (forcePrivate && c.Vendor == "cursor") {
-                                        privateScopeSessionIds.Add(c.SessionId);
-                                    }
-
-                                    // An AlreadyLoaded session's routed call is a
-                                    // lifecycle/repo-backfill replay (or, for a nested child, an
-                                    // inline-handled no-op), not a new import — it must not
-                                    // double-count on top of the classify-time AlreadyLoaded
-                                    // bucket. sentChildContent overrides this for an AlreadyLoaded
-                                    // parent that attached a brand-new nested child — that IS
-                                    // real new work.
-                                    //
-                                    // `resolved` — not the raw `outcome` — is the single
-                                    // aggregation boundary that drives every counting/display
-                                    // consumer below (routedLoaded/routedExcluded/routedErrored,
-                                    // routedOutcomesByVendor, and the printed line). This is what
-                                    // fixes a Skipped AlreadyLoaded call (e.g. Antigravity's) that
-                                    // attached genuinely-new child content: it resolves to Loaded
-                                    // for counting even though its own raw outcome stays Skipped.
-                                    //
-                                    // importedSessionIds membership is explicitly EXCLUDED from
-                                    // this — it keeps switching on the raw `outcome`, gated by the
-                                    // same suppression (resolved is not null), so this makes no
-                                    // change to --private visibility for any vendor. See
-                                    // ResolveRoutedOutcomeForCounting's doc comment.
-                                    var resolved = ResolveRoutedOutcomeForCounting(c.Status, outcome, result.SentChildContent);
-
-                                    if (resolved is { } resolvedForVendor) {
-                                        routedOutcomesByVendor.AddOrUpdate(
-                                            c.Vendor,
-                                            addValueFactory: _ => AddRoutedOutcome((0, 0, 0), resolvedForVendor),
-                                            updateValueFactory: (_, prev) => AddRoutedOutcome(prev, resolvedForVendor)
-                                        );
-                                    }
-
-                                    if (resolved is not null && outcome is ImportOutcome.Loaded or ImportOutcome.Resumed) {
-                                        importedSessionIds.Add(c.SessionId);
-                                    }
+                                    var (resolved, outcome) = await RecordRoutedResultAsync(c);
 
                                     switch (resolved) {
                                         case ImportOutcome.Loaded:
                                         case ImportOutcome.Resumed:
-                                            Interlocked.Increment(ref routedLoaded);
-
                                             AnsiConsole.MarkupLine(
                                                 $"[green]✓[/] Loading [cyan]{Markup.Escape(c.SessionId)}[/] ({Markup.Escape(c.Vendor)})"
                                             );
 
                                             break;
                                         case ImportOutcome.Skipped:
-                                            Interlocked.Increment(ref routedExcluded);
-
                                             AnsiConsole.MarkupLine(
                                                 $"[yellow]~[/] Skipping [cyan]{Markup.Escape(c.SessionId)}[/] (already current)"
                                             );
 
                                             break;
                                         case ImportOutcome.Failed:
-                                            Interlocked.Increment(ref routedErrored);
-
                                             AnsiConsole.MarkupLine(
                                                 $"[red]✗[/] Failed [cyan]{Markup.Escape(c.SessionId)}[/]"
                                             );
@@ -1485,49 +1502,19 @@ static class ImportCommand {
                     routed,
                     new ParallelOptions { MaxDegreeOfParallelism = ImportWorkerCount },
                     async (c, _) => {
-                        var result  = await ImportOne(c);
-                        var outcome = result.Outcome;
-
-                        // see the Tty branch above — unconditional
-                        // privatization capture, independent of the outcome classification below.
-                        if (forcePrivate && c.Vendor == "cursor") {
-                            privateScopeSessionIds.Add(c.SessionId);
-                        }
-
-                        // See the Tty branch above for why an AlreadyLoaded lifecycle-only
-                        // replay must not count as Loaded/Excluded, why sentChildContent
-                        // overrides that for a parent that attached brand-new nested-child
-                        // content, why `resolved` (not the raw `outcome`) drives every
-                        // counting/display consumer, and why importedSessionIds membership is
-                        // explicitly excluded from that and keeps switching on the raw `outcome`.
-                        var resolved = ResolveRoutedOutcomeForCounting(c.Status, outcome, result.SentChildContent);
-
-                        if (resolved is { } resolvedForVendor) {
-                            routedOutcomesByVendor.AddOrUpdate(
-                                c.Vendor,
-                                addValueFactory: _ => AddRoutedOutcome((0, 0, 0), resolvedForVendor),
-                                updateValueFactory: (_, prev) => AddRoutedOutcome(prev, resolvedForVendor)
-                            );
-                        }
-
-                        if (resolved is not null && outcome is ImportOutcome.Loaded or ImportOutcome.Resumed) {
-                            importedSessionIds.Add(c.SessionId);
-                        }
+                        var (resolved, outcome) = await RecordRoutedResultAsync(c);
 
                         switch (resolved) {
                             case ImportOutcome.Loaded:
                             case ImportOutcome.Resumed:
-                                Interlocked.Increment(ref routedLoaded);
                                 display.Line($"Loading {c.SessionId} ({c.Vendor})");
 
                                 break;
                             case ImportOutcome.Skipped:
-                                Interlocked.Increment(ref routedExcluded);
                                 display.Line($"Skipping {c.SessionId} (already current)");
 
                                 break;
                             case ImportOutcome.Failed:
-                                Interlocked.Increment(ref routedErrored);
                                 display.Line($"Failed {c.SessionId}");
 
                                 break;
@@ -1549,12 +1536,12 @@ static class ImportCommand {
         // --- --private: mark all imported sessions owner-only ---
         //
         // the privatize set is importedSessionIds (chain-phase +
-        // routed-phase "real new work") UNIONED with privateScopeSessionIds (every Cursor
-        // routed classification touched this run under --private, regardless of outcome — see
-        // its declaration above). The union — not a replacement — keeps chain-phase and
-        // non-Cursor routed privatization exactly as before; it only widens what Cursor
-        // contributes so privacy no longer depends on the Loaded/Failed/AlreadyLoaded/
-        // SentChildContent accounting used for import counts.
+        // routed-phase "real new work") UNIONED with privateScopeSessionIds (every routed
+        // classification touched this run under --private whose source can attach child content
+        // on a replay, regardless of outcome — see its declaration above). The union — not a
+        // replacement — keeps chain-phase and other routed privatization exactly as before; it
+        // only widens what those sources contribute so privacy no longer depends on the
+        // Loaded/Failed/AlreadyLoaded/SentChildContent accounting used for import counts.
         if (forcePrivate) {
             var toPrivatize = new HashSet<string>(importedSessionIds, StringComparer.Ordinal);
             toPrivatize.UnionWith(privateScopeSessionIds);
