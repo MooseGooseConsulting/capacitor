@@ -19,7 +19,13 @@ public static class AuthProvider {
 public enum GitHubFlow { Browser, Device }
 
 public static class OAuthLoginFlow {
-    public static async Task<int> LoginWithDiscoveryAsync(string serverUrl, bool forceDevice) {
+    /// <param name="profile">
+    /// Target profile for the saved token. Null means "whichever profile this process resolved" —
+    /// correct for `kcap login`. `kcap setup` passes its chosen profile explicitly, because it
+    /// deliberately configures the on-disk active profile even when the current directory resolves
+    /// to a different one, and its token must land in the same place its config does.
+    /// </param>
+    public static async Task<int> LoginWithDiscoveryAsync(string serverUrl, bool forceDevice, string? profile = null) {
         // ReSharper disable once ShortLivedHttpClient
         using var http = new HttpClient();
 
@@ -43,8 +49,8 @@ public static class OAuthLoginFlow {
 
         return config.Provider switch {
             AuthProvider.None      => HandleNoneLogin(),
-            AuthProvider.GitHubApp => await HandleGitHubLogin(serverUrl, config, forceDevice),
-            AuthProvider.WorkOS    => await HandleWorkOSLogin(config),
+            AuthProvider.GitHubApp => await HandleGitHubLogin(serverUrl, config, forceDevice, profile),
+            AuthProvider.WorkOS    => await HandleWorkOSLogin(serverUrl, config, profile),
             _                      => HandleUnknownProvider(config.Provider)
         };
     }
@@ -312,12 +318,19 @@ public static class OAuthLoginFlow {
 
         var exchange = (await exchangeResponse.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.TokenExchangeResponse))!;
 
+        if (!ServerIdentity.TryCanonicalizeForStamping(serverUrl, out var canonical, out var identityError)) {
+            Console.Error.WriteLine($"Error: {identityError}");
+
+            return 1;
+        }
+
         await TokenStore.SaveAsync(
             new() {
                 AccessToken    = exchange.AccessToken,
                 ExpiresAt      = DateTimeOffset.UtcNow.AddSeconds(exchange.ExpiresIn),
                 GitHubUsername = exchange.Username,
-                Provider       = provider
+                Provider       = provider,
+                ServerUrl      = canonical
             }
         );
 
@@ -364,13 +377,20 @@ public static class OAuthLoginFlow {
 
         var exchange = (await exchangeResponse.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.TokenExchangeResponse))!;
 
+        if (!ServerIdentity.TryCanonicalizeForStamping(serverUrl, out var canonical, out var identityError)) {
+            Console.Error.WriteLine($"Error: {identityError}");
+
+            return 1;
+        }
+
         await TokenStore.SaveAsync(
             profile,
             new StoredTokens {
                 AccessToken    = exchange.AccessToken,
                 ExpiresAt      = DateTimeOffset.UtcNow.AddSeconds(exchange.ExpiresIn),
                 GitHubUsername = exchange.Username,
-                Provider       = provider
+                Provider       = provider,
+                ServerUrl      = canonical
             }
         );
 
@@ -425,12 +445,14 @@ public static class OAuthLoginFlow {
         }
     }
 
-    static async Task<int> HandleGitHubLogin(string serverUrl, AuthDiscoveryResponse config, bool forceDevice) {
+    static async Task<int> HandleGitHubLogin(string serverUrl, AuthDiscoveryResponse config, bool forceDevice, string? profile = null) {
         var accessToken = await AcquireGitHubTokenAsync(config.GithubClientId!, config.GithubCodeExchangeUrl, forceDevice);
 
         if (accessToken is null) return 1;
 
-        return await ExchangeAndSaveAsync(serverUrl, accessToken, config.Provider);
+        return profile is null
+            ? await ExchangeAndSaveAsync(serverUrl, accessToken, config.Provider)
+            : await ExchangeAndSaveAsync(serverUrl, accessToken, config.Provider, profile);
     }
 
     internal static async Task<string?> AcquireGitHubTokenAsync(string clientId, string? codeExchangeUrl, bool forceDevice) {
@@ -454,8 +476,8 @@ public static class OAuthLoginFlow {
         return await RunDeviceFlowAsync(clientId);
     }
 
-    static Task<int> HandleWorkOSLogin(AuthDiscoveryResponse config) =>
-        LoginWorkOSAsync(config.ClientId!, config.OrganizationId);
+    static Task<int> HandleWorkOSLogin(string serverUrl, AuthDiscoveryResponse config, string? profile = null) =>
+        LoginWorkOSAsync(serverUrl, config.ClientId!, config.OrganizationId, profile);
 
     const string WorkOSApiBase = "https://api.workos.com";
 
@@ -532,7 +554,7 @@ public static class OAuthLoginFlow {
                       + (string.IsNullOrEmpty(description) ? "" : $" — {description}")
     };
 
-    static async Task<int> LoginWorkOSAsync(string clientId, string? organizationId) {
+    static async Task<int> LoginWorkOSAsync(string serverUrl, string clientId, string? organizationId, string? profile = null) {
         // AuthenticateWorkOSAsync already reported the specific failure reason to stderr.
         var json = await AuthenticateWorkOSAsync(clientId, organizationId, new LoopbackBrowser());
         if (json is null) return 1;
@@ -547,16 +569,26 @@ public static class OAuthLoginFlow {
 
         var username = WorkOSDisplayName(json.User);
 
-        await TokenStore.SaveAsync(
-            new() {
-                AccessToken    = json.AccessToken,
-                RefreshToken   = json.RefreshToken,
-                ExpiresAt      = TokenStore.JwtExpiry(json.AccessToken),
-                GitHubUsername = username,
-                Provider       = AuthProvider.WorkOS,
-                ClientId       = clientId
-            }
-        );
+        if (!ServerIdentity.TryCanonicalizeForStamping(serverUrl, out var canonical, out var identityError)) {
+            Console.Error.WriteLine($"Error: {identityError}");
+
+            return 1;
+        }
+
+        var saved = new StoredTokens {
+            AccessToken    = json.AccessToken,
+            RefreshToken   = json.RefreshToken,
+            ExpiresAt      = TokenStore.JwtExpiry(json.AccessToken),
+            GitHubUsername = username,
+            Provider       = AuthProvider.WorkOS,
+            ClientId       = clientId,
+            // The kcap server we authenticated FOR — not api.workos.com, which issued the
+            // token but says nothing about which Capacitor server will accept it.
+            ServerUrl      = canonical
+        };
+
+        if (profile is null) await TokenStore.SaveAsync(saved);
+        else await TokenStore.SaveAsync(profile, saved);
 
         await Console.Out.WriteLineAsync($"Logged in as {username}");
 
