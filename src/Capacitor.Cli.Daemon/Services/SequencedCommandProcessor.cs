@@ -54,59 +54,102 @@ internal sealed class SequencedCommandProcessor : IAsyncDisposable {
     public long LastProcessedSeq   { get { lock (_lock) return _lastProcessedSeq; } }
 
     public Task SubmitAsync(SequencedItem item, Func<Task<CommandOutcome>> execute) {
+        CommandOutcome? replay;
+        bool acceptedReplay;
+        CommandRejected? rejection;
+        Task result;
+
         lock (_lock) {
-            if (!string.Equals(item.Epoch, _epoch, StringComparison.Ordinal))
-                return RejectLocked(item, CommandRejectedReason.StaleEpoch);   // never touches THIS epoch's lane
-
-            if (_cache.TryGetValue(item.Seq, out var existing))
-                return HandleDuplicateLocked(item, existing);                   // Task 13 answers with CommandAck
-
-            if (item.Seq != _highestAcceptedSeq + 1)
-                return HandleNonNextLocked(item);                              // Task 15 sends wrong_next
-
-            if (_cache.Count >= _cacheBound)                                   // never evict unacked identity
-                return RejectLocked(item, CommandRejectedReason.Backpressure); // reopens only via a validated AckProcessedPrefix
-
-            // ACCEPT + lane-item, atomically under _lock.
-            _highestAcceptedSeq = item.Seq;
-            _cache[item.Seq] = new CacheEntry { CommandId = item.CommandId, Processed = false };
-            var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            if (!_lane.Writer.TryWrite(new LaneItem(item, execute, done))) {
-                SynthesizeErrorLocked(item); // shutdown/allocation race: watermark must still advance
-                done.SetResult();
-            }
-            return done.Task;
+            result = SubmitLocked(item, execute, out replay, out acceptedReplay, out rejection);
         }
+
+        // Every wire send happens AFTER the lock is released. SendContained catches exceptions, but it
+        // still invokes the delegate immediately — it cannot stop synchronous serialization or a
+        // blocking transport from extending this processor's critical section and delaying concurrent
+        // SubmitAsync/AckPrefix callers. Containment and lock-scope are separate problems; this is the
+        // second one, and it applies to rejections exactly as it did to the duplicate answers.
+        if (rejection is { } toReject) SendRejectedContained(toReject);
+
+        // The in-progress duplicate answer. Sent outside the lock and contained for the same reasons as
+        // the settled one: a synchronous transport throw escaped into the hub, a faulted task went
+        // unobserved, and any synchronous work in the delegate ran inside this processor's critical
+        // section — which is the section the whole change is trying to keep narrow.
+        if (acceptedReplay)
+            SendContained(() => _sendAck(new CommandAck(_epoch, item.Seq, item.CommandId, CommandAckState.Accepted)),
+                item.Seq, "accepted ack");
+
+        // Recovery path: the server retransmitting a command whose terminal ack it never received.
+        // Built and sent outside _lock, contained — see SendSettledAck.
+        if (replay is { } outcome) SendSettledAck(item, outcome);
+
+        return result;
+    }
+
+    Task SubmitLocked(SequencedItem item, Func<Task<CommandOutcome>> execute,
+            out CommandOutcome? replay, out bool acceptedReplay, out CommandRejected? rejection) {
+        replay = null;
+        acceptedReplay = false;
+        rejection = null;
+
+        if (!string.Equals(item.Epoch, _epoch, StringComparison.Ordinal))
+            return RejectLocked(item, CommandRejectedReason.StaleEpoch, out rejection); // never touches THIS epoch's lane
+
+        if (_cache.TryGetValue(item.Seq, out var existing))
+            return HandleDuplicateLocked(item, existing, out replay, out acceptedReplay, out rejection); // answered, never re-executed
+
+        if (item.Seq != _highestAcceptedSeq + 1)
+            return HandleNonNextLocked(item, out rejection);
+
+        if (_cache.Count >= _cacheBound)                                   // never evict unacked identity
+            return RejectLocked(item, CommandRejectedReason.Backpressure, out rejection); // reopens only via a validated AckProcessedPrefix
+
+        // ACCEPT + lane-item, atomically under _lock.
+        _highestAcceptedSeq = item.Seq;
+        _cache[item.Seq] = new CacheEntry { CommandId = item.CommandId, Processed = false };
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!_lane.Writer.TryWrite(new LaneItem(item, execute, done))) {
+            SynthesizeErrorLocked(item, out rejection); // shutdown/allocation race: watermark must still advance
+            done.SetResult();
+        }
+        return done.Task;
     }
 
     /// <summary>Phase B2-b (sequenced-settlement design): an exact-duplicate <c>(Epoch, Seq, CommandId)</c>
     /// is ANSWERED, never re-executed — <c>Accepted</c> while still processing, or <c>Processed</c> with the
-    /// cached <c>OutcomeKind</c> + a LIVE <c>CurrentState</c> read. A DIFFERENT CommandId at an already-accepted
-    /// Seq is a protocol-invariant violation → <c>duplicate_collision</c>. Called under <c>_lock</c>.</summary>
-    Task HandleDuplicateLocked(SequencedItem item, CacheEntry existing) {
+    /// cached outcome. A DIFFERENT CommandId at an already-accepted Seq is a protocol-invariant violation →
+    /// <c>duplicate_collision</c>. Called under <c>_lock</c>; the processed arm only CAPTURES the cached
+    /// outcome, leaving the ack for <see cref="SubmitAsync"/> to build outside the lock.</summary>
+    Task HandleDuplicateLocked(SequencedItem item, CacheEntry existing,
+            out CommandOutcome? replay, out bool acceptedReplay, out CommandRejected? rejection) {
+        replay = null;
+        acceptedReplay = false;
+        rejection = null;
+
         if (!string.Equals(existing.CommandId, item.CommandId, StringComparison.Ordinal)) {
             // A DIFFERENT command claiming an accepted Seq — protocol invariant violation.
-            _ = _sendRejected(new CommandRejected(item.Epoch, item.Seq, item.CommandId, CommandRejectedReason.DuplicateCollision, item.AgentId));
+            rejection = new CommandRejected(item.Epoch, item.Seq, item.CommandId, CommandRejectedReason.DuplicateCollision, item.AgentId);
             return Task.CompletedTask;
         }
 
-        if (!existing.Processed)
-            _ = _sendAck(new CommandAck(_epoch, item.Seq, item.CommandId, CommandAckState.Accepted));
-        else
-            _ = _sendAck(BuildProcessedAckLocked(item, existing.Outcome));
+        // Both arms only CAPTURE what to answer with; SubmitAsync sends after releasing the lock.
+        if (!existing.Processed) acceptedReplay = true;
+        else replay = existing.Outcome;
 
         return Task.CompletedTask;
     }
 
     /// <summary>The terminal <c>Processed</c> ack for a settled command — the ONE builder shared by the
-    /// duplicate-replay path above and the proactive settle ack at the end of <see cref="RunLaneAsync"/>
-    /// (settlement-admission design §3.2 F), so a retransmission can never disagree with the proactive
-    /// send about outcome/agent/session/rejection-reason. <c>CurrentState</c> is read LIVE at ack time
-    /// (immutable execution fact vs current liveness); the readLiveness delegate reads the daemon
-    /// lifecycle collections with confirmed-death precedence. The CACHED rejection reason rides along so
-    /// a rejected launch stays distinguishable as daemon_capacity (requeue) vs semantic (fail) — the
-    /// exact lost-rejection case the identity cache answers. Called under <c>_lock</c>.</summary>
-    CommandAck BuildProcessedAckLocked(SequencedItem item, CommandOutcome outcome) {
+    /// duplicate-replay path and the proactive settle ack at the end of <see cref="RunLaneAsync"/>, so a
+    /// retransmission can never disagree with the proactive send about outcome/agent/session/rejection-reason.
+    /// The CACHED rejection reason rides along so a rejected launch stays distinguishable as daemon_capacity
+    /// (requeue) vs semantic (fail) — the exact lost-rejection case the identity cache answers.
+    ///
+    /// <para>MUST NOT be called under <c>_lock</c>: <c>CurrentState</c> is read live through the
+    /// readLiveness delegate, which walks the orchestrator's lifecycle collections, and every settled
+    /// command reaches this — holding the lock across it would put that read on the critical path of
+    /// concurrent <see cref="SubmitAsync"/>/<see cref="AckPrefix"/> callers. Both callers commit the
+    /// outcome to the cache first, so an ack can never advertise an outcome the cache lacks.</para></summary>
+    CommandAck BuildProcessedAck(SequencedItem item, CommandOutcome outcome) {
         var live   = _readLiveness(outcome.AgentId ?? item.AgentId);
         var reason = outcome.RejectReason is { } r ? RejectReasonWireToken(r) : null;
 
@@ -114,21 +157,20 @@ internal sealed class SequencedCommandProcessor : IAsyncDisposable {
             outcome.Kind, live, outcome.AgentId ?? item.AgentId, outcome.SessionId, reason);
     }
 
-    /// <summary>Settlement-admission design (§3.2 F): fire the proactive terminal ack without ever
-    /// letting the send fault the lane. The ack is best-effort telemetry — a disconnected/reconnecting
-    /// server just falls back to the periodic status-report reconcile — so a synchronous throw AND a
-    /// faulted task are both swallowed at Debug. Never awaited: the lane must not block on the wire.</summary>
-    void SendProactiveAck(CommandAck ack) {
-        try {
-            var send = _sendAck(ack);
-            if (send is { IsCompletedSuccessfully: false })
-                _ = send.ContinueWith(
-                    t => _logger.LogDebug(t.Exception, "SequencedCommandProcessor: proactive ack for seq {Seq} failed to send", ack.Seq),
-                    CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
-        } catch (Exception ex) {
-            _logger.LogDebug(ex, "SequencedCommandProcessor: proactive ack for seq {Seq} threw", ack.Seq);
-        }
-    }
+    /// <summary>Build AND fire a settled command's terminal ack without ever letting it fault the caller.
+    /// The ack is best-effort telemetry — a disconnected/reconnecting server just falls back to the
+    /// periodic status-report reconcile — so a synchronous throw AND a faulted task are both swallowed
+    /// at Debug. Never awaited: neither the lane nor a hub callback may block on the wire.
+    ///
+    /// <para>The BUILD is deliberately inside the try. Passing a pre-built ack (
+    /// <c>Send(Build(..))</c>) evaluates the argument before entering the containment, so a throwing
+    /// <c>_readLiveness</c> escapes: from the lane it faults <see cref="RunLaneAsync"/> and leaves the
+    /// item's <c>Done</c> unresolved (hanging that submitter and stopping every later command), and from
+    /// <see cref="SubmitAsync"/> it escapes into the hub handler. Both callers reach this only AFTER the
+    /// outcome is recorded in the cache, so swallowing the ack costs at most one status-report interval
+    /// of slot latency — never a wrong or missing terminal fact.</para></summary>
+    void SendSettledAck(SequencedItem item, CommandOutcome outcome) =>
+        SendContained(() => _sendAck(BuildProcessedAck(item, outcome)), item.Seq, "settled ack");
 
     /// <summary>Phase B2-b (sequenced-settlement design §5.5): the wire token a cached
     /// <see cref="CommandRejectedReason"/> carries on a processed-duplicate <see cref="CommandAck"/> —
@@ -143,14 +185,55 @@ internal sealed class SequencedCommandProcessor : IAsyncDisposable {
     /// <summary>Phase B2-b (sequenced-settlement design): a non-next Seq (a gap — Seq &gt; HighestAcceptedSeq+1,
     /// or a too-low already-retired Seq below the frontier) is NEVER accepted out of order. Emit wrong_next so
     /// the server's transport sequencer resyncs (nudge → observe → retransmit); accept path + watermark untouched.</summary>
-    Task HandleNonNextLocked(SequencedItem item) => RejectLocked(item, CommandRejectedReason.WrongNext);
+    Task HandleNonNextLocked(SequencedItem item, out CommandRejected? rejection) =>
+        RejectLocked(item, CommandRejectedReason.WrongNext, out rejection);
 
-    Task RejectLocked(SequencedItem item, CommandRejectedReason reason) {
-        _ = _sendRejected(new CommandRejected(item.Epoch, item.Seq, item.CommandId, reason, item.AgentId));
+    /// <summary>Records WHICH rejection is owed; the caller sends it after releasing <c>_lock</c>.</summary>
+    Task RejectLocked(SequencedItem item, CommandRejectedReason reason, out CommandRejected? rejection) {
+        rejection = new CommandRejected(item.Epoch, item.Seq, item.CommandId, reason, item.AgentId);
         return Task.CompletedTask;
     }
 
-    void SynthesizeErrorLocked(SequencedItem item) {
+    /// <summary>Every <c>CommandRejected</c> send goes through here. A rejection is a NOTIFICATION, never
+    /// the settlement fact itself, so a transport failure must not gate settlement — a bare send that
+    /// throws synchronously escapes into whatever is calling (the hub, or worse the serial lane, where it
+    /// permanently kills the consumer and strands every queued command). The server reconciles from its
+    /// periodic status report regardless.</summary>
+    void SendRejectedContained(CommandRejected rejected) =>
+        SendContained(() => _sendRejected(rejected), rejected.Seq, "rejection");
+
+    /// <summary>Shared containment for every best-effort wire send: a synchronous throw AND a faulted
+    /// task are both swallowed at Debug, and the delegate is invoked INSIDE the try so argument
+    /// construction is covered too. Never awaited — no wire call may block the lane or a hub callback.</summary>
+    void SendContained(Func<Task> send, long seq, string what) {
+        try {
+            var sent = send();
+            if (sent is { IsCompletedSuccessfully: false })
+                _ = sent.ContinueWith(
+                    // Guarded: an unguarded LogDebug here would fault this DISCARDED continuation on a
+                    // throwing provider — recreating the very unobserved-task-failure this wrapper exists
+                    // to prevent, in the code meant to report it.
+                    t => LogQuietly(t.Exception, "{What} for seq {Seq} failed to send", what, seq),
+                    CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
+        } catch (Exception ex) {
+            // Guarded for the same reason, and a sharper one: the hub-side callers (stale epoch, gap,
+            // duplicate collision, accepted/processed replay) have NO outer per-item catch, so a
+            // transport throw followed by a logging throw escaped straight into the hub.
+            LogQuietly(ex, "{What} for seq {Seq} threw", what, seq);
+        }
+    }
+
+    /// <summary>Diagnostics that cannot themselves become the failure. Every logging call on a
+    /// best-effort path routes through here — a throwing <c>ILogger</c> provider is a supported input,
+    /// not a contract violation, and losing a Debug line is always preferable to losing the operation
+    /// it was describing.</summary>
+    void LogQuietly(Exception? error, string template, string what, long seq) {
+        try {
+            _logger.LogDebug(error, "SequencedCommandProcessor: " + template, what, seq);
+        } catch { /* deliberately empty — see summary */ }
+    }
+
+    void SynthesizeErrorLocked(SequencedItem item, out CommandRejected? rejection) {
         // Lane-item creation failed AFTER acceptance (shutdown/allocation race) — an advertised-accepted
         // Seq with no processable item is impossible, so mark this Seq terminally errored and advance the
         // watermark THROUGH THE CONTIGUOUS PREFIX only. NEVER set _lastProcessedSeq = item.Seq directly:
@@ -161,7 +244,7 @@ internal sealed class SequencedCommandProcessor : IAsyncDisposable {
             CommandId = item.CommandId, Processed = true,
             Outcome = new CommandOutcome(CommandOutcomeKind.InternalError, item.AgentId) };
         AdvanceWatermarkLocked();
-        _ = _sendRejected(new CommandRejected(item.Epoch, item.Seq, item.CommandId, CommandRejectedReason.InternalError, item.AgentId));
+        rejection = new CommandRejected(item.Epoch, item.Seq, item.CommandId, CommandRejectedReason.InternalError, item.AgentId);
     }
 
     /// <summary>The watermark is the contiguous terminal-processed prefix. Walk forward through Processed
@@ -177,41 +260,93 @@ internal sealed class SequencedCommandProcessor : IAsyncDisposable {
     /// forcing the SynthesizeErrorLocked path deterministically (mirrors a shutdown race).</summary>
     internal void CompleteLaneForTest() => _lane.Writer.TryComplete();
 
+    /// <summary>Test seam: whether the CALLING thread currently holds <c>_lock</c>. Lets a test's
+    /// readLiveness delegate assert directly that <see cref="BuildProcessedAck"/> is never invoked
+    /// under the lock, with no timing or thread choreography.</summary>
+    internal bool LockHeldByCurrentThreadForTest => Monitor.IsEntered(_lock);
+
     async Task RunLaneAsync() {
         await foreach (var li in _lane.Reader.ReadAllAsync()) {
-            CommandOutcome outcome;
+            // Nothing between here and Done may escape. The lane is the SINGLE serial consumer: one
+            // escaping exception kills it permanently, leaving this command nonterminal, its submitter
+            // waiting forever, and every queued command unrun — the server reads that as a permanently
+            // held daemon capacity slot.
+            //
+            // try/FINALLY alone was not enough (and the comment that said it was, was wrong): the
+            // finally releases the submitter but the exception still propagates out of the await
+            // foreach and faults the lane task — and it reports SUCCESS to a submitter whose command
+            // may never have been marked terminal. The realistic path is diagnostics: a logger provider
+            // throwing from the execute-fault LogWarning, or from SendContained's own catch. So there
+            // is a real per-item CATCH that synthesizes the terminal state when the normal path did not
+            // reach it, and the loop continues.
+            var settled = false;
             try {
-                outcome = await li.Execute();
+                CommandOutcome outcome;
+                CommandRejectedReason? rejection = null;
+
+                try {
+                    outcome = await li.Execute();
+                } catch (Exception ex) {
+                    _logger.LogWarning(ex, "SequencedCommandProcessor: execution faulted for seq {Seq} — internal_error", li.Item.Seq);
+                    outcome = new CommandOutcome(CommandOutcomeKind.InternalError, li.Item.AgentId);
+                    rejection = CommandRejectedReason.InternalError;
+                }
+
+                // Task 15: an execution-time terminal rejection (daemon_capacity / semantic).
+                if (outcome.Kind == CommandOutcomeKind.LaunchRejected && outcome.RejectReason is { } r)
+                    rejection = r;
+
+                lock (_lock) {
+                    if (_cache.TryGetValue(li.Item.Seq, out var e)) { e.Processed = true; e.Outcome = outcome; }
+                    AdvanceWatermarkLocked(); // contiguous terminal prefix — serial lane => normally == prior + 1,
+                                              // but shared with SynthesizeErrorLocked so a race can never regress it
+                }
+
+                // Settled the instant the commit succeeds, BEFORE any notification. Setting this after
+                // the sends meant a throw escaping SendRejectedContained (transport throws, then its own
+                // LogDebug throws) reached the outer catch with settled still false, which then
+                // OVERWROTE the real terminal outcome with InternalError — a LaunchRejected already
+                // cached and possibly announced as daemon_capacity would replay later as a
+                // contradictory internal_error. The cache is authoritative from here on; announcing it
+                // is strictly best-effort and must never be able to rewrite it.
+                settled = true;
+
+                // Both notifications happen AFTER the outcome is recorded, and both are contained. They
+                // used to run BEFORE it: a synchronous throw from _sendRejected then escaped the lane
+                // with the command still marked nonterminal — the settlement fact lost to a failure in
+                // merely announcing it. Relative order (rejection, then ack) is unchanged.
+                if (rejection is { } reason)
+                    SendRejectedContained(new CommandRejected(
+                        li.Item.Epoch, li.Item.Seq, li.Item.CommandId, reason, li.Item.AgentId));
+
+                // Settlement-admission design (§3.2 F): a FRESH terminal command is acked proactively, not
+                // just a retransmitted duplicate. Without this the server only learns the command settled
+                // when its next periodic status report reconciles (up to one report interval later), and
+                // its one-nonterminal-command-per-daemon invariant rejects any concurrent launch for that
+                // whole window. The server's ack handler is idempotent against replays and unknown/stale
+                // acks, so older servers accept it too and simply retire the slot earlier.
+                //
+                // Built AFTER the cache commit above, outside the lock — see SendSettledAck.
+                SendSettledAck(li.Item, outcome);
             } catch (Exception ex) {
-                _logger.LogWarning(ex, "SequencedCommandProcessor: execution faulted for seq {Seq} — internal_error", li.Item.Seq);
-                outcome = new CommandOutcome(CommandOutcomeKind.InternalError, li.Item.AgentId);
-                _ = _sendRejected(new CommandRejected(li.Item.Epoch, li.Item.Seq, li.Item.CommandId, CommandRejectedReason.InternalError, li.Item.AgentId));
+                // Deliberately swallow-and-continue. Every diagnostic here is itself guarded, because
+                // the most likely cause of arriving in this catch is diagnostics throwing.
+                if (!settled)
+                    try {
+                        lock (_lock) {
+                            if (_cache.TryGetValue(li.Item.Seq, out var e)) {
+                                e.Processed = true;
+                                e.Outcome = new CommandOutcome(CommandOutcomeKind.InternalError, li.Item.AgentId);
+                            }
+                            AdvanceWatermarkLocked();
+                        }
+                    } catch { /* cache/watermark unreachable — the status-report reconcile is the backstop */ }
+                try {
+                    _logger.LogError(ex, "SequencedCommandProcessor: unhandled fault for seq {Seq} — lane continues", li.Item.Seq);
+                } catch { /* a throwing logger is exactly how we got here */ }
+            } finally {
+                li.Done.SetResult();
             }
-
-            // Task 15: an execution-time terminal rejection (daemon_capacity / semantic) emits CommandRejected.
-            if (outcome.Kind == CommandOutcomeKind.LaunchRejected && outcome.RejectReason is { } r)
-                _ = _sendRejected(new CommandRejected(li.Item.Epoch, li.Item.Seq, li.Item.CommandId, r, li.Item.AgentId));
-
-            CommandAck proactiveAck;
-            lock (_lock) {
-                if (_cache.TryGetValue(li.Item.Seq, out var e)) { e.Processed = true; e.Outcome = outcome; }
-                AdvanceWatermarkLocked(); // contiguous terminal prefix — serial lane => normally == prior + 1,
-                                          // but shared with SynthesizeErrorLocked so a race can never regress it
-                // Settlement-admission design (§3.2 F): built INSIDE the lock, immediately after the entry
-                // is marked Processed and the watermark advanced, so the ack can never advertise a terminal
-                // outcome the cache has not yet recorded (a duplicate arriving between the two would then
-                // answer differently). The send itself happens outside the lock.
-                proactiveAck = BuildProcessedAckLocked(li.Item, outcome);
-            }
-
-            // Settlement-admission design (§3.2 F): a FRESH terminal command is acked proactively, not just
-            // a retransmitted duplicate. Without this the server only learns the command settled when its
-            // next periodic status report reconciles (up to one report interval later), and its
-            // one-nonterminal-command-per-daemon invariant rejects any concurrent launch for that whole
-            // window. The server's ack handler is idempotent against replays and unknown/stale acks, so
-            // older servers accept it too and simply retire the slot earlier.
-            SendProactiveAck(proactiveAck);
-            li.Done.SetResult();
         }
     }
 
