@@ -657,7 +657,35 @@ public static partial class DaemonRunner {
                 string.IsNullOrWhiteSpace(capability.CliVersion) ? UnknownCliVersion : capability.CliVersion);
     }
 
-    internal static string? ProbeCliVersion(string cliPath) {
+    /// <summary>Registration probe budget. Generous and retried because this result is cached for the
+    /// daemon's lifetime — one transient miss durably disables the vendor.</summary>
+    const int VersionProbeTimeoutMs = 10_000;
+    const int VersionProbeAttempts  = 3;
+
+    /// <summary>Launch probe budget, deliberately the ORIGINAL 3s and a single attempt: this runs on
+    /// the sequenced command lane, whose single serial consumer holds every later launch and stop
+    /// behind it. A miss here is transient and retryable, so it does not need the registration
+    /// budget — and inheriting it would have tripled the lane stall this change was meant to
+    /// improve.</summary>
+    const int LaunchVersionProbeTimeoutMs = 3_000;
+
+    internal static string? ProbeCliVersion(string cliPath) =>
+        ProbeCliVersion(cliPath, VersionProbeAttempts, VersionProbeTimeoutMs);
+
+    /// <summary>Single attempt on the original short budget — see LaunchVersionProbeTimeoutMs.</summary>
+    internal static string? ProbeCliVersionForLaunch(string cliPath) =>
+        ProbeCliVersion(cliPath, attempts: 1, LaunchVersionProbeTimeoutMs);
+
+    static string? ProbeCliVersion(string cliPath, int attempts, int timeoutMs) {
+        for (var attempt = 1; attempt <= attempts; attempt++) {
+            if (ProbeCliVersionOnce(cliPath, timeoutMs) is { } version) return version;
+            // A cold Node start under load is the usual cause; pause rather than hammering.
+            if (attempt < attempts) Thread.Sleep(250 * attempt);
+        }
+        return null;
+    }
+
+    static string? ProbeCliVersionOnce(string cliPath, int timeoutMs) {
         try {
             using var process = Process.Start(new ProcessStartInfo {
                 FileName = cliPath,
@@ -666,7 +694,7 @@ public static partial class DaemonRunner {
                 RedirectStandardError = true,
                 ArgumentList = { "--version" }
             });
-            if (process is null || !process.WaitForExit(3000)) {
+            if (process is null || !process.WaitForExit(timeoutMs)) {
                 try { process?.Kill(entireProcessTree: true); } catch { }
                 return null;
             }

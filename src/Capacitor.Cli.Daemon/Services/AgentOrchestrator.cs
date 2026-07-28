@@ -247,6 +247,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     readonly IReadOnlyDictionary<string, IHostedAgentRuntimeFactory> _runtimeFactories;
     readonly ILogger<AgentOrchestrator>                        _logger;
 
+    /// <summary>Serialises + coalesces the background capability refresh fired after a certification
+    /// rejection. See SingleFlightRefresh for why bare fire-and-forget was unsafe here.</summary>
+    readonly SingleFlightRefresh _capabilityRefresh = new();
+
     // Hosted-agent PTYs are spawned at a fixed size and never resized. The daemon
     // reports these dims to the server right after the agent registers (and on
     // reconnect) so the read-only viewers (web/desktop xterm) lock to exactly the
@@ -521,6 +525,57 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// hence no transient false Dead. Dead is returned only after the genuine drain (confirmed death). If that
     /// ordering invariant is ever broken, this must instead take the per-agent lifecycle lock. NotFound
     /// collapses to Dead here (see the appendix note) — both satisfy confirmed-absence.</summary>
+    /// <summary>Evaluates the reviewer certification arm-by-arm so a rejection can NAME the one that
+    /// failed. Extracted and internal so the arms are unit-testable — the previous inline expression
+    /// collapsed four distinguishable conditions into one boolean and one message, and that message
+    /// actively misdirected: it reported the certification revision (which matches on every one of
+    /// these paths) and told the operator to update a CLI that was usually fine.</summary>
+    internal static (bool Ok, string Reason) EvaluateReviewerCertification(
+            string vendor, string? probedVersion, string? currentConnectionId,
+            ReviewerCertificationRequirement certification) {
+        if (!string.Equals(certification.Vendor, vendor, StringComparison.Ordinal))
+            return (false, $"the launch is for '{vendor}' but the certification is for '{certification.Vendor}'");
+
+        if (!string.Equals(currentConnectionId, certification.ExpectedDaemonConnectionId, StringComparison.Ordinal))
+            return (false, "this daemon reconnected after the certification was issued " +
+                           "(connection id changed) — retry the flow");
+
+        if (!string.Equals(certification.RequiredLauncherPolicyVersion,
+                DaemonRunner.ClaudeLauncherPolicyVersion, StringComparison.Ordinal))
+            return (false, $"the server requires launcher policy '{certification.RequiredLauncherPolicyVersion}' " +
+                           $"but this daemon implements '{DaemonRunner.ClaudeLauncherPolicyVersion}' — " +
+                           "update kcap and restart the daemon");
+
+        // A NULL advertised version means the registration-time probe failed — a transient condition,
+        // not evidence the CLI changed. This arm exists to catch a CLI SWAP between advertisement and
+        // launch, and null-vs-value is not a swap. Treating it as one rejected every launch for the
+        // daemon's lifetime, and restarting on a loaded host merely re-poisoned the advertisement.
+        // A null advertised value falls through to the range check below, which is the real gate.
+        // A failed LAUNCH probe is its own condition, classified before the swap arm: otherwise a
+        // timeout reads as "the CLI changed, restart", when nothing changed and restarting repeats
+        // it. Fails closed either way; only the diagnosis and remedy differ.
+        if (string.IsNullOrEmpty(probedVersion))
+            return (false, $"could not read the installed {vendor} CLI version (the version probe " +
+                           "failed or timed out) — this is usually transient under load; retry the flow");
+
+        // Range BEFORE swap: an out-of-range replacement would otherwise be told only to restart,
+        // and restarting re-advertises the same out-of-range version.
+        if (!DaemonRunner.CliVersionAllowed(probedVersion, certification.AllowedCliRanges))
+            return (false, $"the installed {vendor} CLI '{probedVersion}' is outside the " +
+                           $"server's allowed range '{certification.AllowedCliRanges}'");
+
+        // A missing advertised version means the registration probe failed — not evidence of a CLI
+        // swap, which is all this arm exists to catch. It falls through to the range check above.
+        // Null or empty: declared non-nullable, but populated from a probe returning null over JSON.
+        if (!string.IsNullOrEmpty(certification.ExpectedCliVersion) &&
+            !string.Equals(probedVersion, certification.ExpectedCliVersion, StringComparison.Ordinal))
+            return (false, $"the installed {vendor} CLI is '{probedVersion}' but this daemon " +
+                           $"advertised '{certification.ExpectedCliVersion}' at registration — " +
+                           "restart the daemon so it re-advertises");
+
+        return (true, "");
+    }
+
     internal AgentLiveness ReadLiveness(string agentId) {
         // Order matters: check _agents first (Live/Quarantined-by-status), then _quarantine, then Dead.
         // The add-to-quarantine-before-remove-from-_agents invariant makes this ordering false-Dead-free.
@@ -855,21 +910,40 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
         if (isReviewFlow && cmd.ReviewerCertification is { } certification) {
             var version = string.Equals(cmd.Vendor, "claude", StringComparison.Ordinal)
-                ? DaemonRunner.ProbeCliVersion(_config.ClaudePath)
+                ? DaemonRunner.ProbeCliVersionForLaunch(_config.ClaudePath)
                 : null;
-            var policyMatches = string.Equals(certification.Vendor, cmd.Vendor, StringComparison.Ordinal)
-                && string.Equals(_server.CurrentConnectionId,
-                    certification.ExpectedDaemonConnectionId, StringComparison.Ordinal)
-                && string.Equals(certification.RequiredLauncherPolicyVersion,
-                    DaemonRunner.ClaudeLauncherPolicyVersion, StringComparison.Ordinal)
-                && string.Equals(version, certification.ExpectedCliVersion, StringComparison.Ordinal)
-                && DaemonRunner.CliVersionAllowed(version, certification.AllowedCliRanges);
-            if (!policyMatches) {
-                _config.UnattendedVendorCapabilities =
-                    DaemonRunner.ComputeUnattendedVendorCapabilities(_runtimeFactories.Values, _config);
-                try { await _server.ReRegisterAsync(); } catch { /* launch still fails closed */ }
+            var certificationCheck = EvaluateReviewerCertification(
+                cmd.Vendor, version, _server.CurrentConnectionId, certification);
+            if (!certificationCheck.Ok) {
+                // Codex review round 2 (P1): tell the caller FIRST. Recomputing capabilities re-runs
+                // the REGISTRATION probe — three 10s attempts plus backoff — so doing it before the
+                // notification meant a failed launch probe cost ~10s here and then ~30.75s more
+                // before the caller heard anything. The single-attempt launch probe did not bound the
+                // launch path at all while this sat in front of the rejection; my claim that it did
+                // was wrong.
                 await _server.LaunchFailedAsync(cmd.AgentId,
-                    $"reviewer_certification_changed: '{cmd.Vendor}' no longer matches server certification revision '{certification.Revision}'. Restart the daemon after updating the reviewer CLI.");
+                    $"reviewer_certification_changed: {certificationCheck.Reason}.");
+
+                // The self-heal (recompute + re-advertise) is genuinely useful — a certification
+                // mismatch usually means the advertisement is stale — but nothing waits on it, and
+                // the caller already has its answer.
+                //
+                // SINGLE-FLIGHT, not bare fire-and-forget. Codex review round 3: concurrent rejected
+                // launches each starting an independent refresh reintroduces this PR's own bug — a
+                // slow failing refresh can complete AFTER a fast successful one and overwrite valid
+                // capabilities with a failed-probe null, durably disabling the reviewer again.
+                // Serialising publication is necessary; coalescing keeps a burst of rejections from
+                // queueing a refresh each, and the rerun pass guarantees the LAST write is the
+                // NEWEST computation.
+                _capabilityRefresh.Trigger(
+                    async () => {
+                        _config.UnattendedVendorCapabilities =
+                            DaemonRunner.ComputeUnattendedVendorCapabilities(_runtimeFactories.Values, _config);
+                        await _server.ReRegisterAsync();
+                    },
+                    ex => _logger.LogDebug(ex,
+                        "Capability recompute after a certification rejection failed; the next " +
+                        "registration or launch re-evaluates it."));
                 return new CommandOutcome(
                     CommandOutcomeKind.LaunchRejected,
                     agentId,
