@@ -123,8 +123,12 @@ static class McpFlowsServer {
             string              baseUrl,
             string              cwd,
             string?             repoRoot,
-            RepositoryPayload?  repoInfo
+            RepositoryPayload?  repoInfo,
+            FlowRetryClock?     clock = null,
+            SettlementBackoff?  backoff = null
         ) {
+        clock   ??= FlowRetryClock.System;
+        backoff ??= SettlementBackoff.Default;
         var paramsNode = request["params"]?.AsObject();
         var toolName   = paramsNode?["name"]?.GetValue<string>();
         var arguments  = paramsNode?["arguments"]?.AsObject();
@@ -160,16 +164,26 @@ static class McpFlowsServer {
                     && toolName is "start_review_flow" or "start_flow"
                     && !string.IsNullOrWhiteSpace(arguments?["model"]?.GetValue<string>());
 
-                using var postResponse = toolName switch {
+                var sendResult = toolName switch {
                     "start_review_flow"   => wasModelStart
-                        ? await SendWithRefreshRetryAsync(client, c => StartFlowAsync(c, apiRoot, arguments, cwd, repoRoot, repoInfo, kindArgName: "kind"))
-                        : await SendWithSettlementRetryAsync(client, c => StartFlowAsync(c, apiRoot, arguments, cwd, repoRoot, repoInfo, kindArgName: "kind"), Task.Delay),
+                        ? new SettlementSendResult.Response(await SendWithRefreshRetryAsync(client, (c, ct) => StartFlowAsync(c, apiRoot, arguments, cwd, repoRoot, repoInfo, kindArgName: "kind", ct: ct)))
+                        : await SendWithSettlementRetryAsync(client, (c, ct) => StartFlowAsync(c, apiRoot, arguments, cwd, repoRoot, repoInfo, kindArgName: "kind", ct: ct), clock, backoff),
                     "start_flow"          => wasModelStart
-                        ? await SendWithRefreshRetryAsync(client, c => StartFlowAsync(c, apiRoot, arguments, cwd, repoRoot, repoInfo, kindArgName: "definition_id"))
-                        : await SendWithSettlementRetryAsync(client, c => StartFlowAsync(c, apiRoot, arguments, cwd, repoRoot, repoInfo, kindArgName: "definition_id"), Task.Delay),
-                    "submit_review_round" => await SendWithSettlementRetryAsync(client, c => SubmitRoundAsync(c, apiRoot, arguments, contextArgName: "context", participant: null, async: true), Task.Delay),
-                    _                     => await SendWithSettlementRetryAsync(client, c => SubmitRoundAsync(c, apiRoot, arguments, contextArgName: "message", participant: GetRequiredArg(arguments, "participant"), async: ParseAsyncArg(arguments)), Task.Delay)
+                        ? new SettlementSendResult.Response(await SendWithRefreshRetryAsync(client, (c, ct) => StartFlowAsync(c, apiRoot, arguments, cwd, repoRoot, repoInfo, kindArgName: "definition_id", ct: ct)))
+                        : await SendWithSettlementRetryAsync(client, (c, ct) => StartFlowAsync(c, apiRoot, arguments, cwd, repoRoot, repoInfo, kindArgName: "definition_id", ct: ct), clock, backoff),
+                    "submit_review_round" => await SendWithSettlementRetryAsync(client, (c, ct) => SubmitRoundAsync(c, apiRoot, arguments, contextArgName: "context", participant: null, async: true, ct: ct), clock, backoff),
+                    _                     => await SendWithSettlementRetryAsync(client, (c, ct) => SubmitRoundAsync(c, apiRoot, arguments, contextArgName: "message", participant: GetRequiredArg(arguments, "participant"), async: ParseAsyncArg(arguments), ct: ct), clock, backoff)
                 };
+
+                // Settlement-admission design (§3.2 G): the elapsed deadline is mapped HERE, at the
+                // only place that builds tool results, into a normal MCP tool error carrying the last
+                // coded rejection plus attempt/elapsed diagnostics. It must never escape as an
+                // unhandled stdio fault, and must never turn a retryable busy into something a caller
+                // reads as fatal — the guidance is explicitly "retry".
+                if (sendResult is SettlementSendResult.DeadlineExhausted exhausted)
+                    return BuildToolResult(id, FormatSettlementDeadlineError(exhausted), isError: true);
+
+                using var postResponse = ((SettlementSendResult.Response)sendResult).Value;
 
                 var postBody = await postResponse.Content.ReadAsStringAsync();
 
@@ -218,13 +232,13 @@ static class McpFlowsServer {
                 if (!postResponse.IsSuccessStatusCode)
                     return BuildToolResult(id, FormatFlowStartError((int)postResponse.StatusCode, postBody, wasDynamicStart), isError: true);
 
-                var (payload, isError) = await ResolveRoundResultAsync(client, apiRoot, postBody, toolName, wasDynamicStart);
+                var (payload, isError) = await ResolveRoundResultAsync(client, apiRoot, postBody, toolName, wasDynamicStart, clock, backoff);
                 return BuildToolResult(id, payload, isError);
             }
 
             using var httpResponse = toolName switch {
-                "get_review_flow_status" or "get_flow_status" => await SendWithRefreshRetryAsync(client, c => c.GetAsync(BuildFlowUrl(apiRoot, arguments))),
-                "close_review_flow"      or "close_flow"      => await SendWithRefreshRetryAsync(client, c => c.PostAsync(BuildFlowUrl(apiRoot, arguments) + "/close", null)),
+                "get_review_flow_status" or "get_flow_status" => await SendWithRefreshRetryAsync(client, (c, ct) => c.GetAsync(BuildFlowUrl(apiRoot, arguments), ct)),
+                "close_review_flow"      or "close_flow"      => await SendWithRefreshRetryAsync(client, (c, ct) => c.PostAsync(BuildFlowUrl(apiRoot, arguments) + "/close", null, ct)),
                 _                                             => throw new ArgumentException($"Unknown tool: {toolName}")
             };
 
@@ -249,7 +263,7 @@ static class McpFlowsServer {
                 // above, after the text is fully built — never before, never a superset.
                 var flowRunId = arguments?["flow_run_id"]?.GetValue<string>();
                 if (flowRunId is not null)
-                    await AckRenderedMessagesAsync(client, apiRoot, flowRunId, pendingIds, Task.Delay);
+                    await AckRenderedMessagesAsync(client, apiRoot, flowRunId, pendingIds, clock);
             } else if (toolName is "close_review_flow" or "close_flow") {
                 // E-c: render pending_messages but never ack them — the server delivers
                 // them atomically with the close, so there is nothing left to redeliver.
@@ -276,8 +290,10 @@ static class McpFlowsServer {
     /// or refresh-token expired), the original 401 is returned and the caller surfaces the
     /// friendly "Not logged in" message.
     /// </summary>
-    static async Task<HttpResponseMessage> SendWithRefreshRetryAsync(HttpClient client, Func<HttpClient, Task<HttpResponseMessage>> send) {
-        var response = await send(client);
+    static async Task<HttpResponseMessage> SendWithRefreshRetryAsync(
+            HttpClient client, Func<HttpClient, CancellationToken, Task<HttpResponseMessage>> send, CancellationToken ct = default
+        ) {
+        var response = await send(client, ct);
 
         if (response.StatusCode != HttpStatusCode.Unauthorized) return response;
 
@@ -288,16 +304,21 @@ static class McpFlowsServer {
         response.Dispose();
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", refreshed.AccessToken);
 
-        return await send(client);
+        return await send(client, ct);
     }
 
-    // How many times to transparently retry a settlement-layer coded 409 (flow_settlement_busy /
-    // reviewer_launch_incarnation_superseded) before surfacing it via FormatFlowStartError. Both
-    // codes resolve fast against the settlement layer's own reconciliation, so the bound is small
-    // and the backoff short (sub-second) — unlike the network-transient budget in
-    // PollUntilTerminalAsync or the one-shot 401 refresh retry above.
-    const int MaxSettlementRetries = 3;
-    static readonly TimeSpan SettlementRetryDelay = TimeSpan.FromMilliseconds(200);
+    /// <summary>
+    /// How long the start/submit POST lane keeps transparently retrying a settlement-layer coded
+    /// 409, measured as ELAPSED time from the first attempt — including each request's own
+    /// duration, not just the sum of the backoff delays. That distinction is the whole point: a
+    /// settlement-aware server absorbs the wait by HOLDING the request open (up to a per-launch
+    /// admission wait on the order of a minute), so a delay-only budget would let worst-case
+    /// wall-clock blow past the MCP tool timeout the kcap plugin pins for its MCP servers
+    /// (MCP_TOOL_TIMEOUT, 10 minutes) and surface as a harness-level timeout instead of a clean
+    /// tool result. Three minutes fits roughly two full server-side admission waits plus backoff
+    /// while staying far under that ceiling. If the harness pin ever changes, re-derive this.
+    /// </summary>
+    internal static readonly TimeSpan SettlementElapsedDeadline = TimeSpan.FromMinutes(3);
 
     static readonly HashSet<string> SettlementRetryableCodes =
         new(StringComparer.Ordinal) { "flow_settlement_busy", "reviewer_launch_incarnation_superseded" };
@@ -341,28 +362,89 @@ static class McpFlowsServer {
     ///
     /// Only these two codes (via <see cref="TryParseCodedError"/>) trigger a retry; every other
     /// coded 4xx (budget_unverifiable, server_catching_up, client_upgrade_required, etc.) passes
-    /// through untouched. Bounded to <see cref="MaxSettlementRetries"/> attempts with a short,
-    /// sub-second backoff (<see cref="SettlementRetryDelay"/>); on exhaustion the last response
-    /// surfaces as-is via the caller's existing FormatFlowStartError. Wraps (doesn't replace)
-    /// <see cref="SendWithRefreshRetryAsync"/>, so the 401 refresh retry still applies on every
-    /// attempt. Delay is injectable so unit tests run instantly.
+    /// through untouched — as does an UNCODED failure, deliberately: the CLI cannot invent a code,
+    /// so an old server's uncoded 400 still surfaces on the first attempt.
+    ///
+    /// <para>Bounded by <see cref="SettlementElapsedDeadline"/> rather than an attempt count, on the
+    /// <see cref="SettlementBackoff"/> schedule, with the deadline's remaining time propagated as a
+    /// per-request <see cref="CancellationToken"/> so a held POST is abandoned instead of
+    /// overshooting. Each retried POST re-enters a fresh server-side admission wait, which is what
+    /// lets a burst of concurrent launches against one daemon absorb serially.</para>
+    ///
+    /// <para>Returns a discriminated result: <c>Response</c> carries the live response (the caller
+    /// owns it, exactly as before); <c>DeadlineExhausted</c> carries only the last observed coded
+    /// error plus attempt/elapsed diagnostics — this helper disposes every superseded failing
+    /// response, so an exhausted result never carries a live one. The deadline CTS is linked to the
+    /// caller's token; in production that token is <see cref="CancellationToken.None"/> (the stdio
+    /// loop has none), and caller-token cancellation is rethrown untouched — only this helper's OWN
+    /// deadline firing produces <c>DeadlineExhausted</c>.</para>
+    ///
+    /// <para>Wraps (doesn't replace) <see cref="SendWithRefreshRetryAsync"/>, so the 401 refresh
+    /// retry still applies on every attempt. All timing is injectable so unit tests run instantly on
+    /// a virtual clock.</para>
     /// </summary>
-    internal static async Task<HttpResponseMessage> SendWithSettlementRetryAsync(
-            HttpClient client, Func<HttpClient, Task<HttpResponseMessage>> send, Func<TimeSpan, Task> delay
+    internal static async Task<SettlementSendResult> SendWithSettlementRetryAsync(
+            HttpClient                                                    client,
+            Func<HttpClient, CancellationToken, Task<HttpResponseMessage>> send,
+            FlowRetryClock                                                clock,
+            SettlementBackoff                                             backoff,
+            CancellationToken                                             callerToken = default
         ) {
+        var startedAt = clock.UtcNow;
+        var deadline  = startedAt + SettlementElapsedDeadline;
+
+        string? lastCode    = null;
+        string? lastMessage = null;
+
         for (var attempt = 1;; attempt++) {
-            var response = await SendWithRefreshRetryAsync(client, send);
+            var remaining = deadline - clock.UtcNow;
 
-            if (response.IsSuccessStatusCode || attempt >= MaxSettlementRetries) return response;
+            if (remaining <= TimeSpan.Zero)
+                return new SettlementSendResult.DeadlineExhausted(lastCode, lastMessage, attempt - 1, clock.UtcNow - startedAt);
 
+            using var scope = clock.CreateDeadline(remaining, callerToken);
+
+            HttpResponseMessage response;
+            try {
+                response = await SendWithRefreshRetryAsync(client, send, scope.Token);
+            } catch (OperationCanceledException) when (scope.DeadlineFired && !callerToken.IsCancellationRequested) {
+                // OUR deadline cut an in-flight attempt short — that is an exhausted budget, not a
+                // failure to report. Caller cancellation deliberately falls through and rethrows.
+                return new SettlementSendResult.DeadlineExhausted(lastCode, lastMessage, attempt, clock.UtcNow - startedAt);
+            }
+
+            if (response.IsSuccessStatusCode) return new SettlementSendResult.Response(response);
+
+            // Responses arrive fully buffered (the default completion option), so this read can't
+            // block on the network and needs no token of its own.
             var body = await response.Content.ReadAsStringAsync();
 
-            if (!TryParseCodedError(body, out var code, out _) || !SettlementRetryableCodes.Contains(code!))
-                return response;
+            if (!TryParseCodedError(body, out var code, out var message) || !SettlementRetryableCodes.Contains(code!))
+                return new SettlementSendResult.Response(response);
 
+            lastCode    = code;
+            lastMessage = message;
             response.Dispose();
-            await delay(SettlementRetryDelay);
+
+            var left = deadline - clock.UtcNow;
+
+            if (left <= TimeSpan.Zero)
+                return new SettlementSendResult.DeadlineExhausted(lastCode, lastMessage, attempt, clock.UtcNow - startedAt);
+
+            await clock.DelayAsync(backoff.Delay(attempt, left), callerToken);
         }
+    }
+
+    /// <summary>The outcome of <see cref="SendWithSettlementRetryAsync"/>: either a response the
+    /// caller owns and disposes, or an exhausted elapsed deadline carrying only diagnostics. Closed
+    /// hierarchy (private base constructor) so every consumer must handle both arms.</summary>
+    internal abstract record SettlementSendResult {
+        SettlementSendResult() { }
+
+        internal sealed record Response(HttpResponseMessage Value) : SettlementSendResult;
+
+        internal sealed record DeadlineExhausted(
+            string? LastCode, string? LastMessage, int Attempts, TimeSpan Elapsed) : SettlementSendResult;
     }
 
     /// <summary>
@@ -543,7 +625,8 @@ static class McpFlowsServer {
             string             cwd,
             string?            repoRoot,
             RepositoryPayload? repoInfo,
-            string             kindArgName
+            string             kindArgName,
+            CancellationToken  ct = default
         ) {
         string? kind;
         string? definitionYaml = null;
@@ -644,7 +727,8 @@ static class McpFlowsServer {
 
         return await client.PostAsync(
             startPath,
-            JsonContent.Create(body, McpJsonContext.Default.StartReviewFlowDto)
+            JsonContent.Create(body, McpJsonContext.Default.StartReviewFlowDto),
+            ct
         );
     }
 
@@ -660,7 +744,8 @@ static class McpFlowsServer {
             JsonObject? arguments,
             string      contextArgName,
             string?     participant,
-            bool        async
+            bool        async,
+            CancellationToken ct = default
         ) {
         var flowRunId    = arguments?["flow_run_id"]?.GetValue<string>();
         var context      = GetRequiredArg(arguments, contextArgName);
@@ -677,7 +762,8 @@ static class McpFlowsServer {
 
         return client.PostAsync(
             $"{apiRoot}/api/flows/{Uri.EscapeDataString(flowRunId)}/rounds",
-            JsonContent.Create(body, McpJsonContext.Default.SubmitReviewRoundDto)
+            JsonContent.Create(body, McpJsonContext.Default.SubmitReviewRoundDto),
+            ct
         );
     }
 
@@ -766,6 +852,35 @@ static class McpFlowsServer {
     internal const string ServerCatchingUpGuidance =
         "The server is catching up after a read-model rebuild — try again in a few minutes, or ask the user what to do.";
 
+    /// <summary>Renders an exhausted settlement elapsed deadline as tool-error text, in the same
+    /// "Error (code): message" shape <see cref="FormatFlowStartError"/> uses for a coded rejection —
+    /// the caller sees the real server code it kept hitting, plus how hard the CLI tried, plus the
+    /// fact that retrying is still the right move. Only the POST lane can produce this; the poll
+    /// lane has its own graceful-cap message and its own budget.</summary>
+    internal static string FormatSettlementDeadlineError(SettlementSendResult.DeadlineExhausted exhausted) {
+        var code    = exhausted.LastCode ?? "flow_settlement_busy";
+        var attempts = exhausted.Attempts == 1 ? "1 attempt" : $"{exhausted.Attempts} attempts";
+        var elapsed  = FormatElapsed(exhausted.Elapsed);
+        var detail   = string.IsNullOrWhiteSpace(exhausted.LastMessage) ? "" : $" Last server message: {exhausted.LastMessage}";
+
+        return $"Error ({code}): gave up after {attempts} over {elapsed} — the daemon is still settling " +
+               $"a prior launch and could not admit this one in time. This is retryable: try again in a " +
+               $"minute, or check for another review flow already running against the same daemon.{detail}";
+    }
+
+    /// <summary>Compact, stable elapsed rendering for the deadline message (e.g. "3m", "2m 30s",
+    /// "45s") — no locale- or tick-dependent formatting in a string an agent may match on.</summary>
+    static string FormatElapsed(TimeSpan elapsed) {
+        if (elapsed < TimeSpan.Zero) elapsed = TimeSpan.Zero;
+
+        var minutes = (int)elapsed.TotalMinutes;
+        var seconds = elapsed.Seconds;
+
+        if (minutes == 0) return $"{Math.Max(seconds, 0)}s";
+
+        return seconds == 0 ? $"{minutes}m" : $"{minutes}m {seconds}s";
+    }
+
     /// <summary>Maps a non-2xx start/submit (or poll) response body to the tool error text.
     /// Status-agnostic contract (dynamic flows): ANY body carrying a string "error" code plus a
     /// "message" is a coded rejection from a dynamic-flows-aware server — surface the server
@@ -795,11 +910,11 @@ static class McpFlowsServer {
     /// <paramref name="toolName"/> is the tool that initiated the round (one of
     /// start_review_flow/submit_review_round/start_flow/send_to_participant) — threaded through
     /// so the graceful-cap timeout message can point back at the matching status tool.</summary>
-    static async Task<PollResult> ResolveRoundResultAsync(HttpClient client, string apiRoot, string postBody, string toolName, bool wasDynamicStart) {
+    static async Task<PollResult> ResolveRoundResultAsync(HttpClient client, string apiRoot, string postBody, string toolName, bool wasDynamicStart, FlowRetryClock clock, SettlementBackoff backoff) {
         if (TryFormatRoundlessStart(postBody, out var roundlessPendingIds) is { } roundless) {
             if (roundlessPendingIds.Count > 0 &&
                 JsonNode.Parse(postBody)?.AsObject()?["flow_run_id"]?.GetValue<string>() is { } roundlessRunId)
-                await AckRenderedMessagesAsync(client, apiRoot, roundlessRunId, roundlessPendingIds, Task.Delay);
+                await AckRenderedMessagesAsync(client, apiRoot, roundlessRunId, roundlessPendingIds, clock);
 
             return new(roundless, false);
         }
@@ -815,12 +930,12 @@ static class McpFlowsServer {
 
             // flowRunId may be null here (unparseable body) — nothing to ack against.
             if (flowRunId is not null)
-                await AckRenderedMessagesAsync(client, apiRoot, flowRunId, pendingIds, Task.Delay);
+                await AckRenderedMessagesAsync(client, apiRoot, flowRunId, pendingIds, clock);
 
             return new(formatted, false);
         }
 
-        return await PollUntilTerminalAsync(client, apiRoot, flowRunId, roundNum.Value, toolName, wasDynamicStart);
+        return await PollUntilTerminalAsync(client, apiRoot, flowRunId, roundNum.Value, toolName, wasDynamicStart, clock, backoff);
     }
 
     /// <summary>Tool family that started the round determines which status tool the graceful-cap
@@ -830,38 +945,39 @@ static class McpFlowsServer {
     static string StatusToolNameFor(string toolName) =>
         toolName is "start_review_flow" or "submit_review_round" ? "get_review_flow_status" : "get_flow_status";
 
-    static async Task<PollResult> PollUntilTerminalAsync(HttpClient client, string apiRoot, string flowRunId, int roundNumber, string toolName, bool wasDynamicStart) {
+    static async Task<PollResult> PollUntilTerminalAsync(HttpClient client, string apiRoot, string flowRunId, int roundNumber, string toolName, bool wasDynamicStart, FlowRetryClock clock, SettlementBackoff backoff) {
         var url                   = $"{apiRoot}/api/flows/{Uri.EscapeDataString(flowRunId)}";
-        var pollStartedAt         = DateTimeOffset.UtcNow;
+        var pollStartedAt         = clock.UtcNow;
         var deadline              = pollStartedAt + PollCap;
         // Fix #3: anchor the 404 grace window to poll start, not to first-seen-404.
         var notFoundGraceDeadline = pollStartedAt + NotFoundGrace;
         var consecutiveTransient  = 0;
         var lastTransientError    = (string?)null;
-        // Separate, short-backoff budget for the two settlement-layer coded 409s — distinct from
-        // the network/5xx transient budget above, which uses the full 3s PollInterval.
+        // Retry ordinal for the two settlement-layer coded 409s, feeding the shared jittered backoff
+        // schedule — distinct from the network/5xx transient budget above, which uses the full 3s
+        // PollInterval. Reset on any successful GET, so a late busy starts the schedule over.
         var settlementRetriesUsed = 0;
 
-        while (DateTimeOffset.UtcNow < deadline) {
-            using var getCts = new CancellationTokenSource(PerGetTimeout);
+        while (clock.UtcNow < deadline) {
+            using var getCts = clock.CreateTimeoutSource(PerGetTimeout);
             HttpResponseMessage resp;
             try {
-                resp = await SendWithRefreshRetryAsync(client, c => c.GetAsync(url, getCts.Token));
+                resp = await SendWithRefreshRetryAsync(client, (c, ct) => c.GetAsync(url, ct), getCts.Token);
             } catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException) {
                 // Fix #4: count network/TLS/timeout as transient; stop after budget.
                 consecutiveTransient++;
                 lastTransientError = ex.Message;
                 if (consecutiveTransient > MaxTransientRetries)
                     return new($"Error: poll failed after {MaxTransientRetries} consecutive network errors: {lastTransientError}", true);
-                await Task.Delay(PollInterval); continue;
+                await clock.DelayAsync(PollInterval); continue;
             }
 
             using (resp) {
                 if (resp.StatusCode == HttpStatusCode.NotFound) {
                     // Fix #3: 404 only gets the grace window anchored to poll start.
-                    if (DateTimeOffset.UtcNow > notFoundGraceDeadline)
+                    if (clock.UtcNow > notFoundGraceDeadline)
                         return new($"Error: flow_run_id {flowRunId} not found.", true);
-                    await Task.Delay(PollInterval); continue;
+                    await clock.DelayAsync(PollInterval); continue;
                 }
 
                 if (resp.StatusCode == HttpStatusCode.Unauthorized)
@@ -874,14 +990,15 @@ static class McpFlowsServer {
                     var errBody = await resp.Content.ReadAsStringAsync();
 
                     // The same two settlement-layer coded 409s can also surface on the poll GET
-                    // (the server-side backstop mapping an escaped settlement conflict). Bounded,
-                    // short auto-retry before falling through to the immediate-fail path; every
-                    // other coded/uncoded 4xx is untouched.
+                    // (the server-side backstop mapping an escaped settlement conflict). This lane
+                    // shares the POST lane's jittered backoff SCHEDULE but keeps its own budget: the
+                    // retry is bounded by the loop's remaining PollCap, not by an attempt count, and
+                    // the policy delay is truncated so it can never overshoot that cap. Every other
+                    // coded/uncoded 4xx is untouched.
                     if (TryParseCodedError(errBody, out var code, out _) &&
-                            SettlementRetryableCodes.Contains(code!) &&
-                            settlementRetriesUsed < MaxSettlementRetries - 1) {
+                            SettlementRetryableCodes.Contains(code!)) {
                         settlementRetriesUsed++;
-                        await Task.Delay(SettlementRetryDelay);
+                        await clock.DelayAsync(backoff.Delay(settlementRetriesUsed, deadline - clock.UtcNow));
                         continue;
                     }
 
@@ -894,7 +1011,7 @@ static class McpFlowsServer {
                     lastTransientError = $"HTTP {statusCode}";
                     if (consecutiveTransient > MaxTransientRetries)
                         return new($"Error: poll failed after {MaxTransientRetries} consecutive server errors: {lastTransientError}", true);
-                    await Task.Delay(PollInterval); continue;
+                    await clock.DelayAsync(PollInterval); continue;
                 }
 
                 // Successful response — reset transient counters.
@@ -913,7 +1030,7 @@ static class McpFlowsServer {
                 if (runStatus is "closed" or "failed") {
                     if (rn == roundNumber && rs is not null && TerminalRoundStatuses.Contains(rs)) {
                         var formatted = FormatPolledRoundResult(node!, flowRunId, out var pendingIds);
-                        await AckRenderedMessagesAsync(client, apiRoot, flowRunId, pendingIds, Task.Delay);
+                        await AckRenderedMessagesAsync(client, apiRoot, flowRunId, pendingIds, clock);
                         return new(formatted, false);
                     }
                     // Run became terminal before our round produced a result — explicit error.
@@ -923,11 +1040,11 @@ static class McpFlowsServer {
                 // Only act on OUR round; an earlier projection may still show a prior round.
                 if (rn == roundNumber && rs is not null && TerminalRoundStatuses.Contains(rs)) {
                     var formatted = FormatPolledRoundResult(node!, flowRunId, out var pendingIds);
-                    await AckRenderedMessagesAsync(client, apiRoot, flowRunId, pendingIds, Task.Delay);
+                    await AckRenderedMessagesAsync(client, apiRoot, flowRunId, pendingIds, clock);
                     return new(formatted, false);
                 }
             }
-            await Task.Delay(PollInterval);
+            await clock.DelayAsync(PollInterval);
         }
 
         // Genuine 8-min cap: round still legitimately running.
@@ -1171,7 +1288,7 @@ static class McpFlowsServer {
     /// AFTER the response text has been fully formatted, passing only the ids that were actually
     /// rendered into that text — never before, never a superset. No-op (no HTTP call at all) when
     /// <paramref name="messageIds"/> is empty, which keeps this byte-compatible with servers that
-    /// predate the ack endpoint. Best-effort: one retry after <paramref name="delay"/>(2s) on any
+    /// predate the ack endpoint. Best-effort: one retry after 2s (on the injected <paramref name="clock"/>) on any
     /// failure (non-2xx or exception), then swallows and logs to stderr — the next status/round/
     /// close call will see the same messages still pending and re-render + re-ack them, so a lost
     /// ack only delays cleanup, it never drops a message.</summary>
@@ -1180,7 +1297,7 @@ static class McpFlowsServer {
             string                apiRoot,
             string                flowRunId,
             IReadOnlyList<string> messageIds,
-            Func<TimeSpan, Task>  delay
+            FlowRetryClock        clock
         ) {
         if (messageIds.Count == 0) return;
 
@@ -1194,10 +1311,11 @@ static class McpFlowsServer {
                 // round endpoints), so an unbounded ack POST could hang the tool response the
                 // driver is waiting on. A timeout surfaces as OperationCanceledException, which
                 // falls into the existing swallow-and-retry-once path below.
-                using var postCts = new CancellationTokenSource(PerAckPostTimeout);
+                using var postCts = clock.CreateTimeoutSource(PerAckPostTimeout);
                 using var response = await SendWithRefreshRetryAsync(
                     client,
-                    c => c.PostAsync(url, JsonContent.Create(body, McpJsonContext.Default.AckFlowMessagesDto), postCts.Token)
+                    (c, ct) => c.PostAsync(url, JsonContent.Create(body, McpJsonContext.Default.AckFlowMessagesDto), ct),
+                    postCts.Token
                 );
                 return response.IsSuccessStatusCode;
             } catch {
@@ -1207,7 +1325,7 @@ static class McpFlowsServer {
 
         if (await TryPostAsync()) return;
 
-        await delay(TimeSpan.FromSeconds(2));
+        await clock.DelayAsync(TimeSpan.FromSeconds(2));
 
         if (await TryPostAsync()) return;
 
