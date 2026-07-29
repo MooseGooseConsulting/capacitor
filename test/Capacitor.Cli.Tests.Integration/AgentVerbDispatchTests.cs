@@ -1,0 +1,135 @@
+using System.Diagnostics;
+
+namespace Capacitor.Cli.Tests.Integration;
+
+/// <summary>
+/// `kcap agent …` must reach <c>AgentCommand</c>. Pinned through the real binary because the
+/// dispatch lives in Program.cs's top-level flow, where a guard added ahead of the switch can
+/// shadow the whole group without failing a single unit test — which is exactly what happened
+/// when the retired-verb tombstone and this command group landed in the same release.
+///
+/// Every case asserts a string only <c>AgentCommand</c> emits. Asserting merely "not the
+/// tombstone" would pass for any other pre-dispatch guard that exits 1 (the missing-server gate
+/// did exactly that), which would leave this file green while the group stayed shadowed.
+/// </summary>
+public class AgentVerbDispatchTests {
+    /// Emitted by AgentCommand and nothing else: the Unix subcommand paths all prefix their
+    /// usage/errors with `kcap agent`, and Windows refuses the group with the same prefix.
+    const string HandlerMarker = "kcap agent";
+
+    [Test]
+    [Arguments("agent frobnicate")]
+    [Arguments("agent attach")]
+    [Arguments("agent stop")]
+    [Arguments("agent start")]
+    public async Task Subcommand_reaches_the_handler(string argLine) {
+        var (stdout, stderr, exitCode) = await RunCli(argLine);
+        var output = stdout + stderr;
+
+        await Assert.That(output).Contains(HandlerMarker);
+        await Assert.That(output).DoesNotContain("renamed to 'daemon'");
+        await Assert.That(output).DoesNotContain("No server configured");
+        await Assert.That(exitCode).IsNotEqualTo(2);
+    }
+
+    [Test]
+    [Arguments("agent --daemon kcap-dispatch-test-absent")]
+    [Arguments("agent ls --daemon kcap-dispatch-test-absent")]
+    public async Task Bare_agent_and_ls_reach_the_handler(string argLine) {
+        // Naming a daemon that cannot exist makes the handler's own "no daemon" message
+        // deterministic regardless of what is running on the machine. The bare form also pins
+        // that a leading flag is an `ls` option rather than a subcommand named `--daemon`.
+        var (stdout, stderr, _) = await RunCli(argLine);
+        var output = stdout + stderr;
+
+        await Assert.That(output).DoesNotContain("renamed to 'daemon'");
+        await Assert.That(output).DoesNotContain("No server configured");
+        await Assert.That(output).DoesNotContain("unknown subcommand");
+
+        if (!OperatingSystem.IsWindows()) {
+            await Assert.That(output).Contains("No local daemon running.");
+        } else {
+            await Assert.That(output).Contains(HandlerMarker);
+        }
+    }
+
+    [Test]
+    public async Task Agent_help_renders_the_command_group() {
+        var (stdout, _, exitCode) = await RunCli("agent --help");
+
+        await Assert.That(exitCode).IsEqualTo(0);
+        await Assert.That(stdout).Contains("kcap agent");
+
+        foreach (var sub in new[] { "start", "ls", "stop", "attach" }) {
+            await Assert.That(stdout).Contains(sub);
+        }
+    }
+
+    [Test]
+    public async Task Daemon_only_subcommand_points_at_the_daemon_group() {
+        // `status` only ever meant the daemon. Signposted ahead of the platform guard, so this
+        // holds on Windows too — where `kcap daemon status` is supported but this group is not.
+        var (_, stderr, exitCode) = await RunCli("agent status");
+
+        await Assert.That(exitCode).IsEqualTo(1);
+        await Assert.That(stderr).Contains("kcap daemon status");
+        await Assert.That(stderr).DoesNotContain("not supported on Windows");
+    }
+
+    [Test]
+    public async Task Start_without_a_server_reports_the_missing_server_itself() {
+        // The group is offline-callable, so the server requirement belongs to `start` alone and
+        // must still be reported — just by the handler, not by the global gate.
+        if (OperatingSystem.IsWindows()) return;
+
+        var (_, stderr, exitCode) = await RunCli("agent start claude", clearServerUrl: true);
+
+        await Assert.That(exitCode).IsEqualTo(1);
+        await Assert.That(stderr).Contains("kcap agent start: no server configured");
+    }
+
+    static async Task<(string Stdout, string Stderr, int ExitCode)> RunCli(
+            string argLine, bool clearServerUrl = false) {
+        var binary = GetCliBinaryPath();
+
+        if (!File.Exists(binary)) {
+            throw new FileNotFoundException(
+                $"kcap binary not found at {binary}. Build it first: " +
+                "dotnet build src/Capacitor.Cli/Capacitor.Cli.csproj",
+                binary
+            );
+        }
+
+        var psi = new ProcessStartInfo(binary, argLine + " --no-update-check") {
+            RedirectStandardOutput = true,
+            RedirectStandardError  = true,
+            UseShellExecute        = false,
+            CreateNoWindow         = true
+        };
+
+        // Isolate from the developer's own profile so these assertions don't depend on whether
+        // this machine happens to have a server configured.
+        psi.Environment["KCAP_URL"] = clearServerUrl ? "" : "http://127.0.0.1:1";
+
+        using var process = Process.Start(psi)
+            ?? throw new InvalidOperationException("Failed to start kcap process");
+
+        var stdoutTask = process.StandardOutput.ReadToEndAsync();
+        var stderrTask = process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync();
+
+        return (await stdoutTask, await stderrTask, process.ExitCode);
+    }
+
+    static string GetCliBinaryPath() {
+        var asmDir      = Path.GetDirectoryName(typeof(AgentVerbDispatchTests).Assembly.Location)!;
+        var binDir      = Path.GetDirectoryName(asmDir)!;
+        var config      = Path.GetFileName(binDir);
+        var testBin     = Path.GetDirectoryName(binDir)!;
+        var testProjDir = Path.GetDirectoryName(testBin)!;
+        var testRoot    = Path.GetDirectoryName(testProjDir)!;
+        var repoRoot    = Path.GetDirectoryName(testRoot)!;
+        var binaryName  = OperatingSystem.IsWindows() ? "kcap.exe" : "kcap";
+        return Path.Combine(repoRoot, "src", "Capacitor.Cli", "bin", config, "net10.0", binaryName);
+    }
+}

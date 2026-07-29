@@ -17,16 +17,6 @@ if (args.Length < 1) {
 
 var command = args[0];
 
-// The pre-rename daemon verb: reject it with a pointer, before any config/git/update work,
-// so the dead verb exits fast, offline, and deterministically. Deliberately not an alias —
-// exit 2, like the removed cursor import command.
-if (command is "agent") {
-    Console.Error.WriteLine("Unknown command: agent — the daemon verb was renamed to 'daemon'.");
-    Console.Error.WriteLine("Run `kcap daemon start|stop|status`, or `kcap --help`.");
-
-    return 2;
-}
-
 // Interactive commands block on synchronous Spectre.Console prompts. Install a
 // signal + parent-liveness safety net so an abandoned prompt (closed terminal,
 // killed launching agent, detached pseudo-console) can't orphan this process
@@ -95,7 +85,7 @@ if (args.Skip(1).Any(a => a is "--help" or "-h")) {
 }
 
 // Commands that don't need a server URL
-string[] offlineCommands = ["--help", "-h", "help", "--version", "-v", "logout", "cleanup", "config", "daemon", "setup", "status", "update", "plugin", "profile", "use", "repos", "login", "ignore", "remap", "uninstall", "cursor-verify-appendonly"];
+string[] offlineCommands = ["--help", "-h", "help", "--version", "-v", "logout", "cleanup", "config", "daemon", "setup", "status", "update", "plugin", "profile", "use", "repos", "login", "ignore", "remap", "uninstall", "cursor-verify-appendonly", "agent"];
 
 if (baseUrl is null && !offlineCommands.Contains(command)) {
     Console.Error.WriteLine("No server configured. Run `kcap setup` or set KCAP_URL.");
@@ -261,7 +251,7 @@ switch (command) {
     case "daemon":
         return await DaemonCommands.HandleAsync(args);
     case "agent":
-        return await AgentCommand.HandleAsync(args);
+        return await AgentCommand.HandleAsync(args, baseUrl);
     case "setup":
         return await SetupCommand.HandleAsync(args);
     case "plugin":
