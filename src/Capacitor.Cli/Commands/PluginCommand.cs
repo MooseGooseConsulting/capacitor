@@ -723,8 +723,7 @@ public static class PluginCommand {
     /// not an error code.
     /// </summary>
     static async Task RegisterCursorMcpServersAsync(PluginEnvironment env) {
-        var change = JsonMcpConfigWriter.Register(
-            env.CursorMcpJson, KcapMcpServers.ForCursor, McpConfigShape.Standard, cwd: null, new McpMarker("cursor"));
+        var change = HarnessMcpProjections.Cursor.Register(env.CursorMcpJson);
 
         switch (change) {
             case JsonMcpConfigWriter.Change.Updated:
@@ -763,7 +762,7 @@ public static class PluginCommand {
         // Cursor is user-scope only (no --project split like Codex), so the kcap MCP
         // entries are always unregistered here, independent of whether hooks.json
         // existed — the two files are unrelated on disk.
-        var mcpChange = JsonMcpConfigWriter.Unregister(env.CursorMcpJson, McpConfigShape.Standard, new McpMarker("cursor"));
+        var mcpChange = HarnessMcpProjections.Cursor.Unregister(env.CursorMcpJson);
         var mcpFailed = mcpChange == JsonMcpConfigWriter.Change.Failed;
 
         if (mcpChange == JsonMcpConfigWriter.Change.Updated) {
@@ -1055,8 +1054,7 @@ public static class PluginCommand {
     /// loads them without a manual JSON edit. Never fails the install: a write error is a warning.
     /// </summary>
     static async Task RegisterOpenCodeMcpServersAsync(PluginEnvironment env) {
-        var change = JsonMcpConfigWriter.Register(
-            env.OpenCodeMcpConfigJson, KcapMcpServers.ForCursor, McpConfigShape.OpenCode, cwd: null, new McpMarker("opencode"));
+        var change = HarnessMcpProjections.OpenCode.Register(env.OpenCodeMcpConfigJson);
 
         switch (change) {
             case JsonMcpConfigWriter.Change.Updated:
@@ -1109,7 +1107,7 @@ public static class PluginCommand {
 
         // MCP servers live in a separate file (~/.config/opencode/opencode.json) — unregister
         // regardless (Unregister owns the ownership-marker cleanup and no-ops when the file is absent).
-        var mcpChange = JsonMcpConfigWriter.Unregister(env.OpenCodeMcpConfigJson, McpConfigShape.OpenCode, new McpMarker("opencode"));
+        var mcpChange = HarnessMcpProjections.OpenCode.Unregister(env.OpenCodeMcpConfigJson);
         var mcpFailed = mcpChange == JsonMcpConfigWriter.Change.Failed;
 
         if (mcpChange == JsonMcpConfigWriter.Change.Updated) {
@@ -1194,8 +1192,7 @@ public static class PluginCommand {
     /// <summary>Registers the kcap MCP servers in Antigravity's own <c>~/.gemini/config/mcp_config.json</c>
     /// (Standard shape). Never fails the install: a write error is a warning.</summary>
     static async Task RegisterAntigravityMcpServersAsync(PluginEnvironment env) {
-        var change = JsonMcpConfigWriter.Register(
-            env.AntigravityMcpConfigJson, KcapMcpServers.ForCursor, McpConfigShape.Standard, cwd: null, new McpMarker("antigravity"));
+        var change = HarnessMcpProjections.Antigravity.Register(env.AntigravityMcpConfigJson);
 
         switch (change) {
             case JsonMcpConfigWriter.Change.Updated:
@@ -1264,7 +1261,7 @@ public static class PluginCommand {
 
         // MCP servers live in a separate mcp_config.json — unregister regardless (Unregister owns the
         // ownership-marker cleanup and no-ops when the file is absent).
-        var mcpChange = JsonMcpConfigWriter.Unregister(env.AntigravityMcpConfigJson, McpConfigShape.Standard, new McpMarker("antigravity"));
+        var mcpChange = HarnessMcpProjections.Antigravity.Unregister(env.AntigravityMcpConfigJson);
         var mcpFailed = mcpChange == JsonMcpConfigWriter.Change.Failed;
 
         if (mcpChange == JsonMcpConfigWriter.Change.Updated) {
@@ -1384,8 +1381,7 @@ public static class PluginCommand {
     /// not an error code.
     /// </summary>
     static async Task RegisterCopilotMcpServersAsync(PluginEnvironment env) {
-        var change = JsonMcpConfigWriter.Register(
-            env.CopilotMcpConfigJson, KcapMcpServers.ForCursor, McpConfigShape.Copilot, cwd: null, new McpMarker("copilot"));
+        var change = HarnessMcpProjections.Copilot.Register(env.CopilotMcpConfigJson);
 
         switch (change) {
             case JsonMcpConfigWriter.Change.Updated:
@@ -1441,7 +1437,7 @@ public static class PluginCommand {
         // unregister them independently of whether the hooks file existed. Unregister owns
         // the ownership-marker cleanup: it clears the marker on any non-Failed outcome and
         // retains it on Failed so a retry can still identify the kcap-owned entries.
-        var mcpChange = JsonMcpConfigWriter.Unregister(env.CopilotMcpConfigJson, McpConfigShape.Copilot, new McpMarker("copilot"));
+        var mcpChange = HarnessMcpProjections.Copilot.Unregister(env.CopilotMcpConfigJson);
         var mcpFailed = mcpChange == JsonMcpConfigWriter.Change.Failed;
 
         if (mcpChange == JsonMcpConfigWriter.Change.Updated) {
@@ -1528,7 +1524,7 @@ public static class PluginCommand {
         // Kiro's MCP lives in a SEPARATE file (~/.kiro/settings/mcp.json), independent of the agent
         // clone — so a prior `--skip-kiro-hooks` (or a clone that failed because kiro-cli was missing)
         // can leave an MCP-only install with no agent marker.
-        var mcpInstalled = new McpMarker("kiro").Owned(mcpPath).Any();
+        var mcpInstalled = HarnessMcpProjections.Kiro.OwnsAnything(mcpPath);
 
         if (refreshOnly) {
             // Never touch a machine that never opted in (neither hooks nor MCP).
@@ -1628,8 +1624,7 @@ public static class PluginCommand {
     /// fields (kcap leaves autoApprove unset). Never fails the install: a write error is a warning.
     /// </summary>
     static async Task RegisterKiroMcpServersAsync(PluginEnvironment env, string mcpPath) {
-        var change = JsonMcpConfigWriter.Register(
-            mcpPath, KcapMcpServers.ForCursor, McpConfigShape.Standard, cwd: null, new McpMarker("kiro"));
+        var change = HarnessMcpProjections.Kiro.Register(mcpPath);
 
         switch (change) {
             case JsonMcpConfigWriter.Change.Updated:
@@ -1650,7 +1645,7 @@ public static class PluginCommand {
 
         // MCP servers live in a separate settings/mcp.json — unregister independently of the agent
         // restore/removal (Unregister owns the ownership-marker cleanup and no-ops when absent).
-        var mcpChange = JsonMcpConfigWriter.Unregister(mcpPath, McpConfigShape.Standard, new McpMarker("kiro"));
+        var mcpChange = HarnessMcpProjections.Kiro.Unregister(mcpPath);
         var mcpFailed = mcpChange == JsonMcpConfigWriter.Change.Failed;
 
         if (mcpChange == JsonMcpConfigWriter.Change.Updated) {
@@ -1975,8 +1970,7 @@ public static class PluginCommand {
     /// Never fails the install: a write error is a warning, not an error code.
     /// </summary>
     static async Task RegisterGeminiMcpServersAsync(PluginEnvironment env, string settingsPath) {
-        var change = JsonMcpConfigWriter.Register(
-            settingsPath, KcapMcpServers.ForCursor, McpConfigShape.Gemini, cwd: null, new McpMarker("gemini"));
+        var change = HarnessMcpProjections.Gemini.Register(settingsPath);
 
         switch (change) {
             case JsonMcpConfigWriter.Change.Updated:
@@ -2040,7 +2034,7 @@ public static class PluginCommand {
         // leave a STALE marker that could later misclassify a user-authored mcpServers.kcap-* entry as
         // kcap-owned. On an absent file it's a no-op (Unchanged) that still clears the marker and
         // never creates a config file.
-        var mcpChange = JsonMcpConfigWriter.Unregister(settingsPath, McpConfigShape.Gemini, new McpMarker("gemini"));
+        var mcpChange = HarnessMcpProjections.Gemini.Unregister(settingsPath);
         mcpFailed = mcpChange == JsonMcpConfigWriter.Change.Failed;
 
         if (mcpChange == JsonMcpConfigWriter.Change.Updated) {
