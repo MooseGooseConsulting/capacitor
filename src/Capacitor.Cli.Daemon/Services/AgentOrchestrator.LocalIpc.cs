@@ -4,7 +4,7 @@ namespace Capacitor.Cli.Daemon.Services;
 
 /// Local-socket entry points invoked by <see cref="LocalControlServer"/>.
 internal partial class AgentOrchestrator {
-    /// <summary>Reply to a <c>kcap ls</c> request with a tab-separated agent table.</summary>
+    /// <summary>Reply to a <c>kcap agent ls</c> request with a tab-separated agent table.</summary>
     public Task HandleLocalListAsync(Stream stream, CancellationToken ct) {
         var lines = _agents.Values.Select(a => $"{a.Id}\t{a.Status}\t{a.RepoPath}");
 
@@ -12,7 +12,43 @@ internal partial class AgentOrchestrator {
     }
 
     /// <summary>
-    /// Spawn a new agent from a local <c>run-agent</c> request, then attach the requesting
+    /// Stop one agent (or every agent, when <paramref name="agentId"/> is empty) on behalf of
+    /// `kcap agent stop`. Calls the stop core directly rather than <c>HandleStopAgent</c>: the
+    /// private-agent guard there defends against server-origin commands, and a request arriving
+    /// on the daemon's own 0600 socket is the owner's. Stops run concurrently — each can take up
+    /// to 25s (graceful wait plus terminate), so serial teardown would be unusable.
+    /// </summary>
+    public async Task HandleLocalStopAsync(string agentId, Stream stream, CancellationToken ct) {
+        if (agentId.Length == 0) {
+            var all     = _agents.Values.ToList();
+            var results = await Task.WhenAll(all.Select(StopAgentCoreAsync));
+            var lines   = all.Zip(results, (a, ok) => $"{a.Id}\t{StatusText(ok)}");
+            await FrameCodec.WriteAsync(stream, LocalFrame.StopAck(string.Join('\n', lines)), ct);
+
+            return;
+        }
+
+        if (_agents.TryGetValue(agentId, out var agent)) {
+            var ok = await StopAgentCoreAsync(agent);
+            await FrameCodec.WriteAsync(stream, LocalFrame.StopAck($"{agentId}\t{StatusText(ok)}"), ct);
+
+            return;
+        }
+
+        // Not live here — it may be a survivor of a previous daemon incarnation, which the PID
+        // record can still reap. This is why the client sends full ids verbatim.
+        var reaped = await TryStopByPidRecordAsync(agentId);
+
+        await FrameCodec.WriteAsync(
+            stream,
+            reaped ? LocalFrame.StopAck($"{agentId}\t{StatusText(true)}") : LocalFrame.Error($"no such agent {agentId}"),
+            ct);
+    }
+
+    static string StatusText(bool confirmedStopped) => confirmedStopped ? "stopped" : "failed";
+
+    /// <summary>
+    /// Spawn a new agent from a local <c>agent start</c> request, then attach the requesting
     /// client. The agent runs <b>PrivateLocal</b> (no per-agent server calls) in either an
     /// owned worktree (<c>--worktree</c>) or the user's borrowed cwd (default in-place).
     /// </summary>
@@ -97,7 +133,7 @@ internal partial class AgentOrchestrator {
         await AttachClientLoopAsync(agent, stream, ct);
     }
 
-    /// <summary>Attach an existing agent to a local client (used by <c>kcap attach</c>).</summary>
+    /// <summary>Attach an existing agent to a local client (used by <c>kcap agent attach</c>).</summary>
     public Task HandleLocalAttachAsync(string agentId, Stream stream, CancellationToken ct) {
         if (!_agents.TryGetValue(agentId, out var agent))
             return FrameCodec.WriteAsync(stream, LocalFrame.Error($"no such agent {agentId}"), ct);
@@ -182,8 +218,8 @@ internal partial class AgentOrchestrator {
 
             if (sink.Detached && !agent.Runtime.HasExited) {
                 // We dropped this client because its output overflowed — tell it so the user
-                // reattaches (a fresh `kcap attach` replays the buffer from a clean frame).
-                try { await Send(LocalFrame.Error("terminal output overflowed — detached; reattach with `kcap attach`")); } catch { /* client already gone */ }
+                // reattaches (a fresh `kcap agent attach` replays the buffer from a clean frame).
+                try { await Send(LocalFrame.Error("terminal output overflowed — detached; reattach with `kcap agent attach`")); } catch { /* client already gone */ }
             }
 
             if (agent.Runtime.HasExited) {

@@ -413,7 +413,7 @@ public partial class AgentOrchestratorVendorTests {
         );
         orch.RegisterAgentForTest(agent);
 
-        // Client sends one Stdin frame, then nothing (stream ends) — mirrors `kcap attach`
+        // Client sends one Stdin frame, then nothing (stream ends) — mirrors `kcap agent attach`
         // forwarding a keystroke to a runtime that can't accept raw input.
         var readBuf = new MemoryStream();
         await FrameCodec.WriteAsync(readBuf, LocalFrame.Stdin("x"u8.ToArray()), default);
@@ -578,5 +578,161 @@ public partial class AgentOrchestratorVendorTests {
         public override Task<PermissionDecision> RequestPermissionAsync(
                 string sessionId, string? toolName, JsonElement? toolInput, JsonElement? suggestions, CancellationToken ct = default
             ) { Calls.Add(nameof(RequestPermissionAsync)); return Task.FromResult(new PermissionDecision("deny", null, null)); }
+    }
+
+    static async Task<LocalFrame?> StopAndReadReply(AgentOrchestrator orch, string agentId) {
+        using var client = new DuplexTestStream(new MemoryStream(), new MemoryStream());
+        await orch.HandleLocalStopAsync(agentId, client, default);
+        client.WrittenStream.Position = 0;
+
+        return await FrameCodec.ReadAsync(client.WrittenStream, default);
+    }
+
+    [Test]
+    public async Task Local_stop_stops_a_private_agent_without_touching_the_server() {
+        // The server-origin path refuses private agents by design; a local stop must not,
+        // or a `--private` agent could never be stopped from the CLI at all.
+        var server = new TripwireServerConnection();
+        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        orch.SeedAgentForTest("priv-1", isPrivate: true);
+
+        var reply = await StopAndReadReply(orch, "priv-1");
+
+        await Assert.That(reply!.Type).IsEqualTo(FrameType.StopAck);
+        await Assert.That(reply.Text).IsEqualTo("priv-1\tstopped");
+        await Assert.That(orch.GetAgentForTest("priv-1")!.Status).IsEqualTo("Completed");
+        await Assert.That(server.Calls.Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Local_stop_of_a_registered_agent_still_reports_to_the_server() {
+        var server = new TripwireServerConnection();
+        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        orch.SeedAgentForTest("pub-1");
+
+        var reply = await StopAndReadReply(orch, "pub-1");
+
+        await Assert.That(reply!.Type).IsEqualTo(FrameType.StopAck);
+        await Assert.That(server.Calls).Contains(nameof(ServerConnection.AgentStatusChangedAsync));
+        await Assert.That(server.Calls).Contains(nameof(ServerConnection.AppendAgentRunEventAsync));
+    }
+
+    [Test]
+    public async Task Local_stop_with_an_empty_id_stops_every_agent() {
+        var server = new TripwireServerConnection();
+        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        orch.SeedAgentForTest("a-1");
+        orch.SeedAgentForTest("a-2", isPrivate: true);
+
+        var reply = await StopAndReadReply(orch, "");
+
+        await Assert.That(reply!.Type).IsEqualTo(FrameType.StopAck);
+        await Assert.That(reply.Text.Split('\n')).IsEquivalentTo(new[] { "a-1\tstopped", "a-2\tstopped" });
+        await Assert.That(orch.GetAgentForTest("a-1")!.Status).IsEqualTo("Completed");
+        await Assert.That(orch.GetAgentForTest("a-2")!.Status).IsEqualTo("Completed");
+    }
+
+    [Test]
+    public async Task Local_stop_of_an_unknown_id_with_no_pid_record_is_an_error() {
+        var server = new TripwireServerConnection();
+        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+
+        var reply = await StopAndReadReply(orch, "ghost");
+
+        await Assert.That(reply!.Type).IsEqualTo(FrameType.Error);
+        await Assert.That(reply.Text).Contains("ghost");
+    }
+
+    [Test]
+    public async Task Local_stop_that_cannot_be_confirmed_reports_failed() {
+        var server = new TripwireServerConnection();
+        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        // A pty that never reports HasExited, even past TerminateAsync — StopAgentCoreAsync's
+        // confirmation check must then report "failed" instead of claiming success.
+        orch.SeedAgentForTest("stuck-1", pty: new NeverExitsPtyProcess());
+
+        var reply = await StopAndReadReply(orch, "stuck-1");
+
+        await Assert.That(reply!.Type).IsEqualTo(FrameType.StopAck);
+        await Assert.That(reply.Text).IsEqualTo("stuck-1\tfailed");
+    }
+
+    [Test]
+    public async Task Local_stop_reports_stopped_when_the_reap_lands_just_after_the_kill() {
+        var server = new TripwireServerConnection();
+        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        // Models the real UnixPtyProcess.TerminateAsync: it sends SIGKILL then issues one
+        // non-blocking waitpid immediately, too soon to see the reap — HasExited stays false right
+        // after TerminateAsync returns and only flips true once something polls again. Without
+        // StopAgentCoreAsync's post-terminate poll, this successful SIGKILL would be misreported
+        // as "failed".
+        orch.SeedAgentForTest("reaped-1", pty: new ReapsJustAfterKillPtyProcess());
+
+        var reply = await StopAndReadReply(orch, "reaped-1");
+
+        await Assert.That(reply!.Type).IsEqualTo(FrameType.StopAck);
+        await Assert.That(reply.Text).IsEqualTo("reaped-1\tstopped");
+    }
+
+    /// <summary>A pty double whose process never exits — HasExited stays false even after
+    /// TerminateAsync — so a test can drive the "stop could not be confirmed" path without a
+    /// real hung process.</summary>
+    sealed class NeverExitsPtyProcess : IPtyProcess {
+        public int  Pid       => 4343;
+        public bool HasExited => false;
+        public int? ExitCode  => null;
+
+        public ValueTask DisposeAsync() => default;
+        public Task WaitForExitAsync(TimeSpan? _) => Task.CompletedTask;
+        public Task TerminateAsync(TimeSpan?   _) => Task.CompletedTask;
+
+#pragma warning disable CS1998
+        public async IAsyncEnumerable<byte[]> ReadOutputAsync([EnumeratorCancellation] CancellationToken _ = default) {
+            yield break;
+        }
+#pragma warning restore CS1998
+
+        public Task WriteAsync(string _) => Task.CompletedTask;
+        public Task WriteAsync(byte[] _) => Task.CompletedTask;
+        public void Resize(ushort     _, ushort __) { }
+        public void SendInterrupt() { }
+    }
+
+    /// <summary>A pty double modelling <c>UnixPtyProcess.TerminateAsync</c>'s real shape: SIGKILL
+    /// is sent, then a single non-blocking <c>waitpid</c> is issued immediately — too soon to
+    /// observe the reap, so <see cref="HasExited"/> is still false right after
+    /// <see cref="TerminateAsync"/> returns. It only flips true on a later poll, mirroring the
+    /// kernel reaping the child a moment after the kill.</summary>
+    sealed class ReapsJustAfterKillPtyProcess : IPtyProcess {
+        bool _terminateCalled;
+
+        public int  Pid       => 5252;
+        public bool HasExited { get; private set; }
+        public int? ExitCode  => HasExited ? 0 : null;
+
+        public ValueTask DisposeAsync() => default;
+
+        public Task TerminateAsync(TimeSpan? _) {
+            _terminateCalled = true; // SIGKILL sent; the immediate non-blocking waitpid misses the reap
+
+            return Task.CompletedTask;
+        }
+
+        public Task WaitForExitAsync(TimeSpan? _) {
+            if (_terminateCalled) HasExited = true; // the reap lands during this later poll
+
+            return Task.CompletedTask;
+        }
+
+#pragma warning disable CS1998
+        public async IAsyncEnumerable<byte[]> ReadOutputAsync([EnumeratorCancellation] CancellationToken _ = default) {
+            yield break;
+        }
+#pragma warning restore CS1998
+
+        public Task WriteAsync(string _) => Task.CompletedTask;
+        public Task WriteAsync(byte[] _) => Task.CompletedTask;
+        public void Resize(ushort     _, ushort __) { }
+        public void SendInterrupt() { }
     }
 }

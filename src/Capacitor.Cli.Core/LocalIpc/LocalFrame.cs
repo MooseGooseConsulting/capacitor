@@ -20,4 +20,6 @@ public sealed record LocalFrame(FrameType Type) {
     public static LocalFrame Error(string m)            => new(FrameType.Error)  { Text = m };
     public static LocalFrame Restart(string mode)       => new(FrameType.Restart)    { Text = mode };
     public static LocalFrame RestartAck(string status)  => new(FrameType.RestartAck) { Text = status };
+    public static LocalFrame Stop(string agentId)       => new(FrameType.Stop)       { Text = agentId };
+    public static LocalFrame StopAck(string payload)    => new(FrameType.StopAck)    { Text = payload };
 }
