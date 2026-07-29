@@ -42,12 +42,22 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
 
     readonly ILogger _logger = loggerFactory.CreateLogger<AcpHostedAgentRuntimeFactory>();
 
+    /// <summary>Resolved ONCE for this daemon's platform. Every borrowed-review consumer below reads
+    /// this, never the static descriptor — see <see cref="ResolvedBorrowedReviewPolicy"/> for why
+    /// splitting them is how advertisement and spawn drift apart.</summary>
+    internal static ResolvedBorrowedReviewPolicy PolicyFor(AcpVendorDescriptor descriptor) =>
+        descriptor.Vendor == AcpVendorDescriptors.Copilot.Vendor
+            ? CopilotBorrowedReviewPolicy.Current
+            : ResolvedBorrowedReviewPolicy.FromDescriptor(descriptor);
+
+    readonly ResolvedBorrowedReviewPolicy _policy = PolicyFor(descriptor);
+
     public string Vendor             => descriptor.Vendor;
     public bool   SupportsUnattended => descriptor.SupportsUnattended;
-    public bool   SupportsBorrowedReviewFlow => descriptor.SupportsBorrowedReviewFlow;
+    public bool   SupportsBorrowedReviewFlow => _policy.Supported;
     public bool   BorrowedReviewRequiresIndependentSnapshot =>
-        descriptor.BorrowedReviewContainment == AcpBorrowedReviewContainment.IndependentSnapshot;
-    public string? BorrowedReviewContainment => descriptor.BorrowedReviewContainment switch {
+        _policy.Containment == AcpBorrowedReviewContainment.IndependentSnapshot;
+    public string? BorrowedReviewContainment => _policy.Containment switch {
         AcpBorrowedReviewContainment.NativeToolClamp => "native-tool-clamp",
         AcpBorrowedReviewContainment.IndependentSnapshot => CursorBorrowedReviewValidation.Containment,
         _ => null
@@ -65,15 +75,30 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
         LogLaunching(ctx.AgentId, Vendor, ctx.Worktree.Path);
         AcpMetrics.Launches.Add(1);
 
-        ValidateBorrowedArtifact(ctx, descriptor);
+        ValidateBorrowedArtifact(ctx, _policy);
 
         // Fail closed BEFORE _connectionSource spawns a child (a later gate would leak one). Null for
         // a non-review launch; the built MCP list for a valid review flow.
-        var reviewMcp = ValidateAndBuildReviewFlowMcp(ctx, descriptor);
+        var reviewMcp = ValidateAndBuildReviewFlowMcp(ctx, descriptor, _policy);
 
-        var unattendedInteractionPolicy = ctx.IsReviewFlow
-            ? descriptor.UnattendedInteractionPolicy
-            : AcpUnattendedInteractionPolicy.Disabled;
+        // A BORROWED-SNAPSHOT launch always takes the Fail policy, whatever the vendor declares.
+        //
+        // This is the other half of the readable-allowlist change, and without it that change is a
+        // read-containment hole rather than a fix. Widening --available-tools to the read tools also
+        // widens what a path-taking read tool can be pointed at: Copilot answers an absolute path
+        // outside the snapshot with a session/request_permission ("Access paths outside trusted
+        // directories"), and AutoApprove grants exactly that shape without inspecting the tool. Probed
+        // live: with the read allowlist and an auto-approving bridge, a reviewer read a file outside
+        // the snapshot and echoed its contents back through the still-enabled result channel. The
+        // snapshot then bounds writes but not reads, which is not what independent-snapshot promises.
+        //
+        // Fail rather than deny-and-continue, and structural rather than matched on the frame's title
+        // (which is vendor prose and can change): under an exclusive read-only allowlist a correct
+        // launch raises ZERO interaction frames — verified live across every in-snapshot read — so one
+        // arriving means the reviewer is reaching past its boundary, and a reviewer doing that should
+        // not go on to produce a review. Same contract Cursor already runs under, so this is a no-op
+        // for Cursor and vendor-neutral for anything borrowed-capable later.
+        var unattendedInteractionPolicy = ResolveUnattendedInteractionPolicy(ctx, descriptor);
 
         var runtimeLogger = loggerFactory.CreateLogger<AcpHostedAgentRuntime>();
         var connLogger    = loggerFactory.CreateLogger<AcpConnection>();
@@ -125,6 +150,12 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
     /// <summary>
     /// Fail-closed validation + build of the review-flow MCP list, run as the FIRST thing in
     /// <see cref="StartAsync"/> — before <c>_connectionSource</c> can spawn a child. Returns
+    internal static AcpUnattendedInteractionPolicy ResolveUnattendedInteractionPolicy(
+            RuntimeStartContext ctx, AcpVendorDescriptor descriptor) =>
+        !ctx.IsReviewFlow                 ? AcpUnattendedInteractionPolicy.Disabled
+        : ctx.IsBorrowedSnapshot          ? AcpUnattendedInteractionPolicy.Fail
+        : descriptor.UnattendedInteractionPolicy;
+
     /// <see langword="null"/> for a non-review launch; for a review flow it throws unless the launch
     /// is safe to run unattended AND has a deliverable result channel AND every allowlist entry is an
     /// auto-approvable read-only server, then returns the built list. Work-location safety is
@@ -132,18 +163,18 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
     /// vendor must provide its own capability clamp. Neither location is itself a filesystem sandbox.
     /// </summary>
     static IReadOnlyList<AcpMcpServerSpec>? ValidateAndBuildReviewFlowMcp(
-            RuntimeStartContext ctx, AcpVendorDescriptor descriptor) {
+            RuntimeStartContext ctx, AcpVendorDescriptor descriptor, ResolvedBorrowedReviewPolicy policy) {
         if (!ctx.IsReviewFlow) return null;
 
         if (!descriptor.SupportsUnattended)
             throw new InvalidOperationException(
                 $"Vendor '{descriptor.Vendor}' cannot host an unattended (review-flow) agent.");
 
-        if (ctx.Work != WorkLocation.OwnedWorktree && !descriptor.SupportsBorrowedReviewFlow)
+        if (ctx.Work != WorkLocation.OwnedWorktree && !policy.Supported)
             throw new InvalidOperationException(
                 $"Unattended review-flow launch for '{descriptor.Vendor}' requires an owned worktree, not a borrowed cwd.");
         if (ctx.Work != WorkLocation.OwnedWorktree &&
-            descriptor.BorrowedReviewContainment == AcpBorrowedReviewContainment.IndependentSnapshot)
+            policy.Containment == AcpBorrowedReviewContainment.IndependentSnapshot)
             throw new InvalidOperationException(
                 $"Unattended review-flow launch for '{descriptor.Vendor}' requires daemon snapshot materialization before spawn.");
 
@@ -191,8 +222,14 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
     /// override, which bypasses process-spawning entirely and so could never prove this method's
     /// own correctness.
     /// </summary>
+    /// <param name="policy">Test seam ONLY. Production always passes null, which resolves this
+    /// machine's platform entry via <see cref="PolicyFor"/> — the same value the advertised capability
+    /// is computed from, so argv and advertisement cannot disagree. Tests pass an explicit entry so
+    /// the borrowed-snapshot argv is assertable on a platform whose own entry is unsupported.</param>
     internal static ProcessStartInfo BuildProcessStartInfo(
-            AcpVendorDescriptor descriptor, DaemonConfig config, RuntimeStartContext ctx) {
+            AcpVendorDescriptor descriptor, DaemonConfig config, RuntimeStartContext ctx,
+            ResolvedBorrowedReviewPolicy? policy = null) {
+        var resolved = policy ?? PolicyFor(descriptor);
         // Defense-in-depth: the orchestrator's UnattendedLaunchPolicy is expected to reject a
         // review-flow launch for a vendor that doesn't support it before this factory ever runs,
         // but the factory doesn't rely on that alone — it refuses to build review-flow argv for an
@@ -201,15 +238,22 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
             throw new InvalidOperationException(
                 $"Vendor '{descriptor.Vendor}' does not support unattended (review-flow) launches.");
 
+        // Same defense-in-depth, for the containment invariant. StartAsync validates this too, but
+        // this is the seam that decides whether the READABLE argv is emitted, so an entry that does
+        // not promise independent-snapshot containment must not reach it — the pre-spawn check being
+        // one layer up is what would let a direct builder call (a test, a future caller, a refactor
+        // that inlines the spawn) produce a readable borrowed argv on an unverified platform.
+        ValidateBorrowedArtifact(ctx, resolved);
+
         // Defense-in-depth for the trust-at-spawn argv appended just below: a borrowed-cwd reviewer
         // would run in the requester's live checkout, so this refuses it here too. StartAsync's
         // pre-spawn validation is the primary gate; this backstops the default spawn path (a
         // non-default connectionSource never reaches this builder).
-        if (ctx.IsReviewFlow && ctx.Work != WorkLocation.OwnedWorktree && !descriptor.SupportsBorrowedReviewFlow)
+        if (ctx.IsReviewFlow && ctx.Work != WorkLocation.OwnedWorktree && !resolved.Supported)
             throw new InvalidOperationException(
                 $"Unattended review-flow launch for '{descriptor.Vendor}' requires an owned worktree, not a borrowed cwd.");
         if (ctx.IsReviewFlow && ctx.Work != WorkLocation.OwnedWorktree &&
-            descriptor.BorrowedReviewContainment == AcpBorrowedReviewContainment.IndependentSnapshot)
+            resolved.Containment == AcpBorrowedReviewContainment.IndependentSnapshot)
             throw new InvalidOperationException(
                 $"Unattended review-flow launch for '{descriptor.Vendor}' requires daemon snapshot materialization before spawn.");
 
@@ -219,11 +263,17 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
             argv.AddRange(descriptor.UnattendedTrustArgv);
 
             if (descriptor.ReviewFlowMcpTransport == AcpReviewFlowMcpTransport.CopilotAdditionalConfig) {
-                var reviewMcp = ValidateAndBuildReviewFlowMcp(ctx, descriptor)!;
+                var reviewMcp = ValidateAndBuildReviewFlowMcp(ctx, descriptor, resolved)!;
                 argv.Add("--additional-mcp-config");
                 argv.Add(BuildCopilotAdditionalMcpConfig(reviewMcp));
 
-                foreach (var toolId in CopilotAvailableToolIds(reviewMcp))
+                // The allowlist stays EXCLUSIVE. A borrowed-snapshot launch widens it with the
+                // policy's verified read tools so the reviewer can actually read the snapshot; every
+                // other launch (owned worktree, context-only) keeps the flow-result-only clamp, which
+                // is what makes the server's read-blind rejection correct rather than paranoid.
+                var extraToolIds = ctx.IsBorrowedSnapshot ? resolved.ExtraBorrowedToolIds : [];
+
+                foreach (var toolId in CopilotAvailableToolIds(reviewMcp).Concat(extraToolIds))
                     argv.Add($"--available-tools={toolId}");
             }
         }
@@ -233,6 +283,24 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
         // auto-update hard-fail the launch. See
         // docs/superpowers/specs/2026-07-27-ai1528-trust-by-default-borrowed-review-design.md.
         var binaryPath = descriptor.ResolveBinaryPath(config);
+
+        // The read boundary. Only a borrowed snapshot is wrapped: every other launch either has no
+        // borrowed content to protect or is already confined by the owned worktree it runs in.
+        if (ctx.IsBorrowedSnapshot && resolved.RequiresProcessSandbox) {
+            // SnapshotRoot, not Path. When the borrowed cwd is below the repository root the
+            // snapshot's Path is the cwd-relative SUBDIRECTORY inside it, so granting Path would
+            // leave the reviewer unable to read the snapshot's parent files or its root .git — the
+            // original blind-review defect, reappearing for exactly the nested-cwd shape a real
+            // launch from `repo/src` produces. Path stays the working directory; the boundary is
+            // drawn at the root the daemon materialized.
+            var profile = BorrowedReviewSandbox.BuildProfile(
+                ctx.Worktree.SnapshotRoot ?? ctx.Worktree.Path,
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+
+            argv       = [.. BorrowedReviewSandbox.WrapArgv(profile, binaryPath, argv)];
+            binaryPath = BorrowedReviewSandbox.SandboxExecPath;
+        }
+
         var psi = new ProcessStartInfo(binaryPath, argv) {
             WorkingDirectory       = ctx.Worktree.Path,
             RedirectStandardInput  = true,
@@ -254,9 +322,9 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
     /// deliberately NOT a build-identity check: capability is advertised for whatever build is
     /// installed, so nothing here may consult a version record. See
     /// docs/superpowers/specs/2026-07-27-ai1528-trust-by-default-borrowed-review-design.md.</summary>
-    static void ValidateBorrowedArtifact(RuntimeStartContext ctx, AcpVendorDescriptor descriptor) {
+    internal static void ValidateBorrowedArtifact(RuntimeStartContext ctx, ResolvedBorrowedReviewPolicy policy) {
         if (!ctx.IsReviewFlow || !ctx.IsBorrowedSnapshot) return;
-        if (descriptor.BorrowedReviewContainment != AcpBorrowedReviewContainment.IndependentSnapshot)
+        if (policy.Containment != AcpBorrowedReviewContainment.IndependentSnapshot)
             throw new InvalidOperationException("borrowed_snapshot_containment_mismatch");
     }
 
