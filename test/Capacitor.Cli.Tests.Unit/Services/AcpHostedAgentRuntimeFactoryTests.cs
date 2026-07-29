@@ -1072,7 +1072,7 @@ public class AcpHostedAgentRuntimeFactoryTests {
         // Pinned to the supported entry: the claim is "even where borrowed review IS available,
         // the raw checkout is refused". Reading the host's own entry would make this test pass
         // vacuously wherever Copilot is unverified — it would take the not-supported arm instead.
-        var supported = CopilotBorrowedReviewPolicy.Resolve(OSPlatform.OSX, Architecture.Arm64, sandboxAvailable: true);
+        var supported = CopilotBorrowedReviewPolicy.Resolve(OSPlatform.OSX, Architecture.Arm64, sandboxAvailable: true, authBrokerAvailable: true);
         var ex = Assert.Throws<InvalidOperationException>(() =>
             AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(
                 AcpVendorDescriptors.Copilot, new DaemonConfig(), ctx, supported));
@@ -1096,9 +1096,9 @@ public class AcpHostedAgentRuntimeFactoryTests {
 
         // Explicit supported entry, so this asserts the argv on any host platform — the host's own
         // entry may be unverified, which is a separate concern covered by the policy matrix.
-        var supported = CopilotBorrowedReviewPolicy.Resolve(OSPlatform.OSX, Architecture.Arm64, sandboxAvailable: true);
+        var supported = CopilotBorrowedReviewPolicy.Resolve(OSPlatform.OSX, Architecture.Arm64, sandboxAvailable: true, authBrokerAvailable: true);
         var psi  = AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(
-            AcpVendorDescriptors.Copilot, new DaemonConfig(), ctx, supported);
+            AcpVendorDescriptors.Copilot, ResolvableConfig(), ctx, supported, BrokeredEnv());
         var argv = psi.ArgumentList.ToArray();
 
         // EXACT set equality, not contains-plus-a-denylist. A named-exclusion assertion only rules
@@ -1153,9 +1153,10 @@ public class AcpHostedAgentRuntimeFactoryTests {
             return;
         }
 
-        // Supported host: no policy argument, so this is the production path end to end.
+        // Supported host: no policy argument, so this is the production path end to end. The vendor
+        // path must still resolve, or the fail-closed guard fires for a reason unrelated to the argv.
         var emitted = AcpHostedAgentRuntimeFactory
-            .BuildProcessStartInfo(AcpVendorDescriptors.Copilot, new DaemonConfig(), ctx)
+            .BuildProcessStartInfo(AcpVendorDescriptors.Copilot, ResolvableConfig(), ctx)
             .ArgumentList.Where(a => a.StartsWith("--available-tools=")).ToArray();
 
         await Assert.That(emitted).IsEquivalentTo(ExpectedAvailableTools(
@@ -1320,11 +1321,15 @@ public class AcpHostedAgentRuntimeFactoryTests {
             Work = WorkLocation.OwnedWorktree, IsBorrowedSnapshot = true
         };
         var supported = CopilotBorrowedReviewPolicy.Resolve(
-            OSPlatform.OSX, Architecture.Arm64, sandboxAvailable: true);
+            OSPlatform.OSX, Architecture.Arm64, sandboxAvailable: true, authBrokerAvailable: true);
+
+        // A REAL executable, because the builder now resolves the configured value through PATH before
+        // drawing the profile — a fictional path fails closed, which is asserted separately below.
+        var realBinary = Environment.ProcessPath!;
 
         var psi = AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(
-            AcpVendorDescriptors.Copilot, new DaemonConfig { CopilotPath = "/opt/bin/copilot" },
-            ctx, supported);
+            AcpVendorDescriptors.Copilot, new DaemonConfig { CopilotPath = realBinary },
+            ctx, supported, BrokeredEnv());
         var argv = psi.ArgumentList.ToArray();
 
         await Assert.That(psi.FileName).IsEqualTo(BorrowedReviewSandbox.SandboxExecPath);
@@ -1332,10 +1337,37 @@ public class AcpHostedAgentRuntimeFactoryTests {
         await Assert.That(argv[1]).Contains("(deny default)");
         // The snapshot the reviewer was given is the one the profile grants.
         await Assert.That(argv[1]).Contains($"(subpath \"{ctx.Worktree.Path}\")");
-        await Assert.That(argv[2]).IsEqualTo("/opt/bin/copilot");
+        // The program under the sandbox is the RESOLVED absolute path, so what is granted and what runs
+        // are the same file.
+        await Assert.That(argv[2]).IsEqualTo(Path.GetFullPath(realBinary));
         // The vendor argv survives the wrap intact — the read tools are still there.
         foreach (var readTool in CopilotBorrowedReviewPolicy.ReadToolIds)
             await Assert.That(argv).Contains($"--available-tools={readTool}");
+    }
+
+    /// <summary>An unresolvable vendor path fails closed instead of being sandboxed by guesswork.
+    ///
+    /// <para>This is the other half of resolving through PATH. The severe route review found is that
+    /// every vendor path defaults to a bare command name (<c>"copilot"</c>), which
+    /// <see cref="Path.GetFullPath(string)"/> resolves against the DAEMON'S CURRENT DIRECTORY — so the
+    /// profile would have granted that directory recursively while <c>sandbox-exec</c> ran the real
+    /// binary from PATH. Resolving first fixes the common case; refusing an unresolvable value is what
+    /// stops the builder inventing a path when resolution fails.</para></summary>
+    [Test]
+    public async Task BuildProcessStartInfo_Copilot_BorrowedSnapshot_UnresolvableBinary_FailsClosed() {
+        var ctx = ReviewContext(["kcap-review"]) with {
+            Work = WorkLocation.OwnedWorktree, IsBorrowedSnapshot = true
+        };
+        var supported = CopilotBorrowedReviewPolicy.Resolve(
+            OSPlatform.OSX, Architecture.Arm64, sandboxAvailable: true, authBrokerAvailable: true);
+
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(
+                AcpVendorDescriptors.Copilot,
+                new DaemonConfig { CopilotPath = "/definitely/not/an/executable/copilot" },
+                ctx, supported, BrokeredEnv()));
+
+        await Assert.That(ex.Message).Contains("borrowed_review_vendor_binary_unresolved");
     }
 
     /// <summary>A nested borrowed cwd is sandboxed at the snapshot ROOT, not at the subdirectory the
@@ -1359,15 +1391,100 @@ public class AcpHostedAgentRuntimeFactoryTests {
                 SnapshotRoot: "/snap/borrowed-abc")
         };
         var supported = CopilotBorrowedReviewPolicy.Resolve(
-            OSPlatform.OSX, Architecture.Arm64, sandboxAvailable: true);
+            OSPlatform.OSX, Architecture.Arm64, sandboxAvailable: true, authBrokerAvailable: true);
 
         var psi = AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(
-            AcpVendorDescriptors.Copilot, new DaemonConfig(), ctx, supported);
+            AcpVendorDescriptors.Copilot, ResolvableConfig(), ctx, supported, BrokeredEnv());
         var profile = psi.ArgumentList[1];
 
         await Assert.That(profile).Contains("(subpath \"/snap/borrowed-abc\")");
         // ...and the reviewer still STARTS in the nested cwd it was given.
         await Assert.That(psi.WorkingDirectory).IsEqualTo("/snap/borrowed-abc/src/nested");
+        // The per-launch state root is a sibling of the snapshot root, so a per-round refresh of the
+        // snapshot neither destroys the running vendor's state nor exposes it as content under review.
+        await Assert.That(psi.Environment["HOME"]!.StartsWith("/snap/borrowed-abc.vendor-state",
+                                                             StringComparison.Ordinal)).IsTrue();
+    }
+
+    /// <summary>The credential gate at the spawn boundary. Defense in depth: the policy already
+    /// refuses to advertise borrowed review without a brokerable credential, so reaching here without
+    /// one means the daemon's environment changed under a resolved entry.
+    ///
+    /// <para>Failing is the only correct answer. The profile deliberately no longer grants
+    /// <c>~/Library/Keychains</c>, so a reviewer spawned without a token cannot authenticate — it would
+    /// burn a daemon slot, stall the round and report nothing useful. Failing before a child exists,
+    /// with a reason naming the variables to set, is strictly better.</para></summary>
+    [Test]
+    public async Task BuildProcessStartInfo_Copilot_BorrowedSnapshot_WithoutABrokeredToken_FailsClosed() {
+        var ctx = ReviewContext(["kcap-review"]) with {
+            Work = WorkLocation.OwnedWorktree, IsBorrowedSnapshot = true
+        };
+        var supported = CopilotBorrowedReviewPolicy.Resolve(
+            OSPlatform.OSX, Architecture.Arm64, sandboxAvailable: true, authBrokerAvailable: true);
+
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(
+                AcpVendorDescriptors.Copilot, new DaemonConfig(), ctx, supported,
+                readEnvironmentVariable: _ => null));
+
+        await Assert.That(ex.Message).Contains("borrowed_review_auth_unavailable");
+        // Actionable: an operator reading this must learn WHICH variables would fix it.
+        foreach (var variable in BorrowedReviewAuthBroker.SourceVariables)
+            await Assert.That(ex.Message).Contains(variable);
+    }
+
+    /// <summary>The brokered token reaches the child, and the reviewer's HOME and TMPDIR are moved
+    /// into the per-launch state root.
+    ///
+    /// <para>All three are what replaced the profile's grants of <c>~/Library/Keychains</c>,
+    /// <c>~/.copilot</c> and <c>~/Library/Caches/copilot</c>. Asserting the profile no longer NAMES
+    /// those paths is not enough on its own: a launch that narrowed the profile but left the vendor
+    /// pointed at the real home would simply fail to start, and one that left it pointed at the real
+    /// home while widening the profile back would be the original hole.</para></summary>
+    [Test]
+    public async Task BuildProcessStartInfo_Copilot_BorrowedSnapshot_RedirectsVendorStateAndBrokersTheToken() {
+        var ctx = ReviewContext(["kcap-review"]) with {
+            Work = WorkLocation.OwnedWorktree, IsBorrowedSnapshot = true,
+            Worktree = new WorktreeInfo(Path: "/snap/b1", Branch: "b", SourceRepo: "/repo",
+                                        SnapshotRoot: "/snap/b1")
+        };
+        var supported = CopilotBorrowedReviewPolicy.Resolve(
+            OSPlatform.OSX, Architecture.Arm64, sandboxAvailable: true, authBrokerAvailable: true);
+
+        var env = AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(
+            AcpVendorDescriptors.Copilot, ResolvableConfig(), ctx, supported,
+            readEnvironmentVariable: name => name == "GH_TOKEN" ? "brokered-value" : null).Environment;
+
+        await Assert.That(env[BorrowedReviewAuthBroker.TargetVariable]).IsEqualTo("brokered-value");
+        await Assert.That(env["HOME"]).IsEqualTo(Path.Combine("/snap/b1.vendor-state", "home"));
+        await Assert.That(env["TMPDIR"]).IsEqualTo(Path.Combine("/snap/b1.vendor-state", "tmp"));
+        // The user's real home must not leak in through either variable.
+        await Assert.That(env["HOME"]).IsNotEqualTo(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+    }
+
+    /// <summary>The paired direction: a NON-borrowed launch gets no state redirection and no brokered
+    /// token. An interactive agent runs as the user, with the user's own vendor profile and
+    /// credentials — redirecting those would break it, and doing so silently would be worse.</summary>
+    [Test]
+    public async Task BuildProcessStartInfo_Copilot_NonBorrowedReview_LeavesTheEnvironmentAlone() {
+        var ctx = ReviewContext(["kcap-review"]) with { Work = WorkLocation.OwnedWorktree };
+        var supported = CopilotBorrowedReviewPolicy.Resolve(
+            OSPlatform.OSX, Architecture.Arm64, sandboxAvailable: true, authBrokerAvailable: true);
+
+        var env = AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(
+            AcpVendorDescriptors.Copilot, new DaemonConfig(), ctx, supported,
+            readEnvironmentVariable: _ => "would-be-token").Environment;
+
+        // Asserted by absence of VALUE, not of key: ProcessStartInfo.Environment starts as a copy of
+        // the current process's environment, so HOME and TMPDIR keys are already present and a
+        // key-absence assertion would pass vacuously while the redirection leaked in.
+        await Assert.That(env.Values.Any(v => v == "would-be-token")).IsFalse();
+        await Assert.That(env.Values.Any(v => v is not null && v.Contains(
+            Capacitor.Cli.Daemon.Services.WorktreeManager.VendorStateSuffix, StringComparison.Ordinal))).IsFalse();
+
+        if (Environment.GetEnvironmentVariable("HOME") is { Length: > 0 } ambientHome)
+            await Assert.That(env["HOME"]).IsEqualTo(ambientHome);
     }
 
     /// <summary>The paired direction for the sandbox: a NON-borrowed review spawns the vendor binary
@@ -1377,7 +1494,7 @@ public class AcpHostedAgentRuntimeFactoryTests {
     public async Task BuildProcessStartInfo_Copilot_NonBorrowedReview_SpawnsTheVendorDirectly() {
         var ctx = ReviewContext(["kcap-review"]) with { Work = WorkLocation.OwnedWorktree };
         var supported = CopilotBorrowedReviewPolicy.Resolve(
-            OSPlatform.OSX, Architecture.Arm64, sandboxAvailable: true);
+            OSPlatform.OSX, Architecture.Arm64, sandboxAvailable: true, authBrokerAvailable: true);
 
         var psi = AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(
             AcpVendorDescriptors.Copilot, new DaemonConfig { CopilotPath = "/opt/bin/copilot" },
@@ -1397,7 +1514,7 @@ public class AcpHostedAgentRuntimeFactoryTests {
     public async Task BuildProcessStartInfo_Copilot_NonBorrowedReview_KeepsTheFlowResultOnlyClamp() {
         var ctx = ReviewContext(["kcap-review"]) with { Work = WorkLocation.OwnedWorktree };
 
-        var supported = CopilotBorrowedReviewPolicy.Resolve(OSPlatform.OSX, Architecture.Arm64, sandboxAvailable: true);
+        var supported = CopilotBorrowedReviewPolicy.Resolve(OSPlatform.OSX, Architecture.Arm64, sandboxAvailable: true, authBrokerAvailable: true);
         var argv = AcpHostedAgentRuntimeFactory
             .BuildProcessStartInfo(AcpVendorDescriptors.Copilot, new DaemonConfig(), ctx, supported)
             .ArgumentList.ToArray();
@@ -1434,6 +1551,26 @@ public class AcpHostedAgentRuntimeFactoryTests {
     /// marker set.</summary>
     static RuntimeStartContext BorrowedSnapshotContext() =>
         ReviewContext() with { Work = WorkLocation.OwnedWorktree, IsBorrowedSnapshot = true };
+
+    /// <summary>A daemon environment carrying a brokered credential.
+    ///
+    /// <para>A sandboxed borrowed launch fails closed without one — the profile does not grant the
+    /// keychain, so a reviewer with no token cannot authenticate and there is no point spawning it.
+    /// Tests that assert the borrowed ARGV supply this so they exercise the argv rather than the
+    /// credential gate, and so they behave identically on a developer machine and on CI. The gate
+    /// itself is asserted separately, by
+    /// <see cref="BuildProcessStartInfo_Copilot_BorrowedSnapshot_WithoutABrokeredToken_FailsClosed"/>.</para></summary>
+    static Func<string, string?> BrokeredEnv() =>
+        name => name == BorrowedReviewAuthBroker.TargetVariable ? "test-token" : null;
+
+    /// <summary>A config whose vendor path is a REAL, resolvable executable.
+    ///
+    /// <para>A borrowed-snapshot launch resolves the configured value through PATH before drawing the
+    /// sandbox, and fails closed when it cannot. The shipped default is the bare name <c>"copilot"</c>,
+    /// so any borrowed-argv test using <c>new DaemonConfig()</c> passes only on a machine that happens
+    /// to have Copilot installed — green locally, red on CI, which is exactly what happened. The test
+    /// host's own binary is guaranteed to exist and be executable everywhere.</para></summary>
+    static DaemonConfig ResolvableConfig() => new() { CopilotPath = Environment.ProcessPath! };
 
     /// <summary>The borrowed-snapshot binary is the plainly configured one — the same path every
     /// other vendor and every other launch shape uses. A configured path that matches no validated

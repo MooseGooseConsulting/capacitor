@@ -69,9 +69,27 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
         return new WorktreeInfo(worktreePath, "", repoPath, IsStandalone: true);
     }
 
+    /// <summary>Suffix marking a borrowed launch's per-launch vendor state directory, which sits
+    /// BESIDE the snapshot it belongs to. Outside the snapshot deliberately: a per-round refresh
+    /// replaces the snapshot's contents, which would both destroy the running vendor's state and
+    /// present that state to the reviewer as content under review.</summary>
+    public const string VendorStateSuffix = ".vendor-state";
+
+    /// <summary>The per-launch vendor state root for a borrowed snapshot. One definition, shared by
+    /// the launch path that fills it and the cleanup paths that remove it.</summary>
+    public static string VendorStateRootFor(string snapshotRoot) =>
+        snapshotRoot.TrimEnd(Path.DirectorySeparatorChar) + VendorStateSuffix;
+
     public static async Task RemoveAsync(WorktreeInfo worktree, bool deleteBranch = true) {
         if (worktree.IsStandalone) {
-            DeleteTreeNoFollow(worktree.SnapshotRoot ?? worktree.Path);
+            var root = worktree.SnapshotRoot ?? worktree.Path;
+
+            // The vendor state directory is the daemon's, holds the reviewer's whole HOME for this
+            // launch, and must not outlive it.
+            if (worktree.SnapshotRoot is not null)
+                DeleteTreeNoFollow(VendorStateRootFor(worktree.SnapshotRoot));
+
+            DeleteTreeNoFollow(root);
 
             return;
         }
@@ -493,15 +511,35 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
                 Path.GetFileName(dir).Equals(reservedDirectoryName, StringComparison.OrdinalIgnoreCase))
                 continue;
             var fullDir = Path.GetFullPath(dir).TrimEnd(Path.DirectorySeparatorChar);
-            var prefix = fullDir + Path.DirectorySeparatorChar;
-            if (activePaths.Any(path =>
-                    path.Equals(fullDir, StringComparison.OrdinalIgnoreCase) ||
-                    path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)))
+
+            // Two ways to be live, and BOTH are checked. A directory is live if it is itself an active
+            // worktree (or contains one) — the original rule — or, for a per-launch vendor state
+            // directory, if the snapshot it sits beside is: a state directory is never itself an active
+            // worktree path, so without the second arm the sweep reaps a running reviewer's HOME.
+            //
+            // Checking the first arm unconditionally is what keeps the suffix a hint rather than a
+            // classification. Snapshot directories are named from the agent id, so one could legitimately
+            // end in the suffix; deriving an "owner" and testing only that would then compare an active
+            // snapshot against a path that does not exist and delete the live worktree.
+            if (IsActive(fullDir, activePaths)) continue;
+            if (fullDir.EndsWith(VendorStateSuffix, StringComparison.OrdinalIgnoreCase) &&
+                IsActive(fullDir[..^VendorStateSuffix.Length], activePaths))
                 continue;
 
             LogCleaningUp(dir);
             try { DeleteTreeNoFollow(dir); } catch (Exception ex) { LogCleanupFailed(ex, dir); }
         }
+    }
+
+    /// <summary>Whether <paramref name="candidate"/> is, or contains, an active worktree.</summary>
+    static bool IsActive(string candidate, string[] activePaths) {
+        if (candidate.Length == 0) return false;
+
+        var prefix = candidate + Path.DirectorySeparatorChar;
+
+        return activePaths.Any(path =>
+            path.Equals(candidate, StringComparison.OrdinalIgnoreCase) ||
+            path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>Default timeout for local git operations (worktree add, init, commit, …).</summary>
