@@ -465,6 +465,102 @@ public class FlowsDriverSchemaConformanceTests {
         await Assert.That(projected).IsEquivalentTo(installed);
     }
 
+    // ── the stale-schema invariant ────────────────────────────────────────────────────────────
+    //
+    // The assertions above prove the CURRENT binary ships a vendor-capable schema. None of them help
+    // a harness that connected BEFORE the upgrade: MCP schemas are cached at connect time, so that
+    // driver still sees no `vendor` property and no server- or CLI-side correctness can hand it one.
+    // The skill text is the only thing that still reaches such a session, which makes the prose
+    // below load-bearing rather than advisory -- delete it and a stale driver takes the server
+    // default and reports that the user's named reviewer ran, the exact claim the design forbids.
+    //
+    // Reach is NOT uniform across the two skills. `review-flows` is in
+    // AgentsSkillsInstaller.SourceNames (so `kcap update` refreshes it everywhere) and is the one
+    // covering `start_review_flow`, the reserved alias this is about; `agent-flows` is absent from
+    // that list and reaches only plugin-loaded surfaces. Scoped to that reality rather than assuming
+    // parity -- whether agent-flows should join the distributed set is a separate decision, and the
+    // tripwire below pins the half this relies on.
+
+    /// <summary>The two skills that teach a driver to start a flow, and the heading introducing the
+    /// stale-schema case in each.</summary>
+    static readonly (string Skill, string Anchor)[] FlowSkills = [
+        ("review-flows", "### If `start_review_flow` has no `vendor` parameter"),
+        ("agent-flows",  "### If `start_flow` has no `vendor` parameter"),
+    ];
+
+    public static IEnumerable<Func<(string Skill, string Anchor)>> FlowSkillFiles() =>
+        FlowSkills.Select(s => (Func<(string, string)>)(() => s));
+
+    /// <summary>The normative block introduced by <paramref name="anchor"/>: that heading to the
+    /// next Markdown heading, with line wrapping normalized to single spaces.
+    ///
+    /// <para>Both details were bought with failures. A fixed 1,400-char window came first and was
+    /// already bleeding into the next section — review-flows' next <c>##</c> starts at 1,326 — so
+    /// later prose could satisfy an assertion and a modest edit could push a required sentence past
+    /// the cutoff. And because these files are hard-wrapped, a phrase split across two lines is
+    /// invisible to a substring check; that fired on this test's first run, against wrapping that
+    /// had split "restart the harness".</para></summary>
+    static string NormativeBlock(string text, string anchor) {
+        var at = text.IndexOf(anchor, StringComparison.Ordinal);
+        if (at < 0) return "";
+
+        var afterHeading = at + anchor.Length;
+        var end          = text.IndexOf("\n#", afterHeading, StringComparison.Ordinal);
+        var block        = end < 0 ? text[afterHeading..] : text[afterHeading..end];
+
+        return string.Join(' ', block.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+    }
+
+    [Test]
+    [MethodDataSource(nameof(FlowSkillFiles))]
+    public async Task Each_flow_skill_forbids_claiming_a_named_reviewer_it_could_not_request(
+            (string Skill, string Anchor) skill) {
+        var path = Path.Combine(RepoKcapDir(), "skills", skill.Skill, "SKILL.md");
+        var text = await File.ReadAllTextAsync(path);
+
+        await Assert.That(text.Contains(skill.Anchor, StringComparison.Ordinal)).IsTrue()
+            .Because($"{skill.Skill} no longer covers a start tool whose schema predates `vendor`");
+
+        var block = NormativeBlock(text, skill.Anchor);
+
+        // 1. The prohibition, asserted as a NEGATIVE. Matching only the positive tail
+        //    ("report that the named reviewer ran") certifies prose that COMMANDS the forbidden
+        //    behavior: deleting the word "not" leaves the searched substring perfectly intact. The
+        //    instruction is the whole point, so the instruction is what gets asserted.
+        await Assert.That(block).Contains("do not start the flow and then report that the named reviewer ran",
+                                          StringComparison.OrdinalIgnoreCase)
+            .Because("the driver must be told NOT to claim a reviewer it could not name");
+
+        // 2. WHY omitting the parameter is not neutral -- specifically that the SERVER substitutes
+        //    its own configured default. Asserted as ONE contiguous phrase, which matters: a bare
+        //    Contains("default") was satisfiable by incidental prose, and splitting it into
+        //    Contains("the server applies its") + Contains("default") was no better, because both
+        //    blocks mention the server default AGAIN further down ("...explicitly asks for the
+        //    server default"). That second sentence would have satisfied the "default" half while
+        //    the consequence itself was edited into something else entirely. Whitespace is already
+        //    normalized, so a contiguous match is safe across the files' hard wrapping.
+        await Assert.That(block).Contains("the server applies its own configured default",
+                                          StringComparison.OrdinalIgnoreCase)
+            .Because("without the consequence, 'do not claim it' reads as mere pedantry");
+
+        // 3. The actionable recovery. Documentation that names the failure but not the fix leaves
+        //    the user stuck -- the design requires an actionable message, not just a warning.
+        await Assert.That(block).Contains("restart the harness", StringComparison.OrdinalIgnoreCase)
+            .Because("the supported recovery is restarting the harness; kcap cannot refresh a cached schema");
+    }
+
+    // The invariant above is only as good as the skill's reach. `review-flows` carries it for the
+    // reserved review alias on every agent-skills surface -- but ONLY because it is in the
+    // distributed list. Dropping it there would silently revoke the guidance from every harness
+    // that installs skills, while the content assertion above stayed green against the package
+    // source it reads directly.
+    [Test]
+    public async Task The_review_flows_skill_is_actually_distributed_to_agent_skill_surfaces() {
+        await Assert.That(AgentsSkillsInstaller.SourceNames).Contains("review-flows")
+            .Because("a skill outside SourceNames is never refreshed onto agent-skills surfaces, "
+                   + "so its stale-schema guidance would not reach the drivers that need it");
+    }
+
     // ── drift tripwires ───────────────────────────────────────────────────────────────────────
 
     // Two independent copies of the kcap server list exist: KcapMcpServers.All (what gets registered
