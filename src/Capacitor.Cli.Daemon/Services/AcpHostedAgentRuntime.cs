@@ -269,15 +269,29 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     // Vendor-aware handshake/auth diagnostic labels. `_vendor` is the vendor KEY (e.g. "cursor"),
     // not the binary name — so Cursor keeps its exact prior strings (binary "cursor-agent" +
     // Team-tier hint) via an explicit branch, while any other vendor gets vendor-named generic text.
+    // Kiro needs the same explicit branch as Cursor and for the same reason: its vendor key ("kiro")
+    // is NOT its binary name ("kiro-cli"), so the generic fallback would tell an operator to check a
+    // command that does not exist on a correct install — the least helpful possible text on exactly the
+    // launch-failure path this diagnostic exists to serve.
     string DiagnosticBinary =>
-        _vendor == AcpVendorDescriptors.Cursor.Vendor ? "cursor-agent" : _vendor;
+        _vendor == AcpVendorDescriptors.Cursor.Vendor ? "cursor-agent"
+            : _vendor == AcpVendorDescriptors.Kiro.Vendor ? "kiro-cli"
+            : _vendor;
 
+    // Kiro deliberately gets a hint that names NO command. Cursor and Copilot name a verified login
+    // subcommand; for Kiro no auth requirement, auth method, or login command was ever observed
+    // (`authMethods` came back empty and a prompt completed with no API key set), so inventing a
+    // `kiro-cli login` would be fabricated guidance. The generic fallback is also wrong here for the
+    // same reason DiagnosticBinary needed a branch: it interpolates the vendor KEY and would tell an
+    // operator to authenticate `kiro`, a command absent from a correct install.
     string DiagnosticAuthHint =>
         _vendor == AcpVendorDescriptors.Cursor.Vendor
             ? "run `cursor-agent login` and verify a Team-tier subscription"
             : _vendor == AcpVendorDescriptors.Copilot.Vendor
                 ? "run `copilot login` and verify GitHub Copilot access for your enterprise"
-                : $"authenticate `{_vendor}` and verify your subscription/entitlement";
+                : _vendor == AcpVendorDescriptors.Kiro.Vendor
+                    ? "verify Kiro CLI is signed in and your subscription/entitlement is active"
+                    : $"authenticate `{_vendor}` and verify your subscription/entitlement";
 
     public bool   HasExited           => _process.HasExited;
     public int?   ExitCode            => _process.ExitCode;

@@ -50,6 +50,18 @@ internal interface IHostedAgentRuntimeFactory {
     IReviewerModelResolver? ReviewerModelResolver => null;
 
     /// <summary>
+    /// Whether this runtime can actually APPLY a caller-supplied model. When <see langword="false"/>, a
+    /// requested model is discarded by the runtime, so the orchestrator must not report it as the model
+    /// the process is running — see <see cref="ModelSelectionLaunchPolicy"/>.
+    ///
+    /// <para>Defaults to <see langword="true"/> because every runtime that existed before this seam
+    /// does honour a model: PTY launchers pass one on argv, and both ACP vendors carried a real
+    /// selector. A <see langword="false"/> value is the new case, introduced by a vendor whose
+    /// model-selection hook is unverified.</para>
+    /// </summary>
+    bool SupportsModelSelection => true;
+
+    /// <summary>
     /// Prepares and starts the hosted runtime for this launch. Throws
     /// <see cref="CodexHooksNotInstalledException"/> for the orchestrator to map to a
     /// <c>LaunchFailed</c> with worktree cleanup; any other exception is likewise mapped to
@@ -94,7 +106,11 @@ internal sealed record RuntimeStartContext(
         string            SourceRepoPath,
         WorktreeInfo      Worktree,
         string?           Prompt,
-        string            Model,
+        // Nullable: a launch whose runtime cannot APPLY a model carries none, rather than carrying one
+        // the process will not run (see ModelSelectionLaunchPolicy). Every launcher already treats an
+        // absent model as "use the vendor default" — Claude and the ACP factory via
+        // string.IsNullOrEmpty, Codex via AddModelArg — so null is the value they are prepared for.
+        string?           Model,
         string?           Effort,
         string[]?         Tools,
         bool              IsReview,
