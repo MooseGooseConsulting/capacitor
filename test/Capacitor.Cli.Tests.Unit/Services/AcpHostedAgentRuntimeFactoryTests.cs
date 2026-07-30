@@ -1297,7 +1297,7 @@ public class AcpHostedAgentRuntimeFactoryTests {
         // Pinned to the supported entry: the claim is "even where borrowed review IS available,
         // the raw checkout is refused". Reading the host's own entry would make this test pass
         // vacuously wherever Copilot is unverified — it would take the not-supported arm instead.
-        var supported = CopilotBorrowedReviewPolicy.Resolve(OSPlatform.OSX, Architecture.Arm64, sandboxAvailable: true, authBrokerAvailable: true);
+        var supported = CopilotBorrowedReviewPolicy.Resolve(OSPlatform.OSX, Architecture.Arm64, sandboxAvailable: true, authBrokerAvailable: () => true);
         var ex = Assert.Throws<InvalidOperationException>(() =>
             AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(
                 AcpVendorDescriptors.Copilot, new DaemonConfig(), ctx, supported));
@@ -1321,7 +1321,7 @@ public class AcpHostedAgentRuntimeFactoryTests {
 
         // Explicit supported entry, so this asserts the argv on any host platform — the host's own
         // entry may be unverified, which is a separate concern covered by the policy matrix.
-        var supported = CopilotBorrowedReviewPolicy.Resolve(OSPlatform.OSX, Architecture.Arm64, sandboxAvailable: true, authBrokerAvailable: true);
+        var supported = CopilotBorrowedReviewPolicy.Resolve(OSPlatform.OSX, Architecture.Arm64, sandboxAvailable: true, authBrokerAvailable: () => true);
         var psi  = AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(
             AcpVendorDescriptors.Copilot, ResolvableConfig(), ctx, supported, BrokeredEnv());
         var argv = psi.ArgumentList.ToArray();
@@ -1546,7 +1546,7 @@ public class AcpHostedAgentRuntimeFactoryTests {
             Work = WorkLocation.OwnedWorktree, IsBorrowedSnapshot = true
         };
         var supported = CopilotBorrowedReviewPolicy.Resolve(
-            OSPlatform.OSX, Architecture.Arm64, sandboxAvailable: true, authBrokerAvailable: true);
+            OSPlatform.OSX, Architecture.Arm64, sandboxAvailable: true, authBrokerAvailable: () => true);
 
         // A REAL executable, because the builder now resolves the configured value through PATH before
         // drawing the profile — a fictional path fails closed, which is asserted separately below.
@@ -1584,7 +1584,7 @@ public class AcpHostedAgentRuntimeFactoryTests {
             Work = WorkLocation.OwnedWorktree, IsBorrowedSnapshot = true
         };
         var supported = CopilotBorrowedReviewPolicy.Resolve(
-            OSPlatform.OSX, Architecture.Arm64, sandboxAvailable: true, authBrokerAvailable: true);
+            OSPlatform.OSX, Architecture.Arm64, sandboxAvailable: true, authBrokerAvailable: () => true);
 
         var ex = Assert.Throws<InvalidOperationException>(() =>
             AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(
@@ -1616,7 +1616,7 @@ public class AcpHostedAgentRuntimeFactoryTests {
                 SnapshotRoot: "/snap/borrowed-abc")
         };
         var supported = CopilotBorrowedReviewPolicy.Resolve(
-            OSPlatform.OSX, Architecture.Arm64, sandboxAvailable: true, authBrokerAvailable: true);
+            OSPlatform.OSX, Architecture.Arm64, sandboxAvailable: true, authBrokerAvailable: () => true);
 
         var psi = AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(
             AcpVendorDescriptors.Copilot, ResolvableConfig(), ctx, supported, BrokeredEnv());
@@ -1645,7 +1645,7 @@ public class AcpHostedAgentRuntimeFactoryTests {
             Work = WorkLocation.OwnedWorktree, IsBorrowedSnapshot = true
         };
         var supported = CopilotBorrowedReviewPolicy.Resolve(
-            OSPlatform.OSX, Architecture.Arm64, sandboxAvailable: true, authBrokerAvailable: true);
+            OSPlatform.OSX, Architecture.Arm64, sandboxAvailable: true, authBrokerAvailable: () => true);
 
         var ex = Assert.Throws<InvalidOperationException>(() =>
             AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(
@@ -1674,7 +1674,7 @@ public class AcpHostedAgentRuntimeFactoryTests {
                                         SnapshotRoot: "/snap/b1")
         };
         var supported = CopilotBorrowedReviewPolicy.Resolve(
-            OSPlatform.OSX, Architecture.Arm64, sandboxAvailable: true, authBrokerAvailable: true);
+            OSPlatform.OSX, Architecture.Arm64, sandboxAvailable: true, authBrokerAvailable: () => true);
 
         var env = AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(
             AcpVendorDescriptors.Copilot, ResolvableConfig(), ctx, supported,
@@ -1695,7 +1695,7 @@ public class AcpHostedAgentRuntimeFactoryTests {
     public async Task BuildProcessStartInfo_Copilot_NonBorrowedReview_LeavesTheEnvironmentAlone() {
         var ctx = ReviewContext(["kcap-review"]) with { Work = WorkLocation.OwnedWorktree };
         var supported = CopilotBorrowedReviewPolicy.Resolve(
-            OSPlatform.OSX, Architecture.Arm64, sandboxAvailable: true, authBrokerAvailable: true);
+            OSPlatform.OSX, Architecture.Arm64, sandboxAvailable: true, authBrokerAvailable: () => true);
 
         var env = AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(
             AcpVendorDescriptors.Copilot, new DaemonConfig(), ctx, supported,
@@ -1719,7 +1719,7 @@ public class AcpHostedAgentRuntimeFactoryTests {
     public async Task BuildProcessStartInfo_Copilot_NonBorrowedReview_SpawnsTheVendorDirectly() {
         var ctx = ReviewContext(["kcap-review"]) with { Work = WorkLocation.OwnedWorktree };
         var supported = CopilotBorrowedReviewPolicy.Resolve(
-            OSPlatform.OSX, Architecture.Arm64, sandboxAvailable: true, authBrokerAvailable: true);
+            OSPlatform.OSX, Architecture.Arm64, sandboxAvailable: true, authBrokerAvailable: () => true);
 
         var psi = AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(
             AcpVendorDescriptors.Copilot, new DaemonConfig { CopilotPath = "/opt/bin/copilot" },
@@ -1739,7 +1739,7 @@ public class AcpHostedAgentRuntimeFactoryTests {
     public async Task BuildProcessStartInfo_Copilot_NonBorrowedReview_KeepsTheFlowResultOnlyClamp() {
         var ctx = ReviewContext(["kcap-review"]) with { Work = WorkLocation.OwnedWorktree };
 
-        var supported = CopilotBorrowedReviewPolicy.Resolve(OSPlatform.OSX, Architecture.Arm64, sandboxAvailable: true, authBrokerAvailable: true);
+        var supported = CopilotBorrowedReviewPolicy.Resolve(OSPlatform.OSX, Architecture.Arm64, sandboxAvailable: true, authBrokerAvailable: () => true);
         var argv = AcpHostedAgentRuntimeFactory
             .BuildProcessStartInfo(AcpVendorDescriptors.Copilot, new DaemonConfig(), ctx, supported)
             .ArgumentList.ToArray();

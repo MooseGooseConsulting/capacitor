@@ -31,7 +31,7 @@ public class CopilotBorrowedReviewPolicyTests {
     [Test]
     public async Task The_verified_platform_supports_borrowed_review_with_the_read_tools() {
         var p = CopilotBorrowedReviewPolicy.Resolve(
-            OSPlatform.OSX, Architecture.Arm64, sandboxAvailable: true, authBrokerAvailable: true);
+            OSPlatform.OSX, Architecture.Arm64, sandboxAvailable: true, authBrokerAvailable: () => true);
 
         await Assert.That(p.Supported).IsTrue();
         await Assert.That(p.Containment).IsEqualTo(AcpBorrowedReviewContainment.IndependentSnapshot);
@@ -50,7 +50,7 @@ public class CopilotBorrowedReviewPolicyTests {
     [Test]
     public async Task The_verified_platform_without_a_sandbox_is_unsupported() {
         var p = CopilotBorrowedReviewPolicy.Resolve(
-            OSPlatform.OSX, Architecture.Arm64, sandboxAvailable: false, authBrokerAvailable: true);
+            OSPlatform.OSX, Architecture.Arm64, sandboxAvailable: false, authBrokerAvailable: () => true);
 
         await Assert.That(p.Supported).IsFalse();
         await Assert.That(p.Containment).IsEqualTo(AcpBorrowedReviewContainment.None);
@@ -68,7 +68,7 @@ public class CopilotBorrowedReviewPolicyTests {
     [Test]
     public async Task The_verified_platform_without_a_brokerable_credential_is_unsupported() {
         var p = CopilotBorrowedReviewPolicy.Resolve(
-            OSPlatform.OSX, Architecture.Arm64, sandboxAvailable: true, authBrokerAvailable: false);
+            OSPlatform.OSX, Architecture.Arm64, sandboxAvailable: true, authBrokerAvailable: () => false);
 
         await Assert.That(p.Supported).IsFalse();
         await Assert.That(p.Containment).IsEqualTo(AcpBorrowedReviewContainment.None);
@@ -80,7 +80,7 @@ public class CopilotBorrowedReviewPolicyTests {
     [MethodDataSource(nameof(Unverified))]
     public async Task An_unverified_platform_fails_closed((OSPlatform Os, Architecture Arch) key) {
         var p = CopilotBorrowedReviewPolicy.Resolve(
-            key.Os, key.Arch, sandboxAvailable: true, authBrokerAvailable: true);
+            key.Os, key.Arch, sandboxAvailable: true, authBrokerAvailable: () => true);
 
         await Assert.That(p.Supported).IsFalse()
             .Because($"{key.Os}/{key.Arch} has no verified tool surface");
@@ -138,7 +138,7 @@ public class CopilotBorrowedReviewPolicyTests {
         var current  = CopilotBorrowedReviewPolicy.Current;
         var expected = CopilotBorrowedReviewPolicy.Resolve(
             CurrentOsForTest(), RuntimeInformation.ProcessArchitecture,
-            BorrowedReviewSandbox.Available, BorrowedReviewAuthBroker.Available);
+            BorrowedReviewSandbox.Available, () => BorrowedReviewAuthBroker.Available);
 
         await Assert.That(current.Supported).IsEqualTo(expected.Supported);
         await Assert.That(current.Containment).IsEqualTo(expected.Containment);
@@ -204,5 +204,37 @@ public class CopilotBorrowedReviewPolicyTests {
                 AcpVendorDescriptors.Copilot, new(), ctx, ResolvedBorrowedReviewPolicy.Unsupported));
 
         await Assert.That(ex.Message).Contains("owned worktree");
+    }
+
+    /// <summary>Credential availability is not consulted at all on a host where borrowed review is
+    /// impossible.
+    ///
+    /// <para>The check is passive today, so this costs an environment read rather than anything dangerous.
+    /// It is asserted by call count anyway, as a regression barrier: an earlier revision of this change
+    /// made availability EXECUTE an operator-configured command, and with a plain <c>bool</c> argument
+    /// that ran at every daemon's startup on every platform, including ones that can never borrow.
+    /// Keeping the thunk and pinning the call count means a future implementation cannot quietly become
+    /// expensive or side-effecting on an unsupported host.</para></summary>
+    [Test]
+    [Arguments("linux",   false)]
+    [Arguments("windows", false)]
+    [Arguments("osx-x64", false)]
+    [Arguments("no-sandbox", false)]
+    [Arguments("supported", true)]
+    public async Task Credential_availability_is_consulted_only_when_every_other_precondition_holds(
+            string scenario, bool shouldProbe) {
+        var probes = 0;
+
+        var (os, arch, sandbox) = scenario switch {
+            "linux"      => (OSPlatform.Linux,   Architecture.Arm64, true),
+            "windows"    => (OSPlatform.Windows, Architecture.Arm64, true),
+            "osx-x64"    => (OSPlatform.OSX,     Architecture.X64,   true),
+            "no-sandbox" => (OSPlatform.OSX,     Architecture.Arm64, false),
+            _            => (OSPlatform.OSX,     Architecture.Arm64, true)
+        };
+
+        CopilotBorrowedReviewPolicy.Resolve(os, arch, sandbox, () => { probes++; return true; });
+
+        await Assert.That(probes).IsEqualTo(shouldProbe ? 1 : 0);
     }
 }
