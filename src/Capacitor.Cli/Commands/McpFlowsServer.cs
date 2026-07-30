@@ -1124,6 +1124,8 @@ static class McpFlowsServer {
         }
         AppendReviewerModelAudit(sb, node);
         AppendWorkspaceDiagnostics(sb, node);
+        // Before the result text: the driver should read the warning before the (suspect) result.
+        AppendReviewerVendorMismatchWarning(sb, node);
         if (!string.IsNullOrEmpty(resultText)) { sb.AppendLine(); sb.Append(resultText); }
 
         pendingIds = AppendPendingMessages(sb, node);
@@ -1221,6 +1223,7 @@ static class McpFlowsServer {
             }
 
             AppendParticipants(sb, node);
+            AppendReviewerVendorMismatchWarning(sb, node);
 
             pendingIds = AppendPendingMessages(sb, node);
             return sb.ToString();
@@ -1244,6 +1247,45 @@ static class McpFlowsServer {
             sb.Append(" model="); sb.Append(model); sb.Append(" status=");
             sb.AppendLine(stopped ? "stopped" : "running");
         }
+    }
+
+    /// <summary>Warns when the "reviewer" participant's vendor disagrees with the run-level
+    /// <c>applied_reviewer_vendor</c> in the same body, or the server set
+    /// <c>reviewer_vendor_mismatch</c> (covers a lagged participant list; the local comparison
+    /// covers older servers). A warning, not a tool error — the response still carries results
+    /// and pending messages, and the driver decides whether to close.</summary>
+    static void AppendReviewerVendorMismatchWarning(StringBuilder sb, JsonObject node) {
+        var applied = TryGetString(node, "applied_reviewer_vendor");
+
+        string? participantVendor = null;
+        if (applied is not null && node["participants"] is JsonArray participants)
+            foreach (var item in participants) {
+                if (item is not JsonObject p) continue;
+                if (!string.Equals(StringField(p, "role"), "reviewer", StringComparison.Ordinal)) continue;
+                // A stopped entry is historical — a rotated-out reviewer must not raise a false
+                // alarm against the ACTIVE vendor. The server flag still covers stopped-row
+                // divergence it can see.
+                if (p["stopped"] is JsonValue stopped && stopped.TryGetValue<bool>(out var s) && s) continue;
+                var vendor = StringField(p, "vendor");
+                // An absent vendor in a partial body is not evidence of disagreement.
+                if (vendor.Length > 0 && !string.Equals(vendor, applied, StringComparison.Ordinal)) {
+                    participantVendor = vendor;
+                    break;
+                }
+            }
+
+        var serverFlagged =
+            node["reviewer_vendor_mismatch"] is JsonValue flag && flag.TryGetValue<bool>(out var b2) && b2;
+
+        if (participantVendor is null && !serverFlagged) return;
+
+        sb.AppendLine();
+        sb.Append("⚠ reviewer vendor mismatch: ");
+        sb.AppendLine(participantVendor is not null
+            ? $"participant 'reviewer' is '{participantVendor}' but applied_reviewer_vendor is '{applied}'."
+            : "the server flagged that the active reviewer's vendor disagrees with applied_reviewer_vendor.");
+        sb.AppendLine("  A different reviewer than this run reported may be doing the work — treat its " +
+                      "results as suspect: close the flow and report this.");
     }
 
     /// <summary>
