@@ -88,6 +88,28 @@ public class AgentVerbDispatchTests {
         await Assert.That(stderr).Contains("kcap agent start: no server configured");
     }
 
+    [Test]
+    public async Task Stop_accepts_the_force_flag_without_treating_it_as_an_id() {
+        // --force must parse as a flag, not as a positional agent id, or the usage line fires.
+        var (_, stderr, _) = await RunCli("agent stop --all --force -y --daemon kcap-dispatch-test-absent");
+
+        await Assert.That(stderr).DoesNotContain("cannot combine an agent id with --all");
+        await Assert.That(stderr).DoesNotContain("usage: kcap agent stop");
+    }
+
+    [Test]
+    public async Task Stop_force_alone_without_all_or_an_id_still_reports_usage() {
+        // Neither --all nor a positional id is present, so the usage line must fire. If --force
+        // were ever mistreated as the positional agent id, hasId would flip true here and this
+        // would instead try to resolve "--force" as a target — the previous test above can't
+        // catch that regression because its args[0] is "--all", which already forces hasId false
+        // regardless of where --force sits.
+        var (_, stderr, exitCode) = await RunCli("agent stop --force --daemon kcap-dispatch-test-absent");
+
+        await Assert.That(stderr).Contains("usage: kcap agent stop");
+        await Assert.That(exitCode).IsEqualTo(1);
+    }
+
     static async Task<(string Stdout, string Stderr, int ExitCode)> RunCli(
             string argLine, bool clearServerUrl = false) {
         var binary = GetCliBinaryPath();

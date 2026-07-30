@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
 
 namespace Capacitor.Cli.Daemon.Services;
@@ -6,29 +7,83 @@ namespace Capacitor.Cli.Daemon.Services;
 internal partial class AgentOrchestrator {
     /// <summary>Reply to a <c>kcap agent ls</c> request with a tab-separated agent table.</summary>
     public Task HandleLocalListAsync(Stream stream, CancellationToken ct) {
-        var lines = _agents.Values.Select(a => $"{a.Id}\t{a.Status}\t{a.RepoPath}");
+        var lines = _agents.Values.Select(a =>
+            $"{a.Id}\t{a.Status}\t{Cell(a.RepoPath)}\t{KindText(a.Kind)}\t{Cell(a.FlowRunId)}\t{Cell(a.FlowRole)}");
 
         return FrameCodec.WriteAsync(stream, new LocalFrame(FrameType.AgentList) { Text = string.Join('\n', lines) }, ct);
     }
 
     /// <summary>
-    /// Stop one agent (or every agent, when <paramref name="agentId"/> is empty) on behalf of
-    /// `kcap agent stop`. Calls the stop core directly rather than <c>HandleStopAgent</c>: the
-    /// private-agent guard there defends against server-origin commands, and a request arriving
-    /// on the daemon's own 0600 socket is the owner's. Stops run concurrently — each can take up
-    /// to 25s (graceful wait plus terminate), so serial teardown would be unusable.
+    /// Neutralises the table's own delimiters in a free-form field. A repo path may legally
+    /// contain a tab or newline, which would shift the reader's columns or split the row — and the
+    /// CLI keys `stop --all`'s confirmation off the kind column, so a shifted row understates the
+    /// blast radius the user is agreeing to.
     /// </summary>
-    public async Task HandleLocalStopAsync(string agentId, Stream stream, CancellationToken ct) {
+    static string Cell(string? value) =>
+        value is null ? "" : value.Replace('\t', ' ').Replace('\n', ' ').Replace('\r', ' ');
+
+    /// Wire spelling of <see cref="LaunchKind"/>. Kept separate from the enum name so the table
+    /// reads as a CLI column rather than a .NET identifier. A future kind that falls through the
+    /// switch reports its own enum name rather than masquerading as "agent" — the CLI's
+    /// `IsProtectedKind` then fails safe (protected) on anything it doesn't recognise, instead of
+    /// the daemon advertising an unprotected kind that its own `Kind != Default` checks would
+    /// still protect.
+    static string KindText(LaunchKind kind) => kind switch {
+        LaunchKind.Default    => "agent",
+        LaunchKind.Review     => "review",
+        LaunchKind.ReviewFlow => "review-flow",
+        _                     => kind.ToString(),
+    };
+
+    /// <summary>
+    /// Serves the legacy <c>Stop</c> frame from older clients that predate --force. That frame
+    /// has no force concept, so it always behaves as if --force were passed: an older client
+    /// gets exactly its previous (unprotected) behaviour, and gains no new refusals it has no
+    /// way to override.
+    /// </summary>
+    public Task HandleLocalStopAsync(string agentId, Stream stream, CancellationToken ct) =>
+        HandleLocalStopV2Async(force: true, agentId, stream, ct);
+
+    /// <summary>
+    /// `kcap agent stop` with protection. A review or flow agent is refused unless the user
+    /// passed --force; a stop-all reports them as `skipped` rather than silently omitting them.
+    /// Calls the stop core directly rather than <c>HandleStopAgent</c>: the private-agent guard
+    /// there defends against server-origin commands, and a request arriving on the daemon's own
+    /// 0600 socket is the owner's. Stops run concurrently — each can take up to 25s (graceful
+    /// wait plus terminate), so serial teardown would be unusable.
+    /// </summary>
+    public async Task HandleLocalStopV2Async(bool force, string agentId, Stream stream, CancellationToken ct) {
         if (agentId.Length == 0) {
-            var all     = _agents.Values.ToList();
-            var results = await Task.WhenAll(all.Select(StopAgentCoreAsync));
-            var lines   = all.Zip(results, (a, ok) => $"{a.Id}\t{StatusText(ok)}");
-            await FrameCodec.WriteAsync(stream, LocalFrame.StopAck(string.Join('\n', lines)), ct);
+            var all       = _agents.Values.ToList();
+            var eligible  = all.Where(a => force || a.Kind == LaunchKind.Default).ToList();
+            var results   = await Task.WhenAll(eligible.Select(StopAgentCoreAsync));
+            var stopped   = eligible.Zip(results, (a, ok) => $"{a.Id}\t{StatusText(ok)}");
+
+            // The exact negation of the eligible predicate above — not a set difference.
+            // AgentInstance is a record with mutable fields (Status, LastOutputAt, ...), so
+            // Except would hash teardown-mutable state while the eligible agents are still
+            // draining from the WhenAll above, and could misreport a stopped agent as skipped too.
+            var skipped = all.Where(a => !force && a.Kind != LaunchKind.Default).Select(a => $"{a.Id}\tskipped");
+
+            await FrameCodec.WriteAsync(stream, LocalFrame.StopAck(string.Join('\n', stopped.Concat(skipped))), ct);
 
             return;
         }
 
         if (_agents.TryGetValue(agentId, out var agent)) {
+            if (!force && agent.Kind != LaunchKind.Default) {
+                // A flow participant going away mid-round strands the flow; a plain hosted
+                // review has no round to strand, just a result that will never come back.
+                var consequence = agent.Kind == LaunchKind.ReviewFlow
+                    ? "Stopping it mid-round leaves the flow without a participant."
+                    : "Stopping it discards the review before it can report back.";
+
+                await FrameCodec.WriteAsync(stream, LocalFrame.Error(
+                    $"{agentId} is a {ProtectionReason(agent)}. {consequence} Pass --force to stop it anyway."), ct);
+
+                return;
+            }
+
             var ok = await StopAgentCoreAsync(agent);
             await FrameCodec.WriteAsync(stream, LocalFrame.StopAck($"{agentId}\t{StatusText(ok)}"), ct);
 
@@ -36,7 +91,22 @@ internal partial class AgentOrchestrator {
         }
 
         // Not live here — it may be a survivor of a previous daemon incarnation, which the PID
-        // record can still reap. This is why the client sends full ids verbatim.
+        // record can still reap. This is why the client sends full ids verbatim. The record
+        // carries the same Kind/FlowRunId/FlowRole the live agent would have, so protection still
+        // applies — a review-flow survivor from a prior incarnation is refused exactly like a
+        // live one. TryStopByPidRecordAsync itself stays policy-free (it's shared with the
+        // server-origin HandleStopAgent path); the decision is made here, before it ever runs.
+        if (!force && FindPidRecord(agentId) is { Kind: not nameof(LaunchKind.Default) } record) {
+            var consequence = record.Kind == nameof(LaunchKind.ReviewFlow)
+                ? "Stopping it mid-round leaves the flow without a participant."
+                : "Stopping it discards the review before it can report back.";
+
+            await FrameCodec.WriteAsync(stream, LocalFrame.Error(
+                $"{agentId} is a {ProtectionReason(record)}. {consequence} Pass --force to stop it anyway."), ct);
+
+            return;
+        }
+
         var reaped = await TryStopByPidRecordAsync(agentId);
 
         await FrameCodec.WriteAsync(
@@ -138,7 +208,30 @@ internal partial class AgentOrchestrator {
         if (!_agents.TryGetValue(agentId, out var agent))
             return FrameCodec.WriteAsync(stream, LocalFrame.Error($"no such agent {agentId}"), ct);
 
-        return AttachClientLoopAsync(agent, stream, ct);
+        // A review or flow agent is addressed through the flow protocol, never by typing at it,
+        // so the daemon — not the client — decides this attach carries no input.
+        return AttachClientLoopAsync(agent, stream, ct, readOnly: agent.Kind != LaunchKind.Default);
+    }
+
+    /// Human-readable "why is this read-only/refused", carried on the AttachedReadOnly frame and
+    /// the not-live StopV2 refusal below (which reads the same kind from a persisted PID record
+    /// instead of a live AgentInstance).
+    static string ProtectionReason(AgentInstance agent) => ProtectionReason(agent.Kind.ToString(), agent.FlowRunId, agent.FlowRole);
+
+    static string ProtectionReason(AgentPidRecord record) => ProtectionReason(record.Kind, record.FlowRunId, record.FlowRole);
+
+    /// A kind this build doesn't recognise reports its own name rather than being mislabelled as
+    /// "review" — mirrors KindText's fail-safe shape.
+    static string ProtectionReason(string kind, string? flowRunId, string? flowRole) {
+        var label = kind switch {
+            nameof(LaunchKind.ReviewFlow) => "review-flow",
+            nameof(LaunchKind.Review)     => "review",
+            _                             => kind,
+        };
+        var role = string.IsNullOrEmpty(flowRole) ? "" : $", role {flowRole}";
+        var flow = string.IsNullOrEmpty(flowRunId) ? "" : $" (flow {flowRunId}{role})";
+
+        return $"{label} agent{flow}";
     }
 
     /// <summary>
@@ -146,7 +239,8 @@ internal partial class AgentOrchestrator {
     /// client's input (stdin/resize) until it detaches or disconnects. The agent keeps
     /// running either way — the sink is just removed.
     /// </summary>
-    internal async Task AttachClientLoopAsync(AgentInstance agent, Stream stream, CancellationToken ct) {
+    internal async Task AttachClientLoopAsync(
+            AgentInstance agent, Stream stream, CancellationToken ct, bool readOnly = false) {
         // One NetworkStream, two writers (the sink's Stdout frames + Attached/Exited here):
         // serialise all writes through this lock. Reads (the input loop) are independent.
         var writeLock = new SemaphoreSlim(1, 1);
@@ -169,7 +263,9 @@ internal partial class AgentOrchestrator {
 
         try {
             // Bounded replay BEFORE any live chunk so the client paints a coherent screen.
-            await Send(FrameCodec.Attached(agent.Id, snapshot));
+            await Send(readOnly
+                ? FrameCodec.AttachedReadOnly(agent.Id, ProtectionReason(agent), snapshot)
+                : FrameCodec.Attached(agent.Id, snapshot));
             var pump = sink.RunAsync(ct);
 
             // Break this read loop when the agent exits on its own (CleanupAgentAsync trips
@@ -193,6 +289,8 @@ internal partial class AgentOrchestrator {
                     if (f is null || f.Type == FrameType.Detach) break;
 
                     if (f.Type == FrameType.Stdin) {
+                        if (readOnly) continue; // protected agent: input is never delivered
+
                         try {
                             await agent.Runtime.SendRawInputAsync(f.Bytes);
                         } catch (NotSupportedException) {
@@ -205,7 +303,9 @@ internal partial class AgentOrchestrator {
                             break;
                         }
                     } else if (f.Type == FrameType.Resize) {
-                        ApplyResizeClamp(agent, sink, f.Cols, f.Rows);
+                        // A read-only viewer must not enter ClientDims, or the min-clamp would
+                        // let an observer shrink the participant's terminal.
+                        if (!readOnly) ApplyResizeClamp(agent, sink, f.Cols, f.Rows);
                     }
                 }
             } catch (Exception ex) when (ex is EndOfStreamException or IOException or OperationCanceledException) {

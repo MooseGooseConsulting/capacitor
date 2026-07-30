@@ -5,10 +5,12 @@ Usage: kcap agent <subcommand>
 Subcommands:
   start <vendor> [flags] [-- <agent args>]
                           Start an agent the daemon hosts for you
-  ls                      List this daemon's agents (id, status, repo)
+  ls                      List this daemon's agents (id, status, kind, repo)
   attach <agent-id>       Attach your terminal to a running agent
-  stop <agent-id>         Stop an agent (graceful /exit, then terminate)
-  stop --all [-y]         Stop every agent this daemon hosts
+  stop <agent-id> [--force]
+                          Stop an agent (graceful /exit, then terminate)
+  stop --all [-y] [--force]
+                          Stop every agent this daemon hosts
 
 Running `kcap agent` with no subcommand lists agents.
 
@@ -22,13 +24,13 @@ Options for start:
   --                      Everything after this is passed to the vendor CLI verbatim
 
 Options for stop:
-  --all                   Stop every agent, including --private ones
+  --all                   Stop every agent, including --private ones. Review and
+                          review-flow agents are skipped unless --force is given.
+  --force                 Stop a single review or review-flow agent that would
+                          otherwise be refused, or include them under --all.
+                          Stopping a flow participant mid-round leaves the flow
+                          without it.
   --yes, -y               Skip the confirmation prompt for --all
-
-  --all stops every agent this daemon hosts, not just the ones you started
-  from this CLI — including agents launched from the web UI and review-flow
-  participants (e.g. reviewers mid-round). See
-  https://github.com/kurrent-io/kcap-cli/issues/379.
 
 Options for ls, attach, stop:
   --daemon <name>         Target a specific daemon (defaults to your profile's)
@@ -36,6 +38,13 @@ Options for ls, attach, stop:
 Agent ids:
   Any unique prefix works — `kcap agent attach ab12` is enough as long as it
   matches exactly one agent. An ambiguous prefix lists the candidates.
+
+Review and flow agents:
+  Agents the daemon runs as part of a review flow (KIND `review-flow`) or a PR
+  review (`review`) are not yours to drive directly — they are addressed through
+  the flow tools. `attach` gives you a read-only view of one: you see its output,
+  your input is not delivered, and your terminal size is not applied to it.
+  `stop` refuses unless you pass --force.
 
 Notes:
   The daemon owns the agent, not your terminal, so you can detach and the agent

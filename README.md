@@ -994,13 +994,20 @@ kcap agent start claude -d                    # start without attaching; prints 
 
 ```bash
 kcap agent                 # no subcommand — same as `kcap agent ls`
-kcap agent ls              # list daemon-hosted agents (id, status, repo)
+kcap agent ls              # list daemon-hosted agents (id, status, kind, repo)
 kcap agent attach ab12     # re-attach your terminal (any unique id prefix works)
 kcap agent stop ab12       # graceful /exit, then terminate
 kcap agent stop --all -y   # stop every agent this daemon hosts, no prompt
 ```
 
-Agent ids are long, so `attach` and `stop` accept **any unique prefix** — an ambiguous one lists the candidates instead of guessing. `stop --all` includes `--private` agents and prompts for confirmation unless you pass `--yes`/`-y`. `--all` stops **every** agent this daemon hosts, not just the ones you started from this CLI — including agents launched from the web UI and review-flow participants (e.g. reviewers mid-round). Making these commands flow-participant aware is tracked in [#379](https://github.com/kurrent-io/kcap-cli/issues/379). If a stop can't be confirmed (e.g. an agent that never exits, even after SIGKILL), `stop` prints a per-agent "Failed to stop `<id>` — see `kcap daemon logs`." line and exits non-zero; `stop --all` still stops the rest and reports each agent's outcome individually.
+Agent ids are long, so `attach` and `stop` accept **any unique prefix** — an ambiguous one lists the candidates instead of guessing. `stop --all` includes `--private` agents and prompts for confirmation unless you pass `--yes`/`-y`; a stop that cannot be confirmed prints a per-agent failure line and exits non-zero.
+
+**Agents that aren't yours.** `kcap agent ls` shows a `KIND` column: `agent` for ones you started, `review` for PR-review agents, and `review-flow` for review-flow participants (with their role). The daemon protects the latter two, because they are driven by the flow protocol rather than by you:
+
+- `kcap agent attach` on one is **read-only** — you see its output, your keystrokes are not delivered, and your terminal size is not applied to it.
+- `kcap agent stop` on one is **refused** unless you pass `--force`, and `stop --all` skips them and says how many it skipped.
+
+Enforcement lives in the daemon, so a current CLI can't bypass it by skipping the check or lying about `--force`. That guarantee has two version-skew exceptions: an old `kcap` sends the legacy `Stop` request, which has no `--force` concept — the daemon treats that as `--force`, so an old client can silently force-stop a review or review-flow agent. And against an old daemon, `ls`/`attach` degrade silently (no kind reported, every agent reads as `agent`), but `stop` doesn't degrade — it sends a newer request format the old daemon can't decode, so the connection closes and the CLI tells you to restart the daemon instead of stopping anything.
 
 `agent start` auto-starts the daemon if one isn't already running, and needs a configured server for the daemon to record to. `ls`, `attach`, and `stop` only talk to the local socket, so they work without one. A locally-started agent appears in **your own** web UI (owner-only until you share it from the web UI); use `--private` to opt out of registration entirely. Unix only for now.
 

@@ -7,6 +7,7 @@ using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Daemon;
 using Capacitor.Cli.Daemon.Pty;
 using Capacitor.Cli.Daemon.Services;
+using Capacitor.Cli.Tests.Unit.Daemon;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Capacitor.Cli.Tests.Unit;
@@ -469,6 +470,7 @@ public partial class AgentOrchestratorVendorTests {
     }
 
     [Test]
+    [NotInParallel(nameof(DaemonLockPaths) + ".OverrideDirectoryForTesting")]
     public async Task Local_socket_list_round_trips_registered_agents_over_a_real_socket() {
         if (OperatingSystem.IsWindows()) return; // Unix-domain socket path
 
@@ -513,6 +515,148 @@ public partial class AgentOrchestratorVendorTests {
             DaemonLockPaths.OverrideDirectoryForTesting(null);
             try { Directory.Delete(sockDir.FullName, true); } catch { /* best-effort */ }
         }
+    }
+
+    /// <summary>
+    /// Pins the one hop nothing else exercises: <see cref="LocalControlServer"/> decoding a raw
+    /// StopV2 frame off a real socket and forwarding its force flag to the orchestrator. The codec
+    /// round-trip (FrameCodecTests) and the handler (StopV2AndReadReply above) are each covered in
+    /// isolation; only a real connection proves the server's frame switch wires them together.
+    /// </summary>
+    static async Task<LocalFrame?> StopV2OverRealSocketAsync(string daemonName, bool force, string agentId) {
+        var sockDir = Directory.CreateTempSubdirectory("kcap-sock-");
+        DaemonLockPaths.OverrideDirectoryForTesting(sockDir.FullName);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+
+        LocalControlServer? listener = null;
+        AgentOrchestrator?  orch     = null;
+
+        try {
+            orch = BuildOrchestrator(new TripwireServerConnection(), new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+            orch.SeedAgentForTest("flow-1", kind: LaunchKind.ReviewFlow, flowRunId: "flow-7f3a", flowRole: "reviewer");
+
+            var config = new DaemonConfig { Name = daemonName, ServerUrl = "http://127.0.0.1:1" };
+            listener = new LocalControlServer(config, orch, TestCoordinator(), NullLogger<LocalControlServer>.Instance);
+            await listener.StartAsync(cts.Token);
+
+            var sockPath = LocalSocketPaths.Socket(daemonName);
+            var deadline = DateTime.UtcNow.AddSeconds(5);
+            while (!File.Exists(sockPath) && DateTime.UtcNow < deadline) await Task.Delay(20, cts.Token);
+            await Assert.That(File.Exists(sockPath)).IsTrue();
+
+            using var sock = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+            await sock.ConnectAsync(new UnixDomainSocketEndPoint(sockPath), cts.Token);
+            await using var stream = new NetworkStream(sock, ownsSocket: false);
+
+            await FrameCodec.WriteAsync(stream, LocalFrame.StopV2(force, agentId), cts.Token);
+
+            return await FrameCodec.ReadAsync(stream, cts.Token);
+        } finally {
+            if (orch is not null) await orch.DisposeAsync();
+            if (listener is not null) { await listener.StopAsync(CancellationToken.None); listener.Dispose(); }
+            DaemonLockPaths.OverrideDirectoryForTesting(null);
+            try { Directory.Delete(sockDir.FullName, true); } catch { /* best-effort */ }
+        }
+    }
+
+    [Test]
+    [NotInParallel(nameof(DaemonLockPaths) + ".OverrideDirectoryForTesting")]
+    public async Task Local_socket_stopv2_without_force_refuses_a_protected_agent_end_to_end() {
+        if (OperatingSystem.IsWindows()) return; // Unix-domain socket path
+
+        var resp = await StopV2OverRealSocketAsync("test-stopv2-refuse", force: false, "flow-1");
+
+        await Assert.That(resp!.Type).IsEqualTo(FrameType.Error);
+        await Assert.That(resp.Text).Contains("--force");
+    }
+
+    [Test]
+    [NotInParallel(nameof(DaemonLockPaths) + ".OverrideDirectoryForTesting")]
+    public async Task Local_socket_stopv2_with_force_stops_a_protected_agent_end_to_end() {
+        if (OperatingSystem.IsWindows()) return; // Unix-domain socket path
+
+        var resp = await StopV2OverRealSocketAsync("test-stopv2-force", force: true, "flow-1");
+
+        await Assert.That(resp!.Type).IsEqualTo(FrameType.StopAck);
+        await Assert.That(resp.Text).IsEqualTo("flow-1\tstopped");
+    }
+
+    [Test]
+    public async Task Local_list_reports_each_agent_kind_and_flow_identity() {
+        var server = new TripwireServerConnection();
+        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        orch.SeedAgentForTest("plain-1");
+        orch.SeedAgentForTest("rev-1", kind: LaunchKind.Review);
+        orch.SeedAgentForTest("flow-1", kind: LaunchKind.ReviewFlow, flowRunId: "flow-7f3a", flowRole: "reviewer");
+
+        using var client = new DuplexTestStream(new MemoryStream(), new MemoryStream());
+        await orch.HandleLocalListAsync(client, default);
+        client.WrittenStream.Position = 0;
+        var reply = await FrameCodec.ReadAsync(client.WrittenStream, default);
+
+        var rows = reply!.Text.Split('\n').Select(l => l.Split('\t')).ToDictionary(p => p[0], p => p);
+
+        await Assert.That(rows["plain-1"][3]).IsEqualTo("agent");
+        await Assert.That(rows["rev-1"][3]).IsEqualTo("review");
+        await Assert.That(rows["flow-1"][3]).IsEqualTo("review-flow");
+        await Assert.That(rows["flow-1"][4]).IsEqualTo("flow-7f3a");
+        await Assert.That(rows["flow-1"][5]).IsEqualTo("reviewer");
+    }
+
+    [Test]
+    public async Task Attaching_to_a_flow_participant_is_read_only() {
+        var server = new TripwireServerConnection();
+        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        var pty   = new RecordingPtyProcess();
+        var agent = orch.SeedAgentForTest("flow-1", kind: LaunchKind.ReviewFlow, flowRunId: "flow-7f3a", flowRole: "reviewer", pty: pty);
+
+        // Client sends input, then a resize, then detaches. None of the first two may land.
+        var readBuf = new MemoryStream();
+        await FrameCodec.WriteAsync(readBuf, LocalFrame.Stdin("hello"u8.ToArray()), default);
+        await FrameCodec.WriteAsync(readBuf, LocalFrame.Resize(40, 10), default);
+        await FrameCodec.WriteAsync(readBuf, LocalFrame.Detach(), default);
+        readBuf.Position = 0;
+        using var client = new DuplexTestStream(readBuf, new MemoryStream());
+
+        await orch.HandleLocalAttachAsync("flow-1", client, default);
+
+        client.WrittenStream.Position = 0;
+        var first = await FrameCodec.ReadAsync(client.WrittenStream, default);
+
+        await Assert.That(first!.Type).IsEqualTo(FrameType.AttachedReadOnly);
+        var (_, reason, _) = FrameCodec.AttachedReadOnly(first);
+        await Assert.That(reason).Contains("review-flow");
+        await Assert.That(reason).Contains("reviewer");
+
+        // The resize must not have been recorded, so the PTY is never clamped to the viewer.
+        await Assert.That(agent.ClientDims).IsEmpty();
+
+        // The stdin frame must never reach the runtime — this is the daemon-side guarantee
+        // itself, not just the client-observable frame type above.
+        await Assert.That(pty.Writes).IsEmpty();
+    }
+
+    [Test]
+    public async Task Attaching_to_a_plain_agent_stays_read_write() {
+        var server = new TripwireServerConnection();
+        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        var pty = new RecordingPtyProcess();
+        orch.SeedAgentForTest("plain-1", pty: pty);
+
+        var readBuf = new MemoryStream();
+        await FrameCodec.WriteAsync(readBuf, LocalFrame.Stdin("hello"u8.ToArray()), default);
+        await FrameCodec.WriteAsync(readBuf, LocalFrame.Detach(), default);
+        readBuf.Position = 0;
+        using var client = new DuplexTestStream(readBuf, new MemoryStream());
+
+        await orch.HandleLocalAttachAsync("plain-1", client, default);
+
+        client.WrittenStream.Position = 0;
+        var first = await FrameCodec.ReadAsync(client.WrittenStream, default);
+        await Assert.That(first!.Type).IsEqualTo(FrameType.Attached);
+
+        // Mirrors the read-only test: an unprotected agent's stdin really does reach the PTY.
+        await Assert.That(pty.Writes).IsEquivalentTo(new[] { "hello" });
     }
 
     // ── Test doubles for the local-spawn lifecycle ──────────────────────
@@ -674,6 +818,130 @@ public partial class AgentOrchestratorVendorTests {
         await Assert.That(reply.Text).IsEqualTo("reaped-1\tstopped");
     }
 
+    static async Task<LocalFrame?> StopV2AndReadReply(AgentOrchestrator orch, bool force, string agentId) {
+        using var client = new DuplexTestStream(new MemoryStream(), new MemoryStream());
+        await orch.HandleLocalStopV2Async(force, agentId, client, default);
+        client.WrittenStream.Position = 0;
+
+        return await FrameCodec.ReadAsync(client.WrittenStream, default);
+    }
+
+    [Test]
+    public async Task Stopping_a_flow_participant_without_force_is_refused() {
+        var server = new TripwireServerConnection();
+        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        orch.SeedAgentForTest("flow-1", kind: LaunchKind.ReviewFlow, flowRunId: "flow-7f3a", flowRole: "reviewer");
+
+        var reply = await StopV2AndReadReply(orch, force: false, "flow-1");
+
+        await Assert.That(reply!.Type).IsEqualTo(FrameType.Error);
+        await Assert.That(reply.Text).Contains("review-flow");
+        await Assert.That(reply.Text).Contains("--force");
+        await Assert.That(orch.GetAgentForTest("flow-1")!.Status).IsNotEqualTo("Completed");
+    }
+
+    [Test]
+    public async Task Stopping_a_flow_participant_with_force_succeeds() {
+        var server = new TripwireServerConnection();
+        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        orch.SeedAgentForTest("flow-1", kind: LaunchKind.ReviewFlow, flowRunId: "flow-7f3a", flowRole: "reviewer");
+
+        var reply = await StopV2AndReadReply(orch, force: true, "flow-1");
+
+        await Assert.That(reply!.Type).IsEqualTo(FrameType.StopAck);
+        await Assert.That(reply.Text).IsEqualTo("flow-1\tstopped");
+        await Assert.That(orch.GetAgentForTest("flow-1")!.Status).IsEqualTo("Completed");
+    }
+
+    [Test]
+    public async Task Stopping_a_non_flow_review_agent_without_force_is_refused_with_an_accurate_message() {
+        var server = new TripwireServerConnection();
+        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        orch.SeedAgentForTest("rev-1", kind: LaunchKind.Review);
+
+        var reply = await StopV2AndReadReply(orch, force: false, "rev-1");
+
+        await Assert.That(reply!.Type).IsEqualTo(FrameType.Error);
+        await Assert.That(reply.Text).Contains("review agent");
+        // Unlike a flow participant, a plain hosted review has no round or flow to strand —
+        // the refusal must not claim one.
+        await Assert.That(reply.Text).DoesNotContain("flow");
+        await Assert.That(reply.Text).Contains("--force");
+        await Assert.That(orch.GetAgentForTest("rev-1")!.Status).IsNotEqualTo("Completed");
+    }
+
+    [Test]
+    public async Task Stopping_a_prior_incarnation_flow_survivor_without_force_is_refused_before_reaping() {
+        // Not in _agents — this daemon incarnation never saw it — but its persisted PID record
+        // says it was a review-flow participant. The refusal must fire off the RECORD's Kind
+        // before TryStopByPidRecordAsync (and its live-process reap) ever runs.
+        var server = new TripwireServerConnection();
+        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        orch.WritePidRecordForTest(new AgentPidRecord(
+            "ghost-flow", 999_999, "", PidIdentityKind.IdentityUnavailable, "ReviewFlow", "codex",
+            "flow-7f3a", "reviewer", orch.DaemonIdForTest, orch.DaemonEpochForTest, DateTimeOffset.UtcNow));
+
+        var reply = await StopV2AndReadReply(orch, force: false, "ghost-flow");
+
+        await Assert.That(reply!.Type).IsEqualTo(FrameType.Error);
+        await Assert.That(reply.Text).Contains("review-flow");
+        await Assert.That(reply.Text).Contains("--force");
+        // Refused before any reap attempt — the record is untouched.
+        await Assert.That(orch.PidRecordsForTest().Any(r => r.AgentId == "ghost-flow")).IsTrue();
+    }
+
+    [Test]
+    public async Task Stopping_a_prior_incarnation_flow_survivor_with_force_bypasses_the_kind_gate() {
+        // --force must reach TryStopByPidRecordAsync itself (kept policy-free) rather than being
+        // turned back by the new gate above it.
+        var server = new TripwireServerConnection();
+        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+
+        using var dummy = DummyProcess.StartSleep(30);
+        var pid      = dummy.Pid;
+        var identity = ProcessIdentity.Capture(pid)!;
+        dummy.Kill(); dummy.WaitForExit(TimeSpan.FromSeconds(5)); // confirmed dead before the reap runs
+
+        orch.WritePidRecordForTest(new AgentPidRecord(
+            "ghost-flow-2", pid, identity, PidIdentityKind.Present, "ReviewFlow", "codex",
+            "flow-7f3a", "reviewer", orch.DaemonIdForTest, orch.DaemonEpochForTest, DateTimeOffset.UtcNow));
+
+        var reply = await StopV2AndReadReply(orch, force: true, "ghost-flow-2");
+
+        await Assert.That(reply!.Type).IsEqualTo(FrameType.StopAck);
+        await Assert.That(reply.Text).IsEqualTo("ghost-flow-2\tstopped");
+        await Assert.That(orch.PidRecordsForTest().Any(r => r.AgentId == "ghost-flow-2")).IsFalse();
+    }
+
+    [Test]
+    public async Task Stop_all_without_force_skips_protected_agents_and_says_so() {
+        var server = new TripwireServerConnection();
+        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        orch.SeedAgentForTest("plain-1");
+        orch.SeedAgentForTest("flow-1", kind: LaunchKind.ReviewFlow, flowRunId: "flow-7f3a", flowRole: "reviewer");
+
+        var reply = await StopV2AndReadReply(orch, force: false, "");
+
+        var rows = reply!.Text.Split('\n').Select(l => l.Split('\t')).ToDictionary(p => p[0], p => p[1]);
+        await Assert.That(rows["plain-1"]).IsEqualTo("stopped");
+        await Assert.That(rows["flow-1"]).IsEqualTo("skipped");
+        await Assert.That(orch.GetAgentForTest("flow-1")!.Status).IsNotEqualTo("Completed");
+    }
+
+    [Test]
+    public async Task Stop_all_with_force_includes_protected_agents() {
+        var server = new TripwireServerConnection();
+        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        orch.SeedAgentForTest("plain-1");
+        orch.SeedAgentForTest("flow-1", kind: LaunchKind.ReviewFlow, flowRunId: "flow-7f3a", flowRole: "reviewer");
+
+        var reply = await StopV2AndReadReply(orch, force: true, "");
+
+        var rows = reply!.Text.Split('\n').Select(l => l.Split('\t')).ToDictionary(p => p[0], p => p[1]);
+        await Assert.That(rows["plain-1"]).IsEqualTo("stopped");
+        await Assert.That(rows["flow-1"]).IsEqualTo("stopped");
+    }
+
     /// <summary>A pty double whose process never exits — HasExited stays false even after
     /// TerminateAsync — so a test can drive the "stop could not be confirmed" path without a
     /// real hung process.</summary>
@@ -735,4 +1003,30 @@ public partial class AgentOrchestratorVendorTests {
         public void Resize(ushort     _, ushort __) { }
         public void SendInterrupt() { }
     }
+    [Test]
+    public async Task Local_list_neutralises_delimiters_inside_a_free_form_field() {
+        // Repo paths and flow roles are free-form and may legally hold a tab or newline. Emitted
+        // raw they would shift the reader's columns or split the row, and the CLI keys
+        // `stop --all`'s confirmation off the kind column — so a corrupted row would understate
+        // the blast radius the user is agreeing to.
+        var server = new TripwireServerConnection();
+        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        orch.SeedAgentForTest("tabby-1", kind: LaunchKind.ReviewFlow,
+            flowRunId: "flow\t7f3a", flowRole: "rev\niewer");
+
+        using var client = new DuplexTestStream(new MemoryStream(), new MemoryStream());
+        await orch.HandleLocalListAsync(client, default);
+        client.WrittenStream.Position = 0;
+        var reply = await FrameCodec.ReadAsync(client.WrittenStream, default);
+
+        var rows = reply!.Text.Split('\n');
+        await Assert.That(rows.Length).IsEqualTo(1);
+
+        var cols = rows[0].Split('\t');
+        await Assert.That(cols.Length).IsEqualTo(6);
+        await Assert.That(cols[3]).IsEqualTo("review-flow");
+        await Assert.That(cols[4]).IsEqualTo("flow 7f3a");
+        await Assert.That(cols[5]).IsEqualTo("rev iewer");
+    }
+
 }
