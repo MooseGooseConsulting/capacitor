@@ -13,9 +13,15 @@ namespace Capacitor.Cli.Commands;
 
 static class McpFlowsServer {
     public static async Task<int> RunAsync(string baseUrl) {
-        var cwd      = Directory.GetCurrentDirectory();
-        var repoRoot = GitRepository.FindRoot(cwd);
-        var tools    = BuildToolsList();
+        // Requester context is resolved ONCE here, from the running harness rather than from the
+        // environment this process inherited — see HarnessRequesterContext for why an inherited
+        // KCAP_SESSION_ID / process cwd names the launching session instead of this driver. Both the
+        // session id and the working directory come from the same resolution, so a flow can never be
+        // attributed to one session while being reviewed in another session's checkout.
+        var requester = HarnessRequesterContext.Resolve();
+        var cwd       = requester.ProjectDir ?? Directory.GetCurrentDirectory();
+        var repoRoot  = GitRepository.FindRoot(cwd);
+        var tools     = BuildToolsList();
 
         RepositoryPayload? repoInfo = null;
         try {
@@ -57,7 +63,9 @@ static class McpFlowsServer {
                     client.Timeout = System.Threading.Timeout.InfiniteTimeSpan;
                 }
 
-                return await HandleToolCallAsync(callId, callRequest, client, baseUrl, cwd, repoRoot, repoInfo);
+                return await HandleToolCallAsync(
+                    callId, callRequest, client, baseUrl, cwd, repoRoot, repoInfo,
+                    requestingSessionId: requester.SessionId);
             } catch (Exception ex) {
                 // Unexpected: log the detail to stderr (not to the client, which could leak local
                 // paths from IO errors) and return a generic tool error, keeping the loop alive.
@@ -125,7 +133,12 @@ static class McpFlowsServer {
             string?             repoRoot,
             RepositoryPayload?  repoInfo,
             FlowRetryClock?     clock = null,
-            SettlementBackoff?  backoff = null
+            SettlementBackoff?  backoff = null,
+            // The requesting session, resolved by RunAsync from the running harness (never read from
+            // the environment down here — see HarnessRequesterContext). Optional so the tests that
+            // exercise routing/retry/error paths, where requester identity is irrelevant, can omit
+            // it; the production dispatch in RunAsync always supplies it.
+            string?             requestingSessionId = null
         ) {
         clock   ??= FlowRetryClock.System;
         backoff ??= SettlementBackoff.Default;
@@ -166,11 +179,11 @@ static class McpFlowsServer {
 
                 var sendResult = toolName switch {
                     "start_review_flow"   => wasModelStart
-                        ? new SettlementSendResult.Response(await SendWithRefreshRetryAsync(client, apiRoot, (c, ct) => StartFlowAsync(c, apiRoot, arguments, cwd, repoRoot, repoInfo, kindArgName: "kind", ct: ct)))
-                        : await SendWithSettlementRetryAsync(client, apiRoot, (c, ct) => StartFlowAsync(c, apiRoot, arguments, cwd, repoRoot, repoInfo, kindArgName: "kind", ct: ct), clock, backoff),
+                        ? new SettlementSendResult.Response(await SendWithRefreshRetryAsync(client, apiRoot, (c, ct) => StartFlowAsync(c, apiRoot, arguments, cwd, repoRoot, repoInfo, kindArgName: "kind", requestingSessionId: requestingSessionId, ct: ct)))
+                        : await SendWithSettlementRetryAsync(client, apiRoot, (c, ct) => StartFlowAsync(c, apiRoot, arguments, cwd, repoRoot, repoInfo, kindArgName: "kind", requestingSessionId: requestingSessionId, ct: ct), clock, backoff),
                     "start_flow"          => wasModelStart
-                        ? new SettlementSendResult.Response(await SendWithRefreshRetryAsync(client, apiRoot, (c, ct) => StartFlowAsync(c, apiRoot, arguments, cwd, repoRoot, repoInfo, kindArgName: "definition_id", ct: ct)))
-                        : await SendWithSettlementRetryAsync(client, apiRoot, (c, ct) => StartFlowAsync(c, apiRoot, arguments, cwd, repoRoot, repoInfo, kindArgName: "definition_id", ct: ct), clock, backoff),
+                        ? new SettlementSendResult.Response(await SendWithRefreshRetryAsync(client, apiRoot, (c, ct) => StartFlowAsync(c, apiRoot, arguments, cwd, repoRoot, repoInfo, kindArgName: "definition_id", requestingSessionId: requestingSessionId, ct: ct)))
+                        : await SendWithSettlementRetryAsync(client, apiRoot, (c, ct) => StartFlowAsync(c, apiRoot, arguments, cwd, repoRoot, repoInfo, kindArgName: "definition_id", requestingSessionId: requestingSessionId, ct: ct), clock, backoff),
                     "submit_review_round" => await SendWithSettlementRetryAsync(client, apiRoot, (c, ct) => SubmitRoundAsync(c, apiRoot, arguments, contextArgName: "context", participant: null, async: true, ct: ct), clock, backoff),
                     _                     => await SendWithSettlementRetryAsync(client, apiRoot, (c, ct) => SubmitRoundAsync(c, apiRoot, arguments, contextArgName: "message", participant: GetRequiredArg(arguments, "participant"), async: ParseAsyncArg(arguments), ct: ct), clock, backoff)
                 };
@@ -631,6 +644,10 @@ static class McpFlowsServer {
     /// schema can't express the xor, so exactly-one is enforced here, BEFORE any HTTP call;
     /// start_review_flow stays catalog-only (kind remains required there). Internal (not private)
     /// so unit tests can drive it directly against a WireMock stub.
+    /// <para><paramref name="requestingSessionId"/> is supplied by the caller (resolved once in
+    /// <see cref="RunAsync"/> from the running harness) and deliberately NOT read from the
+    /// environment here — an inherited <c>KCAP_SESSION_ID</c> names the session that launched this
+    /// one. It is a required parameter so no call site can acquire it ambiently by accident.</para>
     /// </summary>
     internal static async Task<System.Net.Http.HttpResponseMessage> StartFlowAsync(
             HttpClient         client,
@@ -640,6 +657,7 @@ static class McpFlowsServer {
             string?            repoRoot,
             RepositoryPayload? repoInfo,
             string             kindArgName,
+            string?            requestingSessionId,
             CancellationToken  ct = default
         ) {
         string? kind;
@@ -685,8 +703,6 @@ static class McpFlowsServer {
                     "Pass the lowercase canonical vendor token (e.g. 'claude', 'codex') the model belongs to.");
         }
 
-        var sessionId = ArgParsing.ResolveSessionIdFromEnv();
-
         // B2: this machine's stable id, matched server-side against each connected daemon's
         // registration id to prove the reviewer would run on the SAME host as this requester. Same
         // call the daemon reports at registration (ServerConnection), so the ids are identical — the
@@ -710,7 +726,7 @@ static class McpFlowsServer {
             TargetTitle:          targetTitle,
             Context:              context,
             Instructions:         instructions,
-            RequestingSessionId:  sessionId,
+            RequestingSessionId:  requestingSessionId,
             RequestingCwd:        cwd,
             RequestingRepoRoot:   repoRoot,
             RepoOwner:            repoInfo?.Owner,
@@ -1326,7 +1342,7 @@ static class McpFlowsServer {
 
         switch (mode) {
             case "borrowed":
-                sb.AppendLine("workspace: borrowed (the reviewer saw your working tree, uncommitted changes included)");
+                sb.AppendLine("workspace: borrowed (the reviewer saw this session's project directory in place, uncommitted changes included)");
                 break;
             case "fallback": {
                 var reason = TryGetString(node, "fallback_reason");
@@ -1481,9 +1497,9 @@ static class McpFlowsServer {
                     ["target_kind"]  = new("string", "What is being reviewed: 'pr', 'branch', 'file', 'spec', 'plan', etc."),
                     ["target_ref"]   = new("string", "A reference to the target (PR URL, branch name, file path, etc.)."),
                     ["target_title"] = new("string", "Human-readable title for the target (PR title, spec name, etc.)."),
-                    ["context"]      = new("string", "Background context for the reviewer: what to focus on, constraints, definition of done. State where the changes live — the reviewer sees a mirror of the working tree you launched from only; if the changeset is elsewhere or incomplete there, say so and inline the relevant diffs. Whether it sees your UNCOMMITTED work is conditional: only when the run actually borrows your checkout. Responses report this as workspace: borrowed | fallback (<reason>) | unknown — for the reserved review aliases; other flow kinds report unknown. On fallback your working tree was NOT borrowed, so inline anything uncommitted that matters."),
+                    ["context"]      = new("string", "Background context for the reviewer: what to focus on, constraints, definition of done. State where the changes live — the reviewer sees a mirror of THIS SESSION's project directory, not of the directory you are working in; if your changeset is elsewhere or incomplete there, say so, give an explicit commit range, and inline the relevant diffs. Whether it sees your UNCOMMITTED work is conditional: only when the run actually borrows your checkout. Responses report this as workspace: borrowed | fallback (<reason>) | unknown — for the reserved review aliases; other flow kinds report unknown. On fallback your checkout was NOT borrowed, so inline anything uncommitted that matters."),
                     ["instructions"] = new("string", "Optional additional instructions for the reviewer agent."),
-                    ["mode"]         = new("string", "Optional. Pass 'context-only' to have the reviewer treat the submitted context/diff as authoritative rather than reading the repository. By default the reviewer runs in a worktree mirrored from your working tree (uncommitted changes included) when it runs on the same machine, so it can ground the review in the actual source; passing 'context-only' opts out of that."),
+                    ["mode"]         = new("string", "Optional. Pass 'context-only' to have the reviewer treat the submitted context/diff as authoritative rather than reading the repository. By default, on the same machine, it reviews a worktree mirrored from THIS SESSION's project directory — not from the directory you are working in — with uncommitted changes only when your checkout is borrowed."),
                     ["vendor"]       = new("string", "Optional reviewer vendor for the reserved alias, independent of the driver harness. Omit to use the server's Flows:Review:DefaultVendor. The selected vendor must be installed and certified unattended on an eligible daemon; there is no silent fallback. Pass the lowercase canonical vendor token (e.g. 'claude', 'codex')."),
                     ["model"]        = new("string", "Optional reviewer model override for this review. REQUIRES 'vendor' — the model is interpreted against that vendor (there is no vendor->model table here), so passing model without vendor is rejected locally. Omit to use the vendor's default reviewer model. The chosen model must be resolvable and certified on the selected daemon; there is no silent fallback. Pass the vendor's own model id or alias verbatim (case-sensitive) — do not translate or guess it. Requires a server that supports the v3 flow-start protocol.")
                 },
@@ -1544,9 +1560,9 @@ static class McpFlowsServer {
                     ["target_kind"]    = new("string", "What is being reviewed: 'pr', 'branch', 'file', 'spec', 'plan', etc."),
                     ["target_ref"]     = new("string", "A reference to the target (PR URL, branch name, file path, etc.)."),
                     ["target_title"]   = new("string", "Human-readable title for the target (PR title, spec name, etc.)."),
-                    ["context"]        = new("string", "Background context for the agent: what to focus on, constraints, definition of done. State where the changes live — the participant sees a mirror of the working tree you launched from only; if the changeset is elsewhere or incomplete there, say so and inline the relevant diffs."),
+                    ["context"]        = new("string", "Background context for the agent: what to focus on, constraints, definition of done. State where the changes live — the participant sees a mirror of THIS SESSION's project directory, not of the directory you are working in; if your changeset is elsewhere or incomplete there, say so, give an explicit commit range, and inline the relevant diffs."),
                     ["instructions"]   = new("string", "Optional additional instructions for the agent."),
-                    ["mode"]           = new("string", "Optional. Pass 'context-only' to have the agent treat the submitted context/diff as authoritative rather than reading the repository. By default the agent runs in a worktree mirrored from your working tree (uncommitted changes included) when it runs on the same machine, so it can ground the work in the actual source; passing 'context-only' opts out of that."),
+                    ["mode"]           = new("string", "Optional. Pass 'context-only' to have the agent treat the submitted context/diff as authoritative rather than reading the repository. By default, on the same machine, it works in a worktree mirrored from THIS SESSION's project directory — not from the directory you are working in — with uncommitted changes only when your checkout is borrowed."),
                     ["vendor"]         = new("string", "Optional reviewer vendor. Reserved spec-review/code-review aliases use it independently of the driver, or use the server default when omitted. Custom single-participant catalog definitions accept an explicit override. Rejected for multi-participant and definition_yaml flows. The selected vendor must be certified unattended on an eligible daemon; no silent fallback. Pass a lowercase canonical token."),
                     ["model"]          = new("string", "Optional reviewer model override for a single-participant catalog review definition. REQUIRES 'vendor' — the model is interpreted against that vendor (there is no vendor->model table here), so passing model without vendor is rejected locally. Rejected for definition_yaml (dynamic) and multi-participant flows. Omit to use the vendor's default reviewer model. The chosen model must be resolvable and certified on the selected daemon; there is no silent fallback. Pass the vendor's own model id or alias verbatim (case-sensitive) — do not translate or guess it. Requires a server that supports the v3 flow-start protocol.")
                 },
