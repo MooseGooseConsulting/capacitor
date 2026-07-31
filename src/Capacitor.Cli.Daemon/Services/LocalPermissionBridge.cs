@@ -40,6 +40,21 @@ internal sealed partial class LocalPermissionBridge(
     int                      _port;
     int                      _listenerClosed;
 
+    // Guards DisposeAsync so its body runs exactly once.
+    //
+    // DaemonRunner registers this type through TWO singleton descriptors —
+    // AddSingleton<LocalPermissionBridge>() so the orchestrator can read the bound URL, and an
+    // AddHostedService factory resolving that same instance so the listener starts before any
+    // agent spawns. Microsoft DI tracks disposables per DESCRIPTOR and does not de-duplicate by
+    // reference, so ServiceProviderEngineScope.DisposeAsync walks this one instance twice,
+    // sequentially. No thread race is required.
+    //
+    // Without this guard the second pass reached StopAsync's _cts.CancelAsync() on an
+    // already-disposed CTS, and the ObjectDisposedException surfaced inside
+    // ServiceProviderEngineScope.DisposeAsync where nothing catches it — terminating the daemon
+    // rather than shutting it down.
+    int _disposed;
+
     // Live per-reviewer tokens → each token's bound (read-only) kcap allowlist servers. A request on
     // a reviewer token auto-approves that reviewer's kcap tools; the shared token keeps the
     // interactive prompt path. The token is a secret only the reviewer process holds, so an
@@ -131,7 +146,17 @@ internal sealed partial class LocalPermissionBridge(
     }
 
     public async Task StopAsync(CancellationToken cancellationToken) {
-        if (_cts is not null) await _cts.CancelAsync();
+        // Read the field ONCE. DisposeAsync exchanges it to null BEFORE disposing, so a plain read
+        // is enough: reference reads are atomic, and the only bad outcome — capturing a non-null
+        // reference that is disposed a moment later — is handled by the catch below. (An
+        // interlocked read would add nothing here.) Cancelling an already-disposed CTS throws, and
+        // this runs on the host's dispose path where a throw is fatal, so treat it as an
+        // already-stopped bridge rather than an error.
+        var cts = _cts;
+        if (cts is not null) {
+            try { await cts.CancelAsync(); }
+            catch (ObjectDisposedException) { /* already stopped and disposed — nothing to cancel */ }
+        }
 
         // Close exactly once, before awaiting the accept loop. Stop() alone releases the port but
         // leaves HttpListener's prefix registered until a later Close(); another bridge can claim
@@ -150,13 +175,30 @@ internal sealed partial class LocalPermissionBridge(
         }
     }
 
+    /// <summary>
+    /// Idempotent and non-throwing. Runs its body exactly once even under a concurrent second
+    /// call, and swallows anything StopAsync raises: this executes inside the DI/host teardown
+    /// (ServiceProviderEngineScope.DisposeAsync), where an escaping exception is unhandled and
+    /// terminates the daemon instead of shutting it down.
+    /// </summary>
     public async ValueTask DisposeAsync() {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+
         try {
             await StopAsync(CancellationToken.None);
+        } catch (Exception ex) {
+            // Deliberately broad. This is a teardown boundary: DI stops walking its remaining
+            // disposables the moment an exception escapes, so letting anything through here would
+            // strand other services' cleanup as well as killing the process. Logged rather than
+            // swallowed silently, so a real teardown failure is still diagnosable.
+            LogDisposeFailed(logger, ex);
         } finally {
             ReleasePortClaim(_port);
             _port = 0;
-            _cts?.Dispose();
+            // Null it out before disposing so a racing StopAsync sees "already stopped" rather
+            // than a live-looking reference to a CTS that is about to be (or already is) disposed.
+            var cts = Interlocked.Exchange(ref _cts, null);
+            cts?.Dispose();
         }
     }
 
@@ -524,4 +566,7 @@ internal sealed partial class LocalPermissionBridge(
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Permission bridge handler error")]
     static partial void LogBridgeHandlerError(ILogger logger, Exception exception);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Permission bridge shutdown failed; continuing teardown")]
+    static partial void LogDisposeFailed(ILogger logger, Exception exception);
 }
