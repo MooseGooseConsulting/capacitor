@@ -258,6 +258,28 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
     }
 
     /// <summary>
+    /// Replaces every <see cref="AcpVendorDescriptors.UnmatchableMcpNamePlaceholder"/> with a fresh,
+    /// unguessable name — once per launch, so two concurrent agents do not even share one.
+    ///
+    /// <para><b>Why random rather than a constant.</b> A vendor whose only MCP clamp is an allowlist can be
+    /// made to deny everything by allowing a name nothing has. A CONSTANT deny-all name is not that: the
+    /// repository being reviewed controls its own MCP config and can name a server exactly that constant,
+    /// which was measured to execute. So the deny-all value has to be outside repository control, which
+    /// means unpredictable.</para>
+    ///
+    /// <para>Kept generic rather than Gemini-specific: any vendor whose containment is "allow a name that
+    /// cannot exist" needs the same treatment, and a per-vendor copy of this reasoning is how one of them
+    /// ends up with a guessable literal again.</para>
+    /// </summary>
+    static List<string> SubstituteUnmatchableNames(List<string> argv) {
+        for (var i = 0; i < argv.Count; i++)
+            if (argv[i] == AcpVendorDescriptors.UnmatchableMcpNamePlaceholder)
+                argv[i] = $"kcap-deny-{Guid.NewGuid():N}";
+
+        return argv;
+    }
+
+    /// <summary>
     /// Merges the per-launch model override with the daemon-wide default —
     /// <paramref name="ctx"/>'s own <c>Model</c> takes precedence when the launch specifies one,
     /// else falls back to <paramref name="descriptor"/>'s <c>ResolveDefaultModel</c>. Mirrors the
@@ -320,7 +342,7 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
             throw new InvalidOperationException(
                 $"Unattended review-flow launch for '{descriptor.Vendor}' requires daemon snapshot materialization before spawn.");
 
-        var argv = new List<string>(descriptor.Argv);
+        var argv = SubstituteUnmatchableNames([.. descriptor.Argv]);
 
         if (ctx.IsReviewFlow) {
             argv.AddRange(descriptor.UnattendedTrustArgv);
