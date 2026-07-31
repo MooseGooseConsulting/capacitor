@@ -30,6 +30,8 @@ public class UnusableUrlHookMatrixTests : IDisposable {
         "file:///etc/passwd",   // absolute, wrong scheme
     ];
 
+    const string Sid = "0123456789abcdef0123456789abcdef";
+
     readonly string _cfgDir = Path.Combine(Path.GetTempPath(), $"kcap-matrix-cfg-{Guid.NewGuid():N}");
     readonly List<Process> _spawned = [];
 
@@ -208,5 +210,84 @@ public class UnusableUrlHookMatrixTests : IDisposable {
         var binaryName  = OperatingSystem.IsWindows() ? "kcap.exe" : "kcap";
 
         return Path.Combine(repoRoot, "src", "Capacitor.Cli", "bin", config, "net10.0", binaryName);
+    }
+
+    /// <summary>
+    /// Judge alone built its client before opening stdio, so an unusable URL killed it ahead of the
+    /// handshake. Needs a child process: the failure mode is the process dying.
+    /// </summary>
+    [Test]
+    [MethodDataSource(nameof(UnusableUrls))]
+    public async Task Mcp_judge_completes_the_handshake_and_returns_a_tool_error(string url) {
+        var binary = GetCliBinaryPath();
+
+        if (!File.Exists(binary)) {
+            throw new FileNotFoundException(
+                $"kcap binary not found at {binary}. Build it first: dotnet build src/Capacitor.Cli/Capacitor.Cli.csproj",
+                binary);
+        }
+
+        Directory.CreateDirectory(_cfgDir);
+
+        var psi = new ProcessStartInfo(binary) {
+            RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
+            UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = _cfgDir,
+            Environment = {
+                ["KCAP_URL"] = url, ["KCAP_CONFIG_DIR"] = _cfgDir,
+                ["KCAP_NO_UPDATE_CHECK"] = "1", ["KCAP_SESSION_ID"] = "",
+            },
+        };
+        foreach (var a in new[] { "mcp", "judge", "--session", Sid }) psi.ArgumentList.Add(a);
+
+        using var proc = Process.Start(psi) ?? throw new InvalidOperationException("failed to start kcap");
+        _spawned.Add(proc);
+
+        var initialize = await SendRequestAsync(proc, Rpc(1, "initialize", new JsonObject()));
+        await Assert.That(initialize).Contains("\"id\":1");
+
+        var toolCall = await SendRequestAsync(proc, Rpc(2, "tools/call", new JsonObject {
+            ["name"]      = "get_session_recap",
+            ["arguments"] = new JsonObject { ["session_id"] = Sid },
+        }));
+
+        // The fault is reported IN the protocol, not by dying.
+        await Assert.That(toolCall).Contains("server_url is missing a scheme");
+
+        // And it is still serving afterwards.
+        var afterwards = await SendRequestAsync(proc, Rpc(3, "tools/list", new JsonObject()));
+        await Assert.That(afterwards).Contains("\"id\":3");
+
+        proc.StandardInput.Close();
+        using var exitCts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        await proc.WaitForExitAsync(exitCts.Token);
+        await Assert.That(proc.ExitCode).IsNotEqualTo(2);
+    }
+
+    static string Rpc(int id, string method, JsonObject parameters) =>
+        new JsonObject {
+            ["jsonrpc"] = "2.0",
+            ["id"]      = id,
+            ["method"]  = method,
+            ["params"]  = parameters,
+        }.ToJsonString();
+
+    /// <summary>
+    /// Mirrors <c>McpSessionsServerTests.SendRequest</c>. The cancellation token matters: a
+    /// <c>Task.WhenAny</c> timeout leaves the losing read pending, and it can then consume the next
+    /// response and desynchronise later assertions.
+    /// </summary>
+    static async Task<string> SendRequestAsync(Process proc, string request) {
+        await proc.StandardInput.WriteLineAsync(request);
+        await proc.StandardInput.FlushAsync();
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var line = await proc.StandardOutput.ReadLineAsync(cts.Token);
+
+        if (line is null) {
+            var stderr = await proc.StandardError.ReadToEndAsync();
+            throw new InvalidOperationException($"MCP server closed stdout without responding. Stderr: {stderr}");
+        }
+
+        return line;
     }
 }
