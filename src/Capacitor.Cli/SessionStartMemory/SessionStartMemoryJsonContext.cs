@@ -35,5 +35,6 @@ internal sealed record CodexMemoryEnvelope(
 internal sealed record CursorMemoryEnvelope([property: JsonPropertyName("additional_context")] string? AdditionalContext = null);
 internal sealed record CopilotMemoryEnvelope([property: JsonPropertyName("additionalContext")] string? AdditionalContext = null);
 internal sealed record GeminiMemoryEnvelope([property: JsonPropertyName("hookSpecificOutput")] HookMemoryOutput? HookSpecificOutput = null);
+
 internal sealed record AntigravityMemoryEnvelope([property: JsonPropertyName("injectSteps")] AntigravityMemoryStep[]? InjectSteps = null);
 internal sealed record AntigravityMemoryStep([property: JsonPropertyName("userMessage")] string UserMessage);
