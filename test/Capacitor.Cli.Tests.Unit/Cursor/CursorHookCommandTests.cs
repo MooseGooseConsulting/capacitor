@@ -365,15 +365,49 @@ public class CursorHookCommandTests {
 
         await Assert.That(exit).IsEqualTo(0);
 
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
-        while (!fx.SpoolFiles.Any() && DateTime.UtcNow < deadline) {
-            await Task.Delay(20);
+        // Poll for CONTENT, not existence: the spool file is seeded → deleted once drained → re-created by
+        // the fresh sessionEnd, and an existence check cannot tell the seeded file from the re-created one.
+        // The handle must block nothing the drain does — HookSpool both appends to and File.Move/Delete's
+        // this exact path, and every restriction is mandatory on Windows but invisible on Unix.
+        // SingleOrDefault: a second *.jsonl for one session id would be a real bug worth throwing on.
+        const int budgetSeconds = 10;
+
+        var deadline      = DateTime.UtcNow + TimeSpan.FromSeconds(budgetSeconds);
+        var spoolContent  = (string?)null;
+        var observedEnd   = false;
+        var lastIoFailure = (IOException?)null;
+
+        while (!observedEnd && DateTime.UtcNow < deadline) {
+            if (fx.SpoolFiles.SingleOrDefault() is { } path) {
+                try {
+                    await using var stream = new FileStream(
+                        path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                    using var reader = new StreamReader(stream);
+                    spoolContent  = await reader.ReadToEndAsync();
+                    lastIoFailure = null; // a clean read means any earlier failure was the transient race
+                    observedEnd   = spoolContent.Contains("sessionEnd", StringComparison.Ordinal);
+                } catch (IOException ex) {
+                    // The enumerate→open race, not a sharing conflict: the share flags above permit
+                    // everything the drain does, but a path EnumerateFiles just returned can be deleted
+                    // before we open it.
+                    lastIoFailure = ex;
+                }
+            }
+
+            if (!observedEnd) await Task.Delay(20);
         }
 
-        var spoolPath = fx.SpoolFiles.SingleOrDefault();
-        await Assert.That(spoolPath).IsNotNull();
-        var spoolContent = await File.ReadAllTextAsync(spoolPath!);
-        await Assert.That(spoolContent).Contains("sessionEnd");
+        // Gated on whether the TARGET was observed, not on content being null: a clean read of the stale
+        // seeded line leaves content non-null, so a null check would skip this and let a persistent
+        // filesystem fault masquerade as "the append never happened".
+        if (!observedEnd && lastIoFailure is not null) {
+            throw new IOException(
+                $"spool never yielded sessionEnd within {budgetSeconds}s; last IO failure: {lastIoFailure.Message}",
+                lastIoFailure);
+        }
+
+        await Assert.That(spoolContent).IsNotNull();
+        await Assert.That(spoolContent!).Contains("sessionEnd");
     }
 
     // Task 2: single-writer, deadline-safe stdout emission for Cursor's
