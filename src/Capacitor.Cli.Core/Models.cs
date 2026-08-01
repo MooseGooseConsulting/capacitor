@@ -1301,7 +1301,12 @@ public readonly record struct LaunchAgentCommand(
         ExplicitReviewerModelLaunch? ExplicitReviewerModel = null,
         // Interactive Codex launches only; any other launch shape is rejected by CodexPosturePolicy.
         // Appended last so the wire stays compatible with older daemons and servers.
-        CodexLaunchPosture? CodexPosture = null
+        CodexLaunchPosture? CodexPosture = null,
+        // Consent: who asked for this launch. Appended last, same wire-compat rule as the
+        // fields above — old daemons ignore them, old servers never set them (null ⇒ unknown ⇒
+        // the consent engine falls through rules to the configured default).
+        string?           RequesterUserId       = null,
+        bool?             RequesterIsOwner      = null
     );
 
 /// <summary>Caller-selected Codex launch posture. Valid ONLY for interactive, daemon-owned-worktree

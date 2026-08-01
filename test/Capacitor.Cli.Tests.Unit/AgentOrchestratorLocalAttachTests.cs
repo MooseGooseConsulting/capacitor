@@ -20,6 +20,16 @@ public partial class AgentOrchestratorVendorTests {
     static RestartCoordinator TestCoordinator() =>
         RestartCoordinator.ForTest("test", "test", new NoopRestartStrategy());
 
+    // Consent: a fresh, throwaway consent store/broker pair — these pre-existing LocalControlServer
+    // tests don't exercise consent at all, so the wiring only needs to satisfy the ctor.
+    static LaunchConsentIpc TestConsentIpc() {
+        var dir = Directory.CreateTempSubdirectory("kcap-consent-ipc-").FullName;
+        return new LaunchConsentIpc(
+            new LaunchConsentBroker(),
+            new LaunchConsentStore(dir, NullLogger.Instance),
+            NullLogger<LaunchConsentIpc>.Instance);
+    }
+
     static DaemonConfig LauncherCfg() => new() { Name = "t", ServerUrl = "http://127.0.0.1:1" };
 
     static LauncherContext CtxFor(string path)
@@ -200,6 +210,45 @@ public partial class AgentOrchestratorVendorTests {
             var deadline = DateTime.UtcNow.AddSeconds(5);
             while (orch.ActiveAgentCountForTest > 0 && DateTime.UtcNow < deadline) await Task.Delay(20);
 
+            await Assert.That(server.Calls).Contains(nameof(ServerConnection.AgentRegisteredAsync));
+            await Assert.That(pty.LastEnv!.ContainsKey("KCAP_URL")).IsTrue();
+            await Assert.That(pty.LastEnv!.ContainsKey("KCAP_AGENT_ID")).IsTrue();
+            await Assert.That(pty.LastEnv!.ContainsKey("KCAP_RENDERED_AGENT")).IsTrue();
+        } finally {
+            Directory.Delete(dir.FullName, true);
+        }
+    }
+
+    // Consent: the owner consent gate lives in HandleLaunchAgentCore (the SERVER-driven launch
+    // choke point) only. The local 0600 socket path (kcap agent start -> HandleLocalSpawnAsync)
+    // never calls that method, so a deny-default gate must not stop it — that socket is the
+    // owner's by construction.
+    [Test]
+    public async Task Local_spawn_bypasses_consent_under_deny_default() {
+        var dir = Directory.CreateTempSubdirectory("kcap-consent-local-");
+        var consentDir = Directory.CreateTempSubdirectory("kcap-consent-local-state-").FullName;
+
+        try {
+            var server    = new TripwireServerConnection();
+            var pty       = new EnvCapturingPtyFactory();
+            var launchers = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = new SpyHostedAgentLauncher("claude", "spy-claude") };
+
+            await using var orch = BuildOrchestrator(server, pty, launchers, consentGate: DenyDefaultGate(consentDir));
+
+            var readBuf = new MemoryStream();
+            await FrameCodec.WriteAsync(readBuf, LocalFrame.Detach(), default);
+            readBuf.Position = 0;
+            using var client = new DuplexTestStream(readBuf, new MemoryStream());
+
+            var spawn = FrameCodec.Spawn("claude", WorkLocation.BorrowedCwd, isPrivate: false, dir.FullName, ["--model", "opus"], 80, 24);
+            await orch.HandleLocalSpawnAsync(spawn, client, default);
+
+            var deadline = DateTime.UtcNow.AddSeconds(5);
+            while (orch.ActiveAgentCountForTest > 0 && DateTime.UtcNow < deadline) await Task.Delay(20);
+
+            // Spawn succeeds exactly like Registered_spawn_calls_server_and_sets_hosted_env above —
+            // same assertions, proving consent was never consulted on this path (a deny-default
+            // gate would otherwise make AgentRegisteredAsync unreachable).
             await Assert.That(server.Calls).Contains(nameof(ServerConnection.AgentRegisteredAsync));
             await Assert.That(pty.LastEnv!.ContainsKey("KCAP_URL")).IsTrue();
             await Assert.That(pty.LastEnv!.ContainsKey("KCAP_AGENT_ID")).IsTrue();
@@ -491,7 +540,7 @@ public partial class AgentOrchestratorVendorTests {
             });
 
             var config = new DaemonConfig { Name = "test", ServerUrl = "http://127.0.0.1:1" };
-            listener = new LocalControlServer(config, orch, TestCoordinator(), NullLogger<LocalControlServer>.Instance);
+            listener = new LocalControlServer(config, orch, TestCoordinator(), TestConsentIpc(), NullLogger<LocalControlServer>.Instance);
             await listener.StartAsync(cts.Token);
 
             var sockPath = LocalSocketPaths.Socket("test");
@@ -536,7 +585,7 @@ public partial class AgentOrchestratorVendorTests {
             orch.SeedAgentForTest("flow-1", kind: LaunchKind.ReviewFlow, flowRunId: "flow-7f3a", flowRole: "reviewer");
 
             var config = new DaemonConfig { Name = daemonName, ServerUrl = "http://127.0.0.1:1" };
-            listener = new LocalControlServer(config, orch, TestCoordinator(), NullLogger<LocalControlServer>.Instance);
+            listener = new LocalControlServer(config, orch, TestCoordinator(), TestConsentIpc(), NullLogger<LocalControlServer>.Instance);
             await listener.StartAsync(cts.Token);
 
             var sockPath = LocalSocketPaths.Socket(daemonName);

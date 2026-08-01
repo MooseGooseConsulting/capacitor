@@ -324,6 +324,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     // window between ApplicationStopping firing and DisposeAsync running where
     // server calls would still throw TaskCanceledException unguarded.
     readonly CancellationTokenSource _shutdownCts;
+    readonly LaunchConsentGate _consentGate;
 
     public AgentOrchestrator(
             DaemonConfig                                      config,
@@ -336,7 +337,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             IReadOnlyDictionary<string, IHostedAgentLauncher> launchers,
             IReadOnlyDictionary<string, IHostedAgentRuntimeFactory> runtimeFactories,
             IHostApplicationLifetime                          lifetime,
-            ILogger<AgentOrchestrator>                        logger
+            ILogger<AgentOrchestrator>                        logger,
+            LaunchConsentGate                                 consentGate
         ) {
         _shutdownCts       = CancellationTokenSource.CreateLinkedTokenSource(lifetime.ApplicationStopping);
         _config            = config;
@@ -349,6 +351,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _launchers         = launchers;
         _runtimeFactories  = runtimeFactories;
         _logger            = logger;
+        _consentGate       = consentGate;
 
         // Phase B (D4): per-daemon PID-record store + this daemon's logical id + boot epoch.
         // Records live under "{stateDir}/{name}/agents" so they are unambiguously THIS daemon's own
@@ -902,6 +905,24 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         var attachmentIds = cmd.AttachmentIds;
         var isReview      = cmd.Kind == LaunchKind.Review;
         var isReviewFlow  = cmd.Kind == LaunchKind.ReviewFlow;
+
+        // Owner consent gate. Server-driven launches only — the local 0600 socket path
+        // (HandleLocalSpawnAsync) is the owner's by construction and never consults this.
+        // NOTE: in prompt mode this can hold the sequenced slot up to PromptTimeoutSeconds (≤300s,
+        // default 45s ≤ the server's 60s launch-admission patience); commands queued behind it wait
+        // — and, because SignalR dispatches server→client invocations sequentially, other server-relayed
+        // messages to this daemon queue behind the prompt for the same window.
+        var consentInput = new LaunchConsentInput(
+            cmd.RequesterUserId, cmd.RequesterIsOwner ?? false,
+            LaunchConsentEngine.KindToken(cmd.Kind), cmd.RepoPath, cmd.Vendor);
+        var consent = await _consentGate.DecideAsync(cmd.AgentId, consentInput, _shutdownCts.Token);
+        if (!consent.Allowed) {
+            _logger.LogWarning("Launch {AgentId} denied by consent policy ({Source})", cmd.AgentId, consent.Source);
+            await _server.LaunchFailedAsync(cmd.AgentId,
+                $"{LaunchConsentGate.DeniedReasonPrefix}: {consent.Detail}");
+
+            return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
+        }
 
         // Guard for a null/blank vendor before the dictionary lookup: LaunchAgentCommand crosses
         // the SignalR boundary where the non-null annotation isn't enforced, and Dictionary
