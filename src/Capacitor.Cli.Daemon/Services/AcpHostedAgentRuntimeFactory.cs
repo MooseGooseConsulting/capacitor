@@ -35,8 +35,15 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
         DaemonConfig                                                                   config,
         ILoggerFactory                                                                 loggerFactory,
         ServerConnection                                                               connection,
-        Func<RuntimeStartContext, (Stream Input, Stream Output, IAcpProcess Process)>? connectionSource = null
+        Func<RuntimeStartContext, (Stream Input, Stream Output, IAcpProcess Process)>? connectionSource = null,
+        // Test seam ONLY, for the certified-version decision. Production passes null, which interrogates the
+        // real binary. Tests pin a value so the OPERATOR-FLAG half of the gate is assertable on a host with
+        // no gemini installed — otherwise a disabled-daemon test passes for the wrong reason (unknown
+        // version) and would keep passing if advertisement stopped honouring the flag.
+        Func<string, string?>? resolveVendorVersion = null
     ) : IHostedAgentRuntimeFactory {
+    readonly Func<string, string?>? _resolveVendorVersion = resolveVendorVersion;
+
     readonly Func<RuntimeStartContext, (Stream Input, Stream Output, IAcpProcess Process)> _connectionSource =
         connectionSource ?? (ctx => StartRealProcess(descriptor, config, ctx, loggerFactory));
 
@@ -53,7 +60,30 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
     readonly ResolvedBorrowedReviewPolicy _policy = PolicyFor(descriptor);
 
     public string Vendor             => descriptor.Vendor;
-    public bool   SupportsUnattended => descriptor.SupportsUnattended;
+
+    /// <summary>
+    /// Whether this daemon advertises the vendor as unattended-capable. For an aliasing vendor (Gemini) this
+    /// also requires the operator's capability gate AND a certified vendor version, so a daemon that has not
+    /// opted in is never selected as a reviewer host in the first place.
+    ///
+    /// <para>Advertisement is an OPTIMISATION, not the boundary — the authoritative check is in
+    /// <see cref="BuildProcessStartInfo"/>, immediately before the spawn, because an explicit
+    /// <c>vendor: "gemini"</c> request can reach a launch without consulting advertisement.</para>
+    /// </summary>
+    public bool SupportsUnattended {
+        get {
+            if (!descriptor.SupportsUnattended)      return false;
+            if (!AliasesResultChannel(descriptor))   return true;
+
+            // Operator flag FIRST, and short-circuit. Review's point: evaluating the version probe as an
+            // argument meant an installed-but-wedged vendor binary could hang daemon STARTUP even though the
+            // reviewer was switched off — a hang on a code path the operator opted out of.
+            if (!config.GeminiUnattendedReviewerEnabled) return false;
+
+            return GeminiReviewerCapability.IsEnabled(
+                true, (_resolveVendorVersion ?? ResolveGeminiVersion)(descriptor.ResolveBinaryPath(config)));
+        }
+    }
     public bool   SupportsBorrowedReviewFlow => _policy.Supported;
     public bool   BorrowedReviewRequiresIndependentSnapshot =>
         _policy.Containment == AcpBorrowedReviewContainment.IndependentSnapshot;
@@ -81,6 +111,23 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
         AcpMetrics.Launches.Add(1);
 
         ValidateBorrowedArtifact(ctx, _policy);
+
+        // The launch's generated names, created ONCE here and threaded through ctx so the session/new MCP
+        // list and the argv's allowlist are built from the SAME instance. Two derivations would produce a
+        // launch whose allowlist does not admit its own result channel, and that failure is silent.
+        //
+        // Deliberately overwrites: LaunchIdentity is not a caller input. Honouring one supplied on the way
+        // in would let a requester choose the names whose unguessability is the entire MCP containment.
+        ctx = ctx with { LaunchIdentity = LaunchIdentity.ForLaunch(AliasesResultChannel(descriptor)) };
+
+        // The operator capability gate, BEFORE _connectionSource runs.
+        //
+        // Review caught this: the gate lived only in BuildProcessStartInfo, which only the DEFAULT connection
+        // source calls. A supplied source — a test seam today, but the seam is the invariant's boundary either
+        // way — was invoked for a disabled daemon or an uncertified vendor version and could spawn directly.
+        // "Unbypassable" has to mean before any source, not before the default one. The builder keeps its own
+        // check as defence in depth, since a direct builder call is its own path.
+        RequireGeminiReviewerCapability(descriptor, config, ctx.IsReviewFlow, _resolveVendorVersion);
 
         // Fail closed BEFORE _connectionSource spawns a child (a later gate would leak one). Null for
         // a non-review launch; the built MCP list for a valid review flow.
@@ -271,13 +318,24 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
     /// cannot exist" needs the same treatment, and a per-vendor copy of this reasoning is how one of them
     /// ends up with a guessable literal again.</para>
     /// </summary>
-    static List<string> SubstituteUnmatchableNames(List<string> argv) {
+    static List<string> SubstituteUnmatchableNames(List<string> argv, LaunchIdentity identity) {
         for (var i = 0; i < argv.Count; i++)
             if (argv[i] == AcpVendorDescriptors.UnmatchableMcpNamePlaceholder)
-                argv[i] = $"kcap-deny-{Guid.NewGuid():N}";
+                argv[i] = identity.UnmatchableMcpName;
 
         return argv;
     }
+
+    /// <summary>
+    /// Whether this vendor's result channel must be injected under a per-launch unguessable name.
+    ///
+    /// <para>True only for Gemini: its MCP gate is an exact-name allowlist that has to admit our own
+    /// channel, so the channel's name is itself allowlisted — and a fixed one is matchable by the repository
+    /// under review. Every other vendor keeps the canonical id on the wire, so their behaviour is
+    /// byte-identical to before the alias existed.</para>
+    /// </summary>
+    static bool AliasesResultChannel(AcpVendorDescriptor descriptor) =>
+        descriptor.Vendor == AcpVendorDescriptors.Gemini.Vendor;
 
     /// <summary>
     /// Merges the per-launch model override with the daemon-wide default —
@@ -313,7 +371,8 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
     internal static ProcessStartInfo BuildProcessStartInfo(
             AcpVendorDescriptor descriptor, DaemonConfig config, RuntimeStartContext ctx,
             ResolvedBorrowedReviewPolicy? policy = null,
-            Func<string, string?>? readEnvironmentVariable = null) {
+            Func<string, string?>? readEnvironmentVariable = null,
+            Func<string, string?>? resolveGeminiVersion = null) {
         var resolved = policy ?? PolicyFor(descriptor);
         // Defense-in-depth: the orchestrator's UnattendedLaunchPolicy is expected to reject a
         // review-flow launch for a vendor that doesn't support it before this factory ever runs,
@@ -342,10 +401,29 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
             throw new InvalidOperationException(
                 $"Unattended review-flow launch for '{descriptor.Vendor}' requires daemon snapshot materialization before spawn.");
 
-        var argv = SubstituteUnmatchableNames([.. descriptor.Argv]);
+        // The launch's generated names. StartAsync threads them in; a direct builder call (a test, a future
+        // caller, a refactor that inlines the spawn) gets a fresh set rather than a null deref — but the
+        // production path must supply one, or the argv and the session/new MCP list would be built from two
+        // different identities and the allowlist would not admit its own result channel.
+        var identity = ctx.LaunchIdentity ?? LaunchIdentity.ForLaunch(AliasesResultChannel(descriptor));
+
+        // Defence in depth: StartAsync gates before any connection source runs, but a direct builder call
+        // (a test, a future caller, a refactor that inlines the spawn) is its own path to an argv.
+        RequireGeminiReviewerCapability(descriptor, config, ctx.IsReviewFlow, resolveGeminiVersion);
+
+        var argv = SubstituteUnmatchableNames([.. descriptor.Argv], identity);
 
         if (ctx.IsReviewFlow) {
             argv.AddRange(descriptor.UnattendedTrustArgv);
+
+            // A review launch REPLACES the deny-all allowlist value with the channel's wire name. Replace,
+            // never append: the option is array-typed and comma-coerced by the vendor, so a second entry
+            // would widen the gate rather than move it. Deny-all is what a launch gets by default and only
+            // this arm opens it, which is the fail-closed direction.
+            if (AliasesResultChannel(descriptor))
+                for (var i = 0; i < argv.Count; i++)
+                    if (argv[i] == identity.UnmatchableMcpName)
+                        argv[i] = identity.ResultChannelWireName;
 
             if (descriptor.ReviewFlowMcpTransport == AcpReviewFlowMcpTransport.CopilotAdditionalConfig) {
                 var reviewMcp = ValidateAndBuildReviewFlowMcp(ctx, descriptor, resolved)!;
@@ -443,6 +521,13 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
             psi.Environment[BorrowedReviewAuthBroker.TargetVariable] = brokeredToken;
         }
 
+        // LAST, after every contributor and every substitution, and on psi.ArgumentList rather than the
+        // local list — this is the vector the process receives, and nothing between here and Process.Start
+        // touches it. Asserting the local list instead would certify something the OS never sees, which is
+        // worse than no assertion because it looks like coverage.
+        if (AliasesResultChannel(descriptor) && psi.FileName != BorrowedReviewSandbox.SandboxExecPath)
+            AssertGeminiArgvIsCanonical(psi.ArgumentList, ctx.IsReviewFlow, identity);
+
         return psi;
     }
 
@@ -506,6 +591,143 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
             foreach (var tool in tools.Order(StringComparer.Ordinal))
                 yield return $"{server.Name}-{tool}";
         }
+    }
+
+    /// <summary>
+    /// The daemon OPERATOR's consent for an unattended Gemini reviewer, keyed on the RESOLVED descriptor's
+    /// vendor rather than any requester-supplied text so an alias or case variant cannot slip past.
+    ///
+    /// <para>Called from BOTH <see cref="StartAsync"/> (before any connection source runs — that is the
+    /// boundary) and <see cref="BuildProcessStartInfo"/> (defence in depth for a direct builder call).
+    /// No-op for every other vendor and for every interactive launch.</para>
+    /// </summary>
+    static void RequireGeminiReviewerCapability(
+            AcpVendorDescriptor descriptor, DaemonConfig config, bool isReviewFlow,
+            Func<string, string?>? resolveVersion) {
+        if (!isReviewFlow || !AliasesResultChannel(descriptor)) return;
+
+        // Operator consent is checked FIRST so a disabled daemon never interrogates the vendor binary at all.
+        // Review's point: probing an installed-but-wedged vendor while the feature is switched off is a way
+        // to hang on a code path the operator opted out of.
+        if (!config.GeminiUnattendedReviewerEnabled)
+            throw new InvalidOperationException(GeminiReviewerCapability.DenialReason(false, null));
+
+        var version = (resolveVersion ?? ResolveGeminiVersion)(descriptor.ResolveBinaryPath(config));
+
+        if (!GeminiReviewerCapability.IsEnabled(true, version))
+            throw new InvalidOperationException(GeminiReviewerCapability.DenialReason(true, version));
+    }
+
+    /// <summary>
+    /// Gemini's certified-version input: the installed binary's own reported version, or null when it
+    /// cannot be determined (which the capability treats as unknown, and therefore denies).
+    /// </summary>
+    static string? ResolveGeminiVersion(string binaryPath) {
+        try {
+            var resolved = CliResolver.ResolveExecutable(binaryPath);
+            if (resolved is null) return null;
+
+            using var proc = Process.Start(new ProcessStartInfo(resolved, ["--version"]) {
+                RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false,
+                CreateNoWindow = true
+            });
+            if (proc is null) return null;
+
+            // Both streams are drained CONCURRENTLY with the wait, and the wait is what bounds this.
+            //
+            // Review caught a deadlock: the previous shape called ReadToEnd() before WaitForExit(10s), so a
+            // vendor that never closed stdout blocked before the timeout could apply — and stderr was
+            // redirected but never drained, so filling its buffer wedged the child too. A bounded wait is
+            // only bounded if nothing ahead of it can block indefinitely.
+            var stdout = proc.StandardOutput.ReadToEndAsync();
+            var stderr = proc.StandardError.ReadToEndAsync();
+
+            if (!proc.WaitForExit(TimeSpan.FromSeconds(10))) {
+                try { proc.Kill(entireProcessTree: true); } catch { /* already gone */ }
+
+                return null;   // a timeout is an UNKNOWN version, which the capability denies
+            }
+
+            // The child has exited, so both reads are complete or completing; bounded again so a detached
+            // grandchild holding a pipe cannot keep us here.
+            if (!Task.WhenAll(stdout, stderr).Wait(TimeSpan.FromSeconds(5))) return null;
+
+            // Extract a version TOKEN from either stream rather than requiring the whole trimmed output to be
+            // one. Measured: gemini 0.53.0 prints the version to stdout AND stderr — but requiring exact
+            // equality is brittle either way, since the vendor already emits banner lines (skill-conflict
+            // warnings) on other paths, and a build that added an "update available" notice would make the
+            // gate fail closed and silently disable the reviewer. Review's point, and it applies even though
+            // today's format happens to work.
+            return proc.ExitCode == 0
+                ? ExtractVersionToken(stdout.Result) ?? ExtractVersionToken(stderr.Result)
+                : null;
+        } catch {
+            // Any failure to interrogate the binary is "unknown version", which the capability denies. A
+            // throw here would surface as a launch error rather than a coded capability refusal.
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// The first dotted-numeric token in <paramref name="output"/>, or null. Deliberately narrow: a
+    /// certified-version check compares against an exact set, so anything that is not recognisably a version
+    /// must read as UNKNOWN (and therefore denied) rather than as some near-miss string.
+    /// </summary>
+    internal static string? ExtractVersionToken(string? output) {
+        if (string.IsNullOrWhiteSpace(output)) return null;
+
+        foreach (var raw in output.Split([' ', '\t', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries)) {
+            var tok = raw.Trim().TrimStart('v', 'V');
+
+            if (tok.Length > 0 && tok.All(c => char.IsAsciiDigit(c) || c == '.') && tok.Contains('.'))
+                return tok;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// The complete expected argv for a Gemini launch, as a literal structural sequence with only the
+    /// launch-identity values substituted.
+    ///
+    /// <para><b>Deliberately not derived from <c>descriptor.Argv</c>.</b> If it were, a token newly added to
+    /// the descriptor would appear on both sides of the comparison and pass while the launch had changed —
+    /// an oracle derived from the thing under test. Written out so a fourth contributor to the argv, or an
+    /// edited constant, goes red.</para>
+    /// </summary>
+    internal static string[] ExpectedGeminiArgv(bool isReviewFlow, LaunchIdentity identity) =>
+        isReviewFlow
+            ? ["--experimental-acp", "--skip-trust",
+               "--allowed-mcp-server-names", identity.ResultChannelWireName,
+               "--approval-mode", "yolo"]
+            : ["--experimental-acp", "--skip-trust",
+               "--allowed-mcp-server-names", identity.UnmatchableMcpName];
+
+    /// <summary>
+    /// Asserts the WHOLE emitted argv against <see cref="ExpectedGeminiArgv"/>.
+    ///
+    /// <para><b>This is not an input filter.</b> Nothing untrusted reaches this argv: the launch context
+    /// carries no arguments field, no configuration key supplies extra arguments, and the only contributors
+    /// are two <c>ImmutableArray</c> descriptor constants plus a Copilot-only branch. It asserts an invariant
+    /// about CODE — that adding a contributor cannot silently produce a Gemini launch which prompts for
+    /// approval or widens the MCP gate. It should be unfalsifiable today; if it ever throws, a contributor
+    /// was added without reading this.</para>
+    ///
+    /// <para>Whole-vector rather than a scan for dangerous options, because a template fails on any new
+    /// token whatever its spelling — so it needs no model of the vendor's option grammar, where camel-case
+    /// expansion and boolean negation both make an enumerated key list unprovable.</para>
+    /// </summary>
+    internal static void AssertGeminiArgvIsCanonical(IReadOnlyList<string> argv, bool isReviewFlow, LaunchIdentity identity) {
+        var expected = ExpectedGeminiArgv(isReviewFlow, identity);
+
+        if (argv.SequenceEqual(expected)) return;
+
+        throw new InvalidOperationException(
+            $"gemini_launch_argv_not_canonical: built [{string.Join(" ", argv)}] but this launch shape is "
+          + $"[{string.Join(" ", expected)}]. A contributor to the Gemini argv was added or changed; a "
+          + "review launch must carry exactly one --approval-mode yolo and exactly one allowlist entry "
+          + "naming its own result channel, and an interactive launch must carry the deny-all name and no "
+          + "approval mode (the Gemini reviewer design spec §3.3a).");
     }
 
     /// <summary>

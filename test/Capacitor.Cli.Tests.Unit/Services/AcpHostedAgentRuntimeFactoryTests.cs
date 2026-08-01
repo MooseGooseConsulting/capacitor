@@ -2040,4 +2040,213 @@ public class AcpHostedAgentRuntimeFactoryTests {
         await started.Runtime.DisposeAsync();
         await fake.DisposeAsync();
     }
+
+    // ── the Gemini reviewer's launch identity is not a caller input ──
+
+    /// <summary>
+    /// StartAsync overwrites any <c>LaunchIdentity</c> supplied on the way in. Honouring one would let a
+    /// requester choose the names whose unguessability is the entire MCP containment for an aliasing vendor,
+    /// so this asserts the launch does not use a caller-chosen value rather than trusting that no caller sets
+    /// one.
+    /// </summary>
+    [Test]
+    public async Task Gemini_ACallerSuppliedLaunchIdentity_DoesNotReachTheSpawnSeam() {
+        var attacker = LaunchIdentity.FromGuids(
+            Guid.Parse("cccccccc-cccc-cccc-cccc-cccccccccccc"),
+            Guid.Parse("dddddddd-dddd-dddd-dddd-dddddddddddd"),
+            aliasResultChannel: true);
+
+        var seen = (LaunchIdentity?)null;
+        var fake = new FakeAcpAgent();
+        var factory = new AcpHostedAgentRuntimeFactory(
+            descriptor: AcpVendorDescriptors.Gemini,
+            config: new DaemonConfig { GeminiUnattendedReviewerEnabled = true },
+            loggerFactory: NullLoggerFactory.Instance,
+            connection: new CaptureServerConnection(),
+            connectionSource: ctx => {
+                seen = ctx.LaunchIdentity;
+                return (fake.ClientWriteStream, fake.ClientReadStream, new FakeAcpProcess());
+            },
+            // PINNED. Since the capability gate moved ahead of the connection source, StartAsync resolves a
+            // version before this seam is reached — so without pinning, this test depends on whether a
+            // certified gemini happens to be installed: green on a dev machine, red on CI where the gate
+            // refuses as version-unresolved and `seen` stays null. Review caught exactly that.
+            resolveVendorVersion: _ => GeminiReviewerCapability.CertifiedVersions.First());
+
+        var ctx = ReviewContext() with { Vendor = "gemini", LaunchIdentity = attacker };
+
+        // A bare FakeAcpAgent never answers `initialize`, so StartAsync would wait for a handshake that
+        // never arrives. The subject is what the SPAWN SEAM was handed, which is recorded before any frame is
+        // exchanged — so a short-lived token is enough and keeps the test from hanging the suite.
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        try { await factory.StartAsync(ctx, cts.Token); }
+        catch { /* the handshake is not the subject; the seam recorded what it was handed either way */ }
+
+        await Assert.That(seen).IsNotNull();
+        await Assert.That(seen!.ResultChannelWireName).IsNotEqualTo(attacker.ResultChannelWireName);
+        await Assert.That(seen.UnmatchableMcpName).IsNotEqualTo(attacker.UnmatchableMcpName);
+    }
+
+    /// <summary>
+    /// Advertisement respects the operator's capability gate, so a daemon that never opted in is not selected
+    /// as a Gemini reviewer host at all. The optimisation arm — the boundary is the pre-spawn check in
+    /// BuildProcessStartInfo — but advertising a capability the daemon will then refuse is its own defect.
+    /// </summary>
+    [Test]
+    public async Task Gemini_ADisabledDaemon_DoesNotAdvertiseUnattendedSupport() {
+        // The version resolver is PINNED to a certified value so the only thing that can make this false is
+        // the operator flag. Review caught the earlier version leaving it unpinned: on a host with no gemini
+        // the version is unknown, so the test passed for that reason and would have kept passing if
+        // advertisement stopped honouring the flag entirely.
+        var certified = GeminiReviewerCapability.CertifiedVersions.First();
+
+        IHostedAgentRuntimeFactory disabled = new AcpHostedAgentRuntimeFactory(
+            AcpVendorDescriptors.Gemini, new DaemonConfig(), NullLoggerFactory.Instance,
+            new CaptureServerConnection(), resolveVendorVersion: _ => certified);
+
+        await Assert.That(disabled.SupportsUnattended).IsFalse();
+
+        IHostedAgentRuntimeFactory enabled = new AcpHostedAgentRuntimeFactory(
+            AcpVendorDescriptors.Gemini, new DaemonConfig { GeminiUnattendedReviewerEnabled = true },
+            NullLoggerFactory.Instance, new CaptureServerConnection(),
+            resolveVendorVersion: _ => certified);
+
+        await Assert.That(enabled.SupportsUnattended).IsTrue()
+            .Because("the positive control: without it, an advertisement that always said false would pass");
+    }
+
+    /// <summary>An enabled daemon on an UNCERTIFIED build still does not advertise — the two halves of the
+    /// gate are independent, and this is the half a version bump would break.</summary>
+    [Test]
+    public async Task Gemini_AnEnabledDaemonOnAnUncertifiedVersion_DoesNotAdvertise() {
+        IHostedAgentRuntimeFactory factory = new AcpHostedAgentRuntimeFactory(
+            AcpVendorDescriptors.Gemini, new DaemonConfig { GeminiUnattendedReviewerEnabled = true },
+            NullLoggerFactory.Instance, new CaptureServerConnection(),
+            resolveVendorVersion: _ => "99.99.99");
+
+        await Assert.That(factory.SupportsUnattended).IsFalse();
+    }
+
+    /// <summary>Other vendors' advertisement is unaffected — the gate is Gemini-scoped.</summary>
+    [Test]
+    public async Task OtherVendorsAdvertisement_IsUnaffectedByTheGeminiGate() {
+        IHostedAgentRuntimeFactory cursor = new AcpHostedAgentRuntimeFactory(
+            AcpVendorDescriptors.Cursor, new DaemonConfig(), NullLoggerFactory.Instance,
+            new CaptureServerConnection());
+
+        await Assert.That(cursor.SupportsUnattended).IsTrue();
+    }
+
+    /// <summary>
+    /// The capability gate must be reached BEFORE any connection source runs — including a supplied one.
+    ///
+    /// <para>Review found the gate lived only in <c>BuildProcessStartInfo</c>, which only the DEFAULT source
+    /// calls, so a supplied source was invoked for a disabled daemon and could spawn directly. A test seam is
+    /// still a bypass of the claimed invariant, so this asserts the source is never even called.</para>
+    /// </summary>
+    [Test]
+    public async Task Gemini_ADisabledDaemon_NeverReachesASuppliedConnectionSource() {
+        var reached = 0;
+        var fake    = new FakeAcpAgent();
+        var factory = new AcpHostedAgentRuntimeFactory(
+            descriptor: AcpVendorDescriptors.Gemini,
+            config: new DaemonConfig(),                       // NOT enabled
+            loggerFactory: NullLoggerFactory.Instance,
+            connection: new CaptureServerConnection(),
+            connectionSource: _ => {
+                Interlocked.Increment(ref reached);
+                return (fake.ClientWriteStream, fake.ClientReadStream, new FakeAcpProcess());
+            },
+            resolveVendorVersion: _ => GeminiReviewerCapability.CertifiedVersions.First());
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
+        await Assert.That(async () => await factory.StartAsync(
+                ReviewContext() with { Vendor = "gemini" }, cts.Token))
+            .Throws<InvalidOperationException>();
+
+        await Assert.That(Volatile.Read(ref reached)).IsEqualTo(0)
+            .Because("the gate is the boundary, so nothing may spawn — not even a supplied source");
+    }
+
+    /// <summary>The positive control: an ENABLED daemon on a certified build does reach the source, so the
+    /// test above cannot pass because StartAsync fails for some unrelated reason.</summary>
+    [Test]
+    public async Task Gemini_AnEnabledDaemon_DoesReachTheConnectionSource() {
+        var reached = 0;
+        var fake    = new FakeAcpAgent();
+        var factory = new AcpHostedAgentRuntimeFactory(
+            descriptor: AcpVendorDescriptors.Gemini,
+            config: new DaemonConfig { GeminiUnattendedReviewerEnabled = true },
+            loggerFactory: NullLoggerFactory.Instance,
+            connection: new CaptureServerConnection(),
+            connectionSource: _ => {
+                Interlocked.Increment(ref reached);
+                return (fake.ClientWriteStream, fake.ClientReadStream, new FakeAcpProcess());
+            },
+            resolveVendorVersion: _ => GeminiReviewerCapability.CertifiedVersions.First());
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        try { await factory.StartAsync(ReviewContext() with { Vendor = "gemini" }, cts.Token); }
+        catch { /* the handshake is not the subject — a bare fake never answers initialize */ }
+
+        await Assert.That(Volatile.Read(ref reached)).IsEqualTo(1);
+    }
+
+    /// <summary>
+    /// THE identity-threading invariant, asserted end to end across the two ACTUAL sinks of one real
+    /// <see cref="AcpHostedAgentRuntimeFactory.StartAsync"/> run: the serialized <c>session/new.mcpServers</c>
+    /// payload the vendor received, and the context the spawn seam was handed.
+    ///
+    /// <para>Review's point, and it was right twice: the earlier versions compared two fixture contexts, or a
+    /// fixture context against a helper, so a regression that regenerated the identity BETWEEN building the
+    /// MCP list and invoking the connection source would leave every other test green. That regression is the
+    /// exact silent failure the type exists to prevent — a reviewer whose allowlist does not admit its own
+    /// result channel starts normally and can never report.</para>
+    /// </summary>
+    [Test]
+    public async Task Gemini_TheSessionNewChannelName_MatchesTheIdentityHandedToTheSpawnSeam() {
+        var fake = new FakeAcpAgent();
+        RuntimeStartContext? atSeam = null;
+
+        var factory = new AcpHostedAgentRuntimeFactory(
+            descriptor: AcpVendorDescriptors.Gemini,
+            config: new DaemonConfig { GeminiUnattendedReviewerEnabled = true },
+            loggerFactory: NullLoggerFactory.Instance,
+            connection: new CaptureServerConnection(),
+            connectionSource: ctx => {
+                atSeam = ctx;
+                return (fake.ClientWriteStream, fake.ClientReadStream, new FakeAcpProcess());
+            },
+            resolveVendorVersion: _ => GeminiReviewerCapability.CertifiedVersions.First());
+
+        // fake.RunAsync is what serves the handshake — without it StartAsync waits on `initialize` and the
+        // token cancels before session/new is ever sent.
+        using var cts = new CancellationTokenSource();
+        var fakeRun = fake.RunAsync(cts.Token);
+
+        var started = await factory.StartAsync(ReviewContext() with { Vendor = "gemini" }, cts.Token)
+                                   .WaitAsync(HangGuard, cts.Token);
+
+        var mcpJson = await WaitForSessionNewMcpServersJsonAsync(fake);
+
+        await Assert.That(atSeam).IsNotNull();
+        var wire = atSeam!.LaunchIdentity!.ResultChannelWireName;
+
+        // The wire name the spawn seam was handed must be the name that actually crossed the wire — read from
+        // the serialized payload, not re-derived.
+        await Assert.That(mcpJson).Contains($"\"{wire}\"")
+            .Because("the injected channel must carry the SAME identity the spawn seam got; two derivations "
+                   + "produce a reviewer whose allowlist does not admit its own channel, and it fails silently");
+
+        // And it must be an alias, not the canonical id — otherwise this would pass trivially for a
+        // non-aliasing vendor and prove nothing about Gemini.
+        await Assert.That(wire).IsNotEqualTo(KcapMcpRegistry.ReservedResultChannelId);
+        await Assert.That(mcpJson).DoesNotContain($"\"{KcapMcpRegistry.ReservedResultChannelId}\"");
+
+        cts.Cancel();
+        try { await fakeRun.WaitAsync(HangGuard); } catch (OperationCanceledException) { }
+        await started.Runtime.DisposeAsync();
+        await fake.DisposeAsync();
+    }
 }
