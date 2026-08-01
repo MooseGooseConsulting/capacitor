@@ -114,4 +114,27 @@ public class WaitForFinalLineCompletionAsyncTests {
             "/tmp/nonexistent_" + Guid.NewGuid(), attempts: 2, delayMs: 10);
         await Assert.That(result).IsFalse();
     }
+
+    /// <summary>The poll must not lock the still-writing agent out of its transcript.
+    /// <para>Only DISCRIMINATES on Windows — Unix has no mandatory sharing, so this also passes with the
+    /// fix reverted (verified). Keep that in mind before trusting a local green.</para></summary>
+    [Test]
+    public async Task completes_while_another_handle_holds_the_file_open_for_writing() {
+        var dir  = Directory.CreateTempSubdirectory("kcap-finaldrain-share-");
+        var path = Path.Combine(dir.FullName, "transcript.jsonl");
+
+        try {
+            await File.WriteAllTextAsync(path, "{\"a\":1}\n");
+
+            // A well-behaved writer: holds the file open for Write, sharing read+write, exactly as an
+            // agent appending to its own transcript does.
+            await using var writer = new FileStream(path, FileMode.Open, FileAccess.Write, FileShare.ReadWrite);
+
+            var result = await WatchCommand.WaitForFinalLineCompletionAsync(path, attempts: 3, delayMs: 10);
+
+            await Assert.That(result).IsTrue();
+        } finally {
+            try { dir.Delete(recursive: true); } catch { /* best effort */ }
+        }
+    }
 }
