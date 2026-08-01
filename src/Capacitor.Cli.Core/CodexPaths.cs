@@ -15,6 +15,19 @@ public static class CodexPaths {
     public static string UserHooksJson => Path.Combine(Home(), "hooks.json");
 
     /// <summary>
+    /// Matches Codex's own <c>[projects."&lt;path&gt;"]</c> key form: absolute, and on Windows
+    /// lowercased (backslashes kept). TOML keys are case-sensitive, so a raw mixed-case path is
+    /// a different key — the pre-trust write is then invisible to Codex and it parks on the
+    /// directory-trust prompt. Windows-only: Unix filesystems are case-sensitive and Codex does
+    /// not fold case there.
+    /// </summary>
+    public static string NormalizeProjectKey(string path) {
+        var full = Path.GetFullPath(path);
+
+        return OperatingSystem.IsWindows() ? full.ToLowerInvariant() : full;
+    }
+
+    /// <summary>
     /// Walk <c>~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl</c>, optionally pruning
     /// directories below <paramref name="since"/>. Returns one entry per rollout
     /// with the session id parsed from the filename suffix
