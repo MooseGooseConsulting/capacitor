@@ -14,6 +14,7 @@ using Capacitor.Cli.Core.Mcp;
 using Capacitor.Cli.Core.OpenCode;
 using Capacitor.Cli.Core.Pi;
 using Spectre.Console;
+using Spectre.Console.Rendering;
 using Profile = Capacitor.Cli.Core.Config.Profile;
 
 namespace Capacitor.Cli.Commands;
@@ -541,14 +542,47 @@ public static class SetupCommand {
         AnsiConsole.MarkupLine("\n[dim]Optional:[/] start the daemon with [cyan]kcap daemon start -d[/]");
         AnsiConsole.MarkupLine("[dim]Optional:[/] import past sessions with [cyan]kcap import --org[/]");
 
-        if (ShouldOfferGuidedTour(detectedSummary is not null, claudeSettingsPath, stepPaths)) {
-            AnsiConsole.Write(
-                new Panel($"[bold]{Markup.Escape(GuidedTourCallToAction)}[/]")
-                    .BorderColor(Color.Green)
-                    .Padding(1, 0));
-        }
+        WriteNextSteps(ShouldOfferGuidedTour(detectedSummary is not null, claudeSettingsPath, stepPaths));
 
         return 0;
+    }
+
+    /// <summary>The closing "Next steps" box: a question per item, its answer indented beneath.</summary>
+    static void WriteNextSteps(bool offerGuidedTour) {
+        var rows = new List<IRenderable>();
+
+        // Padder, not a "  " prefix: these lines wrap, and a prefix indents only the first of them.
+        foreach (var (question, answer) in NextStepItems(offerGuidedTour)) {
+            if (rows.Count > 0) rows.Add(Text.Empty);
+
+            rows.Add(new Markup($"[bold]{Markup.Escape(question)}[/]"));
+            rows.Add(Text.Empty);
+            rows.Add(new Padder(new Markup(answer), new Padding(2, 0, 0, 0)));
+        }
+
+        AnsiConsole.Write(
+            new Panel(new Rows(rows))
+                .Header("[bold green] Next steps [/]")
+                .BorderColor(Color.Green)
+                .Padding(1, 0));
+    }
+
+    /// <summary>The box's (question, answer-markup) pairs, split from the write so copy is testable.</summary>
+    internal static List<(string Question, string Answer)> NextStepItems(bool offerGuidedTour) {
+        var items = new List<(string, string)> {
+            (ServerSetupQuestion,
+             $"{Markup.Escape(ServerSetupAction)}\n[cyan]{Markup.Escape(ServerSetupDocsUrl)}[/]"),
+        };
+
+        if (offerGuidedTour) {
+            // Markup-safe: the quoted prompt has no [ or ], so escaping leaves it a plain substring.
+            items.Add((GuidedTourQuestion,
+                       Markup.Escape(GuidedTourAction)
+                             .Replace(GuidedTourPromptQuoted,
+                                      $"[cyan]{GuidedTourPromptQuoted}[/]", StringComparison.Ordinal)));
+        }
+
+        return items;
     }
 
     /// <summary>
@@ -585,12 +619,34 @@ public static class SetupCommand {
     /// <summary>Source folder name under <c>kcap/skills/</c>; <c>kcap-</c>-prefixed once installed.</summary>
     internal const string GuidedTourSkillName = "guided-tour";
 
+    internal const string GuidedTourQuestion = "New to Capacitor?";
+
     /// <summary>
-    /// A prompt rather than a slash command, because the invocation differs per vendor. Pinned
-    /// against the skill's trigger list by <c>SetupCommandTests</c>.
+    /// A prompt, not <c>/kcap:guided-tour</c>: this box prints for every vendor and only Claude Code
+    /// has slash commands. Must stay a verbatim trigger in the skill's frontmatter description
+    /// (pinned by <c>SetupCommandTests</c>) or it fires nothing.
     /// </summary>
-    internal const string GuidedTourCallToAction =
-        "Prompt \"Start kcap guided tour\" in your agent for a guided tour of Capacitor";
+    internal const string GuidedTourPrompt = "Start kcap guided tour";
+
+    /// <summary>Quoted as well as coloured — colour is lost to <c>NO_COLOR</c> and redirected stdout.</summary>
+    internal const string GuidedTourPromptQuoted = $"\"{GuidedTourPrompt}\"";
+
+    internal const string GuidedTourAction =
+        $"Prompt {GuidedTourPromptQuoted} in your coding agent to see what Capacitor can do for you";
+
+    internal const string GuidedTourCallToAction = $"{GuidedTourQuestion} {GuidedTourAction}";
+
+    /// <summary>
+    /// Server setup lives in the dashboard, so this can only be pointed at. Always printed: who owns
+    /// the server is not knowable here, so the reader self-selects on the question. Says "server",
+    /// never "workspace" — that word means the local tree everywhere else in this CLI.
+    /// </summary>
+    internal const string ServerSetupQuestion = "Did you create this Capacitor server?";
+
+    internal const string ServerSetupAction = "Complete server setup with instructions here:";
+
+    internal const string ServerSetupDocsUrl =
+        "https://capacitor.kurrent.io/docs/getting-started/setup-server/";
 
     /// <summary>
     /// Whether Step 6's import eligibility auth requirement is met: provider <c>None</c> needs no
