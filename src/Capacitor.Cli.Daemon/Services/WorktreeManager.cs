@@ -20,9 +20,26 @@ public record WorktreeInfo(
 }
 
 public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManager> logger) {
-    static readonly string[] SnapshotExcludedPaths = [
-        ".capacitor", ".attached", ".mcp.json", ".cursor/mcp.json"
-    ];
+    /// <summary>Excluded from a borrowed snapshot. The vendor MCP config paths are folded in from the one
+    /// list, rather than restated: this used to name <c>.mcp.json</c> and <c>.cursor/mcp.json</c> only, so
+    /// <c>.kiro/settings/mcp.json</c> — the file measured to get a command executed at session setup —
+    /// survived into a launched borrowed snapshot. Two lists of the same thing is how that happened.
+    ///
+    /// <para><b>Known cost, and it cuts the wrong way.</b> An excluded file is not in the snapshot, so a
+    /// borrowed reviewer cannot SEE it — including when the change under review is the file itself. A pull
+    /// request that ADDS a hostile <c>.kiro/settings/mcp.json</c> is therefore invisible to the reviewer,
+    /// which is exactly the change this exclusion exists to defend against; the reviewer can return clean on
+    /// it. The exclusion still holds, because a reviewer that has already executed the payload is worse than
+    /// one that missed it, but the gap is real and is tracked separately (a borrowed reviewer cannot see a hostile config the change under review ADDS). Note it predates this change for
+    /// the original two paths — folding the list in widened it from two files to eight rather than
+    /// introducing it.</para></summary>
+    /// <para><b>Lazy, not a field initializer.</b> Static field initializers across PARTIAL FILES have no
+    /// useful ordering, and <c>WorkspaceMcpConfigPaths</c> lives in the other partial — as a field this read
+    /// it while still <c>default</c>, and spreading a default <c>ImmutableArray</c> threw inside the type
+    /// initializer, which would have broken every worktree creation at runtime.</para>
+    static string[]? _snapshotExcludedPaths;
+    internal static string[] SnapshotExcludedPaths =>
+        _snapshotExcludedPaths ??= [".capacitor", ".attached", .. WorkspaceMcpConfigPaths];
     const int MaxSnapshotFiles = 50_000;
     const long MaxSnapshotBytes = 2L * 1024 * 1024 * 1024;
     static StringComparison FileSystemPathComparison =>
@@ -212,25 +229,118 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
                     "-c", "maintenance.auto=false", "-c", "gc.auto=0",
                     "fetch", "origin", $"{baseRef}:{fetchedRef}");
                 await WithWorktreeMetadataGate(repoPath, () =>
-                    RunGit(repoPath, GitTimeout, "worktree", "add", "-B", branch, worktreePath, fetchedRef));
+                    RunGit(repoPath, GitTimeout, [..NoBranchHooks(), "worktree", "add", "-B", branch, worktreePath, fetchedRef]));
+                var fetched = new WorktreeInfo(worktreePath, branch, repoPath, FetchedRef: fetchedRef);
+                await StripOrRollBackAsync(fetched);
 
-                return new WorktreeInfo(worktreePath, branch, repoPath, FetchedRef: fetchedRef);
+                return fetched;
             }
 
             await WithWorktreeMetadataGate(repoPath, () =>
-                RunGit(repoPath, GitTimeout, "worktree", "add", worktreePath, "-b", branch));
+                RunGit(repoPath, GitTimeout, [..NoBranchHooks(), "worktree", "add", worktreePath, "-b", branch]));
+            var linked = new WorktreeInfo(worktreePath, branch, repoPath);
+            await StripOrRollBackAsync(linked);
 
-            return new WorktreeInfo(worktreePath, branch, repoPath);
+            return linked;
         }
 
         // Standalone: copy files + git init
         Directory.CreateDirectory(worktreePath);
         CopyDirectory(repoPath, worktreePath);
-        await RunGit(worktreePath, GitTimeout, "init");
-        await RunGit(worktreePath, GitTimeout, "add", "-A");
-        await RunGit(worktreePath, GitTimeout, "commit", "-m", "Initial snapshot");
+        // BEFORE the initial commit, so the snapshot's own history never carries the hostile config
+        // either — a later `git checkout` inside the tree would otherwise restore it.
+        StripWorkspaceMcpConfig(worktreePath);
+        await RunGit(worktreePath, GitTimeout, [..NoBranchHooks(), "init"]);
+        await RunGit(worktreePath, GitTimeout, [..NoBranchHooks(), "add", "-A"]);
+        // Identity supplied explicitly. This is the daemon's OWN bookkeeping commit, not the user's work,
+        // so it must not depend on the host having git identity configured — a machine without a global
+        // user.email fails with "Author identity unknown". Found while CopyDirectory was temporarily
+        // repaired and this line became reachable for the first time; that repair was then reverted (see
+        // CopyDirectory), so the path still cannot get here — the fix is kept because it is correct and
+        // because the repair will land eventually.
+        await RunGit(worktreePath, GitTimeout, [
+            ..NoBranchHooks(),
+            "-c", "user.email=daemon@kcap.local", "-c", "user.name=kcap",
+            "commit", "-m", "Initial snapshot"
+        ]);
 
         return new WorktreeInfo(worktreePath, "", repoPath, IsStandalone: true);
+    }
+
+    /// <summary>
+    /// Git config that must be forced on any git command that checks out or commits branch content.
+    ///
+    /// <para>A relative <c>core.hooksPath</c> — <c>.githooks</c> is a widespread convention, and a
+    /// documented setup step in many repos — makes the hook scripts themselves branch content. Git then runs
+    /// the branch's <c>post-checkout</c> during <c>worktree add</c>, i.e. BEFORE anything in this class has
+    /// had a chance to neutralize the tree. Review caught it: the MCP strip is pointless if creating the
+    /// tree already executed the branch's code. Pointing <c>core.hooksPath</c> at a daemon-owned empty
+    /// directory disables the whole mechanism for these commands without touching the operator's config.</para>
+    ///
+    /// <para><b>This covers the hook-DIRECTORY mechanism only. Do not read it as "no branch-controlled code
+    /// runs during checkout."</b> Two sibling vectors are known and deliberately NOT closed here, tracked on
+    /// their own issue (see the branch-controlled-execution follow-up): git's config-based hooks (<c>hook.&lt;name&gt;.event</c> / <c>.command</c>), which run
+    /// independently of <c>core.hooksPath</c>; and clean/smudge filters, which a branch selects through its
+    /// own <c>.gitattributes</c> and which this flag does not affect at all. Both need a rule for "does this
+    /// command resolve to branch content" — blunt disabling would break legitimate drivers such as
+    /// <c>filter.lfs</c>, so it is real work rather than another <c>-c</c> flag.</para>
+    /// </summary>
+    /// <summary>
+    /// A <c>core.hooksPath</c> that cannot contain a hook, because it cannot be a directory.
+    ///
+    /// <para>Three earlier revisions of this created an empty directory instead, and every review round
+    /// found a new problem with it: a fixed temp name another user could pre-create with a
+    /// <c>post-checkout</c>; a mkdir-then-chmod race; a Windows temp location not guaranteed private; an
+    /// empty <c>LocalApplicationData</c> silently yielding a RELATIVE path; and one leaked directory per
+    /// daemon process. All of that was incidental to needing somewhere with no hooks in it.</para>
+    ///
+    /// <para><c>/dev/null</c> is not a directory, so git finds no hook there and there is nothing to
+    /// create, permission, or clean up — and nothing for another user to squat. Measured: with the
+    /// branch's own <c>core.hooksPath</c> a committed <c>post-checkout</c> RUNS during
+    /// <c>worktree add</c>; with this it does not, and the worktree is still created normally. Safe on
+    /// Windows by construction too — git there either resolves it the same way or treats it as a relative
+    /// path that does not exist, and both mean no hook.</para>
+    /// </summary>
+    internal const string NoHooksPath = "/dev/null";
+
+    static string[] NoBranchHooks() => ["-c", $"core.hooksPath={NoHooksPath}"];
+
+    /// <summary>
+    /// Neutralizes the tree, and UNDOES the creation if that fails.
+    ///
+    /// <para>Neutralization is fail-closed, and it necessarily runs after <c>worktree add</c> has already
+    /// registered a worktree, a branch and (for a review launch) a fetched ref. Throwing straight out of
+    /// <see cref="CreateAsync"/> means no <see cref="WorktreeInfo"/> ever reaches the caller, so nothing
+    /// downstream can clean any of that up and repeated failures accumulate registrations — review caught
+    /// it. Rolling back here keeps fail-closed without making it a leak.</para>
+    ///
+    /// <para>A rollback failure is swallowed in favour of the original exception: the reason the launch is
+    /// being refused is more useful to an operator than whatever went wrong while tidying up after it.</para>
+    /// </summary>
+    async Task StripOrRollBackAsync(WorktreeInfo created) {
+        try {
+            StripWorkspaceMcpConfig(created.Path);
+        } catch {
+            try { await RemoveAsync(created); } catch { /* keep the original failure */ }
+            throw;
+        }
+    }
+
+    /// <summary>Removes branch-authored vendor MCP configuration and logs what went, so an operator whose
+    /// repo legitimately ships one can tell that kcap removed it rather than that the vendor ignored it.
+    /// <para>Called by the worktree creation paths. Borrowed snapshots do not call it — they never
+    /// materialise these files in the first place, because <see cref="SnapshotExcludedPaths"/> now folds in
+    /// the same list. An earlier version of this comment claimed "every creation path calls this", which
+    /// was not true and papered over exactly the gap that left <c>.kiro/settings/mcp.json</c> in a borrowed
+    /// snapshot.</para></summary>
+    void StripWorkspaceMcpConfig(string worktreePath) {
+        var removed = NeutralizeWorkspaceMcpConfig(worktreePath);
+
+        if (removed.Count > 0)
+            logger.LogInformation(
+                "Removed branch-authored MCP config from agent worktree {Worktree}: {Paths}. These declare "
+              + "commands some vendors execute at session start, and a worktree inherits the repo's trust.",
+                worktreePath, string.Join(", ", removed));
     }
 
     /// <summary>Suffix marking a borrowed launch's per-launch vendor state directory, which sits
@@ -390,7 +500,10 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
                 throw new InvalidOperationException("borrowed_snapshot_sparse_checkout_unsupported");
 
             await RunGit(parent, GitTimeout, "clone", "--no-hardlinks", "--no-checkout", "--", bundle, destination);
-            await RunGit(destination, GitTimeout, "checkout", "--detach", "HEAD");
+            // Same guard as `worktree add`: this checkout materialises branch content, so a relative
+            // core.hooksPath would run the branch's post-checkout here too. Missed when the guard was
+            // added — it went on the worktree paths only.
+            await RunGit(destination, GitTimeout, [..NoBranchHooks(), "checkout", "--detach", "HEAD"]);
             var clonedHead = (await RunGitCapture(destination, GitTimeout, false, "rev-parse", "HEAD")).Trim();
             if (!string.Equals(sourceHead, clonedHead, StringComparison.Ordinal)) throw new SourceChangedException();
             await RunGitBestEffort(destination, "remote", "remove", "origin");
@@ -542,7 +655,11 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
     }
 
     static void DeleteTreeNoFollow(string path) {
-        if (!File.Exists(path) && !Directory.Exists(path)) return;
+        // Path.Exists, not File.Exists || Directory.Exists: both of those FOLLOW, so a DANGLING symlink
+        // reports absent and this returned early, leaving the link behind. Its parent then failed to
+        // delete — and under the fail-closed config strip that turned a branch committing one dangling
+        // link into a refusal of every launch.
+        if (!Path.Exists(path)) return;
         var attrs = File.GetAttributes(path);
         if (attrs.HasFlag(FileAttributes.ReparsePoint) || !attrs.HasFlag(FileAttributes.Directory)) {
             if (OperatingSystem.IsWindows() && attrs.HasFlag(FileAttributes.ReadOnly))
@@ -627,8 +744,15 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
             right.TryGetValue(pair.Key, out var other) && pair.Value.Mode == other.Mode &&
             pair.Value.Length == other.Length && pair.Value.Hash.AsSpan().SequenceEqual(other.Hash));
 
+    /// <summary>Marks the excluded config paths <c>skip-worktree</c> so their absence from the snapshot is
+    /// not reported as a change.
+    /// <para>This iterated a hard-coded pair while the snapshot excluded the same pair. Now that the
+    /// exclusions fold in <see cref="WorkspaceMcpConfigPaths"/>, a tracked <c>.kiro/settings/mcp.json</c>
+    /// would show up as a DELETION inside the snapshot — polluting <c>git status</c> and diffs, and capable
+    /// of producing a review finding about a deletion kcap performed. Driven from the same list, so the two
+    /// cannot drift apart again.</para></summary>
     static async Task ApplyReservedIndexPolicyAsync(string destination) {
-        foreach (var path in new[] { ".mcp.json", ".cursor/mcp.json" })
+        foreach (var path in WorkspaceMcpConfigPaths)
             try { await RunGit(destination, GitTimeout, "update-index", "--skip-worktree", "--", path); }
             catch { /* absent from index */ }
         Directory.CreateDirectory(Path.Combine(destination, ".git", "info"));
@@ -838,6 +962,22 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
     [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to clean up {Path}")]
     partial void LogCleanupFailed(Exception ex, string path);
 
+    /// <summary>
+    /// NOTE: this is the ORIGINAL implementation, restored deliberately.
+    ///
+    /// <para>It is broken: the standalone path's destination is
+    /// <c>&lt;source&gt;/.capacitor/worktrees/&lt;name&gt;</c>, so this descends into the directory it is
+    /// writing and recurses until the path length blows up. Standalone snapshot creation has therefore
+    /// never completed for a non-git source.</para>
+    ///
+    /// <para><b>Why it is not fixed here.</b> Repairing the recursion made the path REACHABLE, which armed
+    /// a second, worse latent bug in the same method: <c>File.Copy</c> copies a symlink's target, so a
+    /// source containing a link to <c>~/.ssh</c> would materialise real credentials inside the agent's
+    /// worktree. Hardening that then raised further questions about case semantics and about preserving
+    /// legitimate internal links. None of it belongs in a change about MCP containment, and shipping a
+    /// half-hardened live path is worse than leaving an inert broken one. Repair is tracked on its own
+    /// issue, with the exfiltration vector and the case-identity problem written up.</para>
+    /// </summary>
     static void CopyDirectory(string source, string dest) {
         foreach (var file in Directory.GetFiles(source)) {
             File.Copy(file, Path.Combine(dest, Path.GetFileName(file)));
