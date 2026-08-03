@@ -1132,8 +1132,8 @@ kcap agent start claude -d                    # start without attaching; prints 
 - **Work location:** by default the agent runs **in place in your current directory** (it edits your real files). Pass `--worktree` to run in a throwaway git worktree instead.
 
 - **What a worktree deliberately does NOT inherit:** an agent worktree is a checkout of whatever branch is
-  being worked on, so anything committed there is content the agent's own author may not control. Two things
-  are therefore neutralised when kcap creates one:
+  being worked on, so anything committed there is content the agent's own author may not control. These are
+  therefore neutralised when kcap creates one:
 
   - **Workspace MCP config is removed** — `.mcp.json`, `.cursor/mcp.json`, `.gemini/settings.json`,
     `.kiro/settings/mcp.json`, `.vscode/mcp.json`, `.github/copilot/mcp.json`, `.copilot/mcp.json`,
@@ -1145,6 +1145,23 @@ kcap agent start claude -d                    # start without attaching; prints 
     `core.hooksPath` such as `.githooks`, the hook scripts are themselves branch content and git would run
     `post-checkout` during `worktree add`. This applies only to kcap's own creation commands; hooks in the
     agent's own later commits are unaffected.
+  - **Clean/smudge filters are disabled for those same commands — all of them, including `lfs`.**
+    `.gitattributes` is branch content and selects which filter driver applies, so a driver whose command is
+    relative — `filter.x.smudge=./tools/f` — has the branch supply the executable. No command is inspected
+    and no driver is exempt: four narrower designs were each defeated at their exemption, so there is
+    deliberately nothing left to parse, resolve or impersonate. **No custom filter driver runs during the git
+    commands kcap uses to create and populate a worktree** — that is the window in which branch content is
+    first materialised, before an agent is running. The overrides are per-command, not persistent: git
+    operations the agent itself runs inside the worktree afterwards use the repository's own configuration.
+    What the disabling means for file contents depends on how the worktree is built:
+    - *Owned worktrees* check out through git, so LFS-tracked files appear as pointer text.
+    - *Standalone snapshots* copy the source directory's bytes and re-commit them with the clean filter
+      disabled, so whatever the source already held — smudged content included — is what you get.
+    - *Borrowed review snapshots* are rebuilt from the source working tree and carry its real content; they
+      refuse to build if the source itself holds unsmudged LFS pointers.
+
+    Disabled drivers are logged per worktree so the effect is visible rather than mysterious.
+
 - **Detach** without stopping the agent with the prefix key **`Ctrl-Q` then `d`**. The agent keeps running in the daemon.
 - **Permissions:** for a registered agent, permission prompts appear in the web UI (the same dialog as hosted agents); with `--private`, prompts are answered natively in your terminal.
 
