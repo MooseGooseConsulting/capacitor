@@ -16,6 +16,10 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Capacitor.Cli.Daemon;
 
 public static partial class DaemonRunner {
+    // Reflection-resolved once: the assembly attribute is fixed for the process lifetime, and
+    // DaemonStatusIpc's Snapshot() now calls ResolveDaemonVersion() on every status push.
+    static string? _cachedDaemonVersion;
+
     /// <summary>
     /// Daemon binary version from <c>[AssemblyInformationalVersion]</c>,
     /// baked at build time by MSBuild's git-info integration. Surfaces on
@@ -23,7 +27,7 @@ public static partial class DaemonRunner {
     /// line and <c>DaemonInfo</c> can show "v0.4.11+sha.abc1234".
     /// </summary>
     public static string ResolveDaemonVersion() =>
-        typeof(DaemonRunner).Assembly
+        _cachedDaemonVersion ??= typeof(DaemonRunner).Assembly
             .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
             ?.InformationalVersion ?? "unknown";
 
@@ -239,6 +243,17 @@ public static partial class DaemonRunner {
         // Task 7: local-socket consent frames — the same broker instance the gate above prompts
         // through, so a subscriber connected via ConsentSubscribe sees the gate's own pending requests.
         builder.Services.AddSingleton<LaunchConsentIpc>();
+
+        // The DaemonStatus push: ONE notifier singleton shared by ServerConnection (pulses on hub
+        // state transitions) and AgentOrchestrator (pulses on agent mutation) via their optional
+        // ctor params, so a StatusSubscribe waiter sees both kinds of change. This depends on the
+        // ServerConnection/AgentOrchestrator registrations below/above staying bare AddSingleton<T>()
+        // (no factory delegate) — DI only injects a registered service into an optional trailing
+        // parameter when it resolves the constructor itself. A factory delegate that constructs
+        // either type without passing this notifier would silently sever status pushes with no
+        // failing test; DaemonStatusWiringTests pins this mechanism.
+        builder.Services.AddSingleton<DaemonStatusNotifier>();
+        builder.Services.AddSingleton<DaemonStatusIpc>();
 
         // Local HTTP bridge that fronts the server's permission flow. Registered as a
         // singleton so AgentOrchestrator can read its bound URL at agent-spawn time, AND
