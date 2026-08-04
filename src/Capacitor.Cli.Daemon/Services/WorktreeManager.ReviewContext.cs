@@ -37,7 +37,35 @@ public partial class WorktreeManager {
     public const string ReviewContextSuffix = ".review-context";
     const string ReviewContextManifestName = "manifest.json";
     const long MaxReviewContextBytes = 256L * 1024;
+
+    /// <summary>Ceiling on the SERIALIZED manifest, distinct from <see cref="MaxReviewContextBytes"/>,
+    /// which charges only blob content. Path strings, base64's 4/3 expansion and JSON framing are not free,
+    /// so the content cap is not by itself a bound on the file this writes and later re-reads.
+    ///
+    /// <para><b>Derived from the content cap, not chosen.</b> Each admitted byte can appear twice — once
+    /// base64-encoded (4/3) and once in <c>Text</c>, where JSON escaping of a control character costs six
+    /// bytes (<c>backslash-u-0000</c>). Worst case is therefore about <c>256 KiB × (4/3 + 6) ≈ 1.9 MiB</c> before
+    /// paths, hashes and framing. A first attempt at 1 MiB was below that and rejected a manifest the
+    /// content cap had already accepted — a fail-closed refusal of a legitimate snapshot. 4 MiB clears the
+    /// worst case with headroom while still bounding the read.</para></summary>
+    const long MaxReviewContextManifestBytes = 4L * 1024 * 1024;
+
     static readonly UTF8Encoding StrictUtf8 = new(false, true);
+
+    /// <summary>Reads a manifest, refusing anything past <see cref="MaxReviewContextManifestBytes"/>
+    /// BEFORE allocating it — checking after the read would already have paid the cost.</summary>
+    static async Task<byte[]> ReadManifestBytesAsync(string path, CancellationToken ct) {
+        await using var stream = new FileStream(path, new FileStreamOptions {
+            Mode = FileMode.Open, Access = FileAccess.Read, Share = FileShare.Read,
+            Options = FileOptions.Asynchronous | FileOptions.SequentialScan
+        });
+        if (stream.Length > MaxReviewContextManifestBytes)
+            throw new InvalidOperationException(
+                "borrowed_snapshot_review_context_manifest_too_large");
+        var buffer = new byte[stream.Length];
+        await stream.ReadExactlyAsync(buffer, ct);
+        return buffer;
+    }
 
     public static string ReviewContextRootFor(string snapshotRoot) =>
         snapshotRoot.TrimEnd(Path.DirectorySeparatorChar) + ReviewContextSuffix;
@@ -54,7 +82,7 @@ public partial class WorktreeManager {
 
     async Task<BorrowedReviewContextGeneration> CreateReviewContextGenerationAsync(
             string source, string reviewContextRoot, string sourceHead,
-            byte[] listing, bool caseSensitive, CancellationToken ct) {
+            byte[] listing, bool caseSensitive, SnapshotExclusionPlan plan, CancellationToken ct) {
         CreateOwnerOnlyDirectory(reviewContextRoot);
         var generationId = Guid.NewGuid().ToString("N");
         var preparing = Path.Combine(reviewContextRoot, ".preparing-" + generationId);
@@ -62,7 +90,7 @@ public partial class WorktreeManager {
         try {
             CreateOwnerOnlyDirectory(preparing);
             var entries = await ExtractReviewContextEntriesAsync(
-                source, listing, caseSensitive, ct);
+                source, listing, caseSensitive, plan, ct);
 
             var manifest = new BorrowedReviewContextManifest(
                 1,
@@ -75,14 +103,28 @@ public partial class WorktreeManager {
                 [.. entries.OrderBy(entry => entry.Path, StringComparer.Ordinal)]);
             var json = JsonSerializer.SerializeToUtf8Bytes(
                 manifest, BorrowedReviewContextJsonContext.Default.BorrowedReviewContextManifest);
+            // MaxReviewContextBytes charges only blob CONTENT. The serialized form also carries path
+            // strings, base64's 4/3 expansion and JSON framing, so it needs its own ceiling — enforced
+            // here on write and again before parsing on read, so an oversized manifest is refused before
+            // it is allocated rather than after.
+            if (json.LongLength > MaxReviewContextManifestBytes)
+                throw new InvalidOperationException(
+                    "borrowed_snapshot_review_context_manifest_too_large");
             var manifestPath = Path.Combine(preparing, ReviewContextManifestName);
             await WriteOwnerOnlyFileAsync(manifestPath, json, ct);
 
-            var verifiedJson = await File.ReadAllBytesAsync(manifestPath, ct);
+            var verifiedJson = await ReadManifestBytesAsync(manifestPath, ct);
             var verifiedManifest = JsonSerializer.Deserialize(
                 verifiedJson, BorrowedReviewContextJsonContext.Default.BorrowedReviewContextManifest)
                 ?? throw new InvalidOperationException("borrowed_snapshot_review_context_invalid_manifest");
-            ValidateReviewContextManifest(verifiedManifest, generationId, sourceHead);
+            // The reserved set the extractor actually matched — the ACTUAL git paths, not the plan's
+            // canonical spellings. On a case-insensitive destination a tracked `SRC/.MCP.JSON` legitimately
+            // classifies against canonical `src/.mcp.json`, so validating exact membership against the
+            // canonical set would reject a valid entry — and relaxing it to OrdinalIgnoreCase would put a
+            // second matcher back in, which is the defect this design removes. The case decision is made
+            // once, by the classifier, at extraction.
+            var matchedPaths = entries.Select(entry => entry.Path).ToHashSet(StringComparer.Ordinal);
+            ValidateReviewContextManifest(verifiedManifest, generationId, sourceHead, matchedPaths);
 
             return new BorrowedReviewContextGeneration(generationId, preparing, verifiedJson);
         } catch {
@@ -92,10 +134,13 @@ public partial class WorktreeManager {
     }
 
     static async Task<List<BorrowedReviewContextEntry>> ExtractReviewContextEntriesAsync(
-            string source, byte[] listing, bool caseSensitive, CancellationToken ct) {
-        var reserved = WorkspaceMcpConfigPaths
-            .Select(path => (Canonical: path, Bytes: Encoding.UTF8.GetBytes(path)))
-            .ToArray();
+            string source, byte[] listing, bool caseSensitive, SnapshotExclusionPlan plan,
+            CancellationToken ct) {
+        // The plan's set, not WorkspaceMcpConfigPaths: containment and reviewability have to range over
+        // the same paths, or a config one directory down becomes excluded from the snapshot (good) while
+        // staying invisible to the reviewer (bad) — contained but unreviewable, which is precisely the
+        // state this whole surface exists to avoid.
+        var reserved = plan.Reserved;
         var matchedCanonicalPaths = new HashSet<string>(StringComparer.Ordinal);
         var entries = new List<BorrowedReviewContextEntry>();
         long totalBytes = 0;
@@ -192,18 +237,24 @@ public partial class WorktreeManager {
     static void ValidateReviewContextManifest(
             BorrowedReviewContextManifest manifest,
             string expectedGenerationId,
-            string expectedSourceHead) {
+            string expectedSourceHead,
+            IReadOnlySet<string> matchedPaths) {
         if (manifest.SchemaVersion != 1 ||
             manifest.GenerationId != expectedGenerationId ||
             manifest.SourceHead != expectedSourceHead ||
             manifest.Provenance != "git-index-stage-0" ||
             manifest.WorkingTreeBytes ||
             !manifest.UnstagedAndUntrackedOmitted ||
-            manifest.Entries.Length > WorkspaceMcpConfigPaths.Length)
+            manifest.Entries.Length > matchedPaths.Count)
             throw new InvalidOperationException(
                 "borrowed_snapshot_review_context_invalid_manifest");
         long total = 0;
         foreach (var entry in manifest.Entries) {
+            // Exact membership in the set the classifier actually matched. Strictly stronger than the
+            // count cap this replaces, which bounded how many entries there were but not which.
+            if (!matchedPaths.Contains(entry.Path))
+                throw new InvalidOperationException(
+                    "borrowed_snapshot_review_context_invalid_manifest");
             byte[] content;
             try { content = Convert.FromBase64String(entry.Base64); }
             catch (FormatException ex) {
