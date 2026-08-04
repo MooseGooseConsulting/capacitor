@@ -196,9 +196,24 @@ internal static class AcpVendorDescriptors {
     );
 
     /// <summary>GitHub Copilot CLI as an ACP hosted agent (<c>copilot --acp --stdio</c>).
-    /// ACP itself advertises MCP over http/sse only, so interactive <c>session/new</c> stdio servers
-    /// stay disabled. Review flows preload their validated stdio servers through Copilot's
-    /// <c>--additional-mcp-config</c> process argument and clamp the visible tool surface.</summary>
+    ///
+    /// <para><b><see cref="AcpVendorDescriptor.SupportsMcpServers"/> is <c>false</c> on call-level
+    /// measurement, not on the <c>mcpCapabilities</c> advertisement</b> — the advertised
+    /// <c>{http, sse}</c> shape cannot decide this flag either way (Kiro and Gemini advertise exactly
+    /// the same shape and both honour stdio servers). Measured on macOS against Copilot CLI 1.0.78
+    /// (2026-08-04): a purpose-built stdio server passed in <c>session/new.mcpServers</c> is silently
+    /// ignored. <c>session/new</c> succeeds, but the server process is never spawned (its own log
+    /// stays empty), no tool-call frame ever references it, and the model reports the tool
+    /// unavailable — identical on the interactive argv and on the full unattended review argv, where
+    /// <c>--available-tools</c> additionally rejects the injected tool's flattened id as an unknown
+    /// tool name. The same server, same build, same driver preloaded through
+    /// <c>--additional-mcp-config</c> completes <c>initialize</c> → <c>tools/list</c> →
+    /// <c>tools/call</c> with the tool's nonce reaching the model and the turn ending
+    /// <c>end_turn</c> — so the negative is Copilot's <c>session/new</c> handling, not the probe.
+    /// Re-flip only on an equivalent call-level probe succeeding against a newer build.</para>
+    ///
+    /// <para>Review flows therefore preload their validated stdio servers through Copilot's
+    /// <c>--additional-mcp-config</c> process argument and clamp the visible tool surface.</para></summary>
     public static readonly AcpVendorDescriptor Copilot = new(
         Vendor:              "copilot",
         ResolveBinaryPath:   cfg => cfg.CopilotPath,
@@ -282,7 +297,7 @@ internal static class AcpVendorDescriptors {
     internal const string UnmatchableMcpNamePlaceholder = "__kcap_unmatchable_mcp_name__";
 
     /// <summary>Google Gemini CLI as an ACP hosted agent (<c>gemini --experimental-acp</c>).
-    /// Interactive hosting only; the unattended reviewer is its own issue, as with Kiro.
+    /// Hosted interactively and as an unattended review-flow reviewer.
     ///
     /// <para><b><c>--skip-trust</c> is required, and is NOT a containment measure.</b> Gemini refuses a
     /// headless turn in an untrusted directory outright — <c>exit 55</c> before any model call — and a
@@ -300,11 +315,18 @@ internal static class AcpVendorDescriptors {
     /// unguessable name — reduces the allowlist to nothing the repository can match, which blocks it. Repo-authored <i>hooks</i> were separately measured NOT to run on the ACP path (they do
     /// on the <c>--prompt</c> path — the two paths differ, and neither predicts the other).</para>
     ///
-    /// <para><b>Denying everything is only correct while <see cref="AcpVendorDescriptor.SupportsMcpServers"/>
-    /// is false.</b> It permits nothing, so with nothing injected it costs nothing. The day the stdio
-    /// call-level probe flips that flag, this list must become the injected server names in the SAME
-    /// change, or hosted Gemini ships with MCP silently broken. <c>AcpVendorDescriptorTests</c> asserts
-    /// the coupling so the two cannot drift apart.</para>
+    /// <para><b>Deny-all is the launch default; a review launch opens the gate to exactly ONE name —
+    /// the injected result channel's wire name</b> (replace, never append — the option is
+    /// comma-coerced, so appending would widen the gate rather than move it); an interactive launch
+    /// injects nothing and keeps the unguessable deny-all, which permits nothing and costs nothing.
+    /// <c>AcpVendorDescriptorTests</c> and <c>GeminiReviewerLaunchTests</c> assert both halves.
+    /// KNOWN LIMIT (#449): <c>AcpReviewFlowMcp.Build</c> puts any additional validated allowlist
+    /// servers in <c>session/new.mcpServers</c> under their canonical ids, which this single-name
+    /// gate does NOT admit. The built-in review definitions carry no MCP allowlist and do not
+    /// exercise the gap, but any catalog or dynamic definition with a non-empty <c>mcp:</c> list
+    /// targeting a Gemini reviewer reaches it today: its servers are injected and silently blocked.
+    /// A launch that needs those servers (or a future interactive caller populating
+    /// <c>RuntimeStartContext.McpServers</c>) must widen the gate in the same change.</para>
     ///
     /// <para><see cref="NoOpModelSelector"/> for the same reason as Kiro: <c>session/new</c> does return a
     /// <c>models</c> object, so <see cref="ConfigOptionModelSelector"/>'s read half would fit, but its
