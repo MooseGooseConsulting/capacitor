@@ -73,15 +73,25 @@ public class AcpVendorDescriptorTests {
         await Assert.That(descriptor.Vendor).IsEqualTo("kiro");
         await Assert.That(descriptor.Argv.SequenceEqual(["acp"])).IsTrue();
 
-        // Interactive hosting only. Kiro inherits the user's GLOBAL ~/.kiro/settings/mcp.json servers
-        // into every ACP session, so an unattended reviewer would be handed kcap-flows and could start
-        // nested review flows. Unattended stays off until its own issue lands the containment
-        // mechanism; the empty trust argv is enforced by the constructor when SupportsUnattended is
-        // false, and Disabled is the policy that pairs with it.
-        await Assert.That(descriptor.SupportsUnattended).IsFalse();
+        // Unattended review is ON. The containment that was missing is now source suppression: a
+        // review launch runs with a daemon-owned EMPTY KIRO_HOME (so the operator's global
+        // ~/.kiro/settings/mcp.json servers, kcap-flows among them, do not initialize), and
+        // branch-authored workspace config is removed at the worktree layer.
+        await Assert.That(descriptor.SupportsUnattended).IsTrue();
+
+        // The fixed trust argv stays EMPTY and the BUILDER carries it, because the value depends on
+        // what this launch injects: a review with an MCP allowlist gets servers whose tools a fixed
+        // list could not name, and under Fail their first call would end the round. The constructor
+        // rejects carrying both.
         await Assert.That(descriptor.UnattendedTrustArgv.IsEmpty).IsTrue();
+        await Assert.That(descriptor.UnattendedTrustArgvBuilder).IsNotNull();
+
+        // AllowlistedAutoApprove, measured rather than preferred. Fail's premise -- a scoped-trust
+        // reviewer raises no frame -- is false on kiro-cli 2.16.0: a live round raised one for the
+        // result tool that IS in this launch's trust list. AutoApprove is not the alternative, since
+        // it does not inspect the tool at all.
         await Assert.That(descriptor.UnattendedInteractionPolicy)
-            .IsEqualTo(AcpUnattendedInteractionPolicy.Disabled);
+            .IsEqualTo(AcpUnattendedInteractionPolicy.AllowlistedAutoApprove);
         await Assert.That(descriptor.SupportsBorrowedReviewFlow).IsFalse();
         await Assert.That(descriptor.BorrowedReviewContainment)
             .IsEqualTo(AcpBorrowedReviewContainment.None);
@@ -389,5 +399,30 @@ public class AcpVendorDescriptorTests {
         await Assert.That(AcpVendorDescriptors.Copilot.SupportsReconnectResume).IsTrue();
         await Assert.That(AcpVendorDescriptors.Kiro.SupportsReconnectResume).IsFalse();
         await Assert.That(AcpVendorDescriptors.Gemini.SupportsReconnectResume).IsFalse();
+    }
+
+    /// <summary>
+    /// Kiro aliases (its MCP tripwire compares launch-unique names) but carries NO exact-name MCP
+    /// allowlist argv. One predicate used to gate both, so turning aliasing on for Kiro without this
+    /// split would run Gemini's placeholder substitution and canonical-argv assertion against a vendor
+    /// that has neither, and route it through Gemini's capability gate.
+    /// </summary>
+    [Test]
+    public async Task Kiro_AliasesItsResultChannel_ButCarriesNoMcpNameAllowlistArgv() {
+        var kiro = AcpVendorDescriptors.Kiro;
+
+        await Assert.That(AcpHostedAgentRuntimeFactory.AliasesResultChannel(kiro)).IsTrue();
+        await Assert.That(AcpHostedAgentRuntimeFactory.UsesMcpNameAllowlistArgv(kiro)).IsFalse();
+        await Assert.That(kiro.Argv.Contains(AcpVendorDescriptors.UnmatchableMcpNamePlaceholder)).IsFalse();
+    }
+
+    /// <summary>The control: Gemini must keep BOTH, or the split silently disabled its clamp.</summary>
+    [Test]
+    public async Task Gemini_KeepsBothAliasingAndTheAllowlistArgv() {
+        var gemini = AcpVendorDescriptors.Gemini;
+
+        await Assert.That(AcpHostedAgentRuntimeFactory.AliasesResultChannel(gemini)).IsTrue();
+        await Assert.That(AcpHostedAgentRuntimeFactory.UsesMcpNameAllowlistArgv(gemini)).IsTrue();
+        await Assert.That(gemini.Argv.Contains(AcpVendorDescriptors.UnmatchableMcpNamePlaceholder)).IsTrue();
     }
 }

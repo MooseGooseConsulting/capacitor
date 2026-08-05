@@ -154,6 +154,15 @@ public static partial class DaemonRunner {
         if (Environment.GetEnvironmentVariable("KCAP_GEMINI_PATH") is { Length: > 0 } envGeminiPath)
             config.GeminiPath = envGeminiPath;
 
+        // The operator consent flags for the two unattended ACP reviewers. Both were previously
+        // reachable only from a test constructor, which made the shipped Gemini reviewer impossible
+        // to turn on in production; binding one and not the other would just move that hole.
+        config.GeminiUnattendedReviewerEnabled =
+            ParseConsentFlag(Environment.GetEnvironmentVariable("KCAP_GEMINI_UNATTENDED_REVIEWER"));
+
+        config.KiroUnattendedReviewerEnabled =
+            ParseConsentFlag(Environment.GetEnvironmentVariable("KCAP_KIRO_UNATTENDED_REVIEWER"));
+
         config.DebugFrames = ParseDebugFramesFlag(Environment.GetEnvironmentVariable("KCAP_ACP_DEBUG_FRAMES"));
 
         config.AcpReconnectEnabled = ParseAcpReconnectFlag(Environment.GetEnvironmentVariable("KCAP_ACP_RECONNECT"));
@@ -219,6 +228,40 @@ public static partial class DaemonRunner {
         // this early — the host's logging pipeline isn't built yet.
         var coverageStateDir = Path.Combine(
             config.StateDir ?? DaemonLockPaths.Directory, DaemonLockPaths.Sanitize(config.Name));
+        // Two things the Kiro unattended reviewer needs at boot, both cheap and both no-ops when the
+        // operator has not opted in.
+        if (config.KiroUnattendedReviewerEnabled) {
+            // Seeded by the CONSENT event, not by a first refusal: an operator who has just turned the
+            // reviewer on should not be refused over an upgrade that never happened, which teaches
+            // people to clear the gate without reading it.
+            //
+            // Keyed on the record's ABSENCE AS A FILE, not on "Affirmed is null". The store reports
+            // null for a corrupt or unreadable record too, and seeding on that would (a) re-affirm
+            // whatever is installed after the record was removed post-upgrade, silently clearing the
+            // gate, and (b) attempt a write that a directory at the pathname makes throw — bricking a
+            // boot on a file that is supposed to fail closed, never fatally.
+            try {
+                var kiroVersions = new KiroReviewerVersionStore(coverageStateDir);
+
+                if (!KiroReviewerVersionStore.RecordExists(coverageStateDir)
+                 && VendorVersionResolver.Resolve(config.KiroPath) is { Length: > 0 } installedKiro)
+                    kiroVersions.Affirm(installedKiro);
+            } catch (Exception ex) {
+                // The gate fails closed on its own if this never ran; a boot must not die for it.
+                Console.Error.WriteLine($"Kiro reviewer version seeding skipped: {ex.Message}");
+            }
+        }
+
+        // Recovers reviewer homes left by a SIGKILLed predecessor. Runs unconditionally: a daemon
+        // whose operator has since disabled the reviewer still owns whatever its last incarnation
+        // left behind, and those directories hold review context.
+        // A real logger, not NullLogger: Delete warns precisely so a retained transcript-bearing home
+        // is never silent, and passing NullLogger would defeat the diagnostic this cleanup exists to
+        // emit. The host's logging is not built yet at this point, so this writes to stderr like the
+        // seeding block above.
+        KiroReviewerHome.SweepStale(
+            coverageStateDir, config.DaemonEpoch ?? "unpinned", new ConsoleErrorLogger());
+
         config.RecordlessSurvivorsImpossible = new CoverageJournal(coverageStateDir, NullLogger.Instance)
             .RecordBoot(daemonLock.InstanceId, daemonLock.PriorInstanceId,
                 priorLockReadFailed: daemonLock.PriorLockIndeterminate, thisEpochContained: OperatingSystem.IsWindows());
@@ -756,6 +799,19 @@ public static partial class DaemonRunner {
     /// </summary>
     internal static bool ParseAcpReconnectFlag(string? value) =>
         value?.Trim() is not { } v || !(v == "0" || string.Equals(v, "false", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// Parses an unattended-reviewer consent flag. Fail-closed polarity, the opposite of
+    /// <see cref="ParseAcpReconnectFlag"/>: only an explicit <c>1</c>/<c>true</c>/<c>yes</c>/<c>on</c>
+    /// enables it, and unset, blank or unrecognised leaves it OFF. Enabling one of these is a
+    /// security consent event, so a typo must not be read as consent.
+    /// </summary>
+    internal static bool ParseConsentFlag(string? value) =>
+        value?.Trim() is { Length: > 0 } v
+     && (v == "1"
+      || string.Equals(v, "true", StringComparison.OrdinalIgnoreCase)
+      || string.Equals(v, "yes",  StringComparison.OrdinalIgnoreCase)
+      || string.Equals(v, "on",   StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
     /// True when a "cursor" <see cref="IHostedAgentRuntimeFactory"/> is registered but

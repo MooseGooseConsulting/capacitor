@@ -21,7 +21,15 @@ internal enum AcpReviewFlowMcpTransport {
 internal enum AcpUnattendedInteractionPolicy {
     Disabled,
     AutoApprove,
-    Fail
+    Fail,
+
+    /// <summary>Approve a frame that names only tools THIS launch injected; treat every other frame
+    /// exactly as <see cref="Fail"/> does. The middle ground the other two cannot express:
+    /// <see cref="AutoApprove"/> does not inspect the tool, and <see cref="Fail"/> assumes a correctly
+    /// configured reviewer never raises a frame — measurably false on Kiro, which intermittently
+    /// prompts for a tool that is in its own trust list. See <see cref="UnattendedToolAdmission"/>.
+    /// </summary>
+    AllowlistedAutoApprove
 }
 
 /// <summary>The security boundary used to serve borrowed-checkout context without exposing the
@@ -103,6 +111,16 @@ internal sealed record AcpVendorDescriptor {
     public Func<DaemonConfig, string?> ResolveDefaultModel   { get; }
     public ImmutableArray<string>      Argv                   { get; }
     public ImmutableArray<string>      UnattendedTrustArgv    { get; }
+
+    /// <summary>Builds this vendor's unattended trust argv from the launch's OWN injected MCP specs,
+    /// when a fixed <see cref="UnattendedTrustArgv"/> cannot express it. Mutually exclusive with it.
+    ///
+    /// <para>Null for every vendor whose trust argv is a constant. Present for Kiro, whose SCOPED
+    /// trust list has to name the per-launch wire name of everything <c>session/new</c> injects — a
+    /// fixed list would omit the review's allowlist servers, and under the <c>Fail</c> policy their
+    /// first tool call would end the round.</para></summary>
+    public Func<IReadOnlyList<Core.Acp.AcpMcpServerSpec>, LaunchIdentity, ImmutableArray<string>>?
+                                       UnattendedTrustArgvBuilder { get; }
     public bool                        SupportsUnattended     { get; }
     public AcpUnattendedInteractionPolicy UnattendedInteractionPolicy { get; }
     public IAcpModelSelector           ModelSelector          { get; }
@@ -140,7 +158,9 @@ internal sealed record AcpVendorDescriptor {
             bool                        SupportsBorrowedReviewFlow = false,
             AcpUnattendedInteractionPolicy UnattendedInteractionPolicy = AcpUnattendedInteractionPolicy.Disabled,
             AcpBorrowedReviewContainment BorrowedReviewContainment = AcpBorrowedReviewContainment.None,
-            bool                        SupportsReconnectResume = false
+            bool                        SupportsReconnectResume = false,
+            Func<IReadOnlyList<Core.Acp.AcpMcpServerSpec>, LaunchIdentity, ImmutableArray<string>>?
+                                        UnattendedTrustArgvBuilder = null
         ) {
         var normalizedUnattendedTrustArgv = UnattendedTrustArgv.IsDefault ? ImmutableArray<string>.Empty : UnattendedTrustArgv;
 
@@ -148,6 +168,18 @@ internal sealed record AcpVendorDescriptor {
             throw new ArgumentException(
                 $"{nameof(UnattendedTrustArgv)} must be empty when {nameof(SupportsUnattended)} is false (vendor: {Vendor}).",
                 nameof(UnattendedTrustArgv));
+
+        if (!SupportsUnattended && UnattendedTrustArgvBuilder is not null)
+            throw new ArgumentException(
+                $"{nameof(UnattendedTrustArgvBuilder)} must be null when {nameof(SupportsUnattended)} is false (vendor: {Vendor}).",
+                nameof(UnattendedTrustArgvBuilder));
+
+        // Two sources for one argv is the ambiguity this rejects: a reader could not tell which wins,
+        // and the answer would live in the factory rather than here.
+        if (UnattendedTrustArgvBuilder is not null && !normalizedUnattendedTrustArgv.IsEmpty)
+            throw new ArgumentException(
+                $"{nameof(UnattendedTrustArgvBuilder)} and a non-empty {nameof(UnattendedTrustArgv)} are mutually exclusive (vendor: {Vendor}).",
+                nameof(UnattendedTrustArgvBuilder));
 
         if (SupportsBorrowedReviewFlow && !SupportsUnattended)
             throw new ArgumentException(
@@ -174,6 +206,7 @@ internal sealed record AcpVendorDescriptor {
         this.ResolveDefaultModel = ResolveDefaultModel;
         this.Argv                = Argv.IsDefault ? ImmutableArray<string>.Empty : Argv;
         this.UnattendedTrustArgv = normalizedUnattendedTrustArgv;
+        this.UnattendedTrustArgvBuilder = UnattendedTrustArgvBuilder;
         this.SupportsUnattended  = SupportsUnattended;
         this.UnattendedInteractionPolicy = UnattendedInteractionPolicy;
         this.ModelSelector       = ModelSelector;
@@ -264,12 +297,21 @@ internal static class AcpVendorDescriptors {
         SupportsReconnectResume: true
     );
 
-    /// <summary>AWS Kiro CLI as an ACP hosted agent (<c>kiro-cli acp</c>). Interactive hosting only:
-    /// unattended review is deliberately withheld until its own issue lands the containment mechanism
-    /// (Kiro inherits the user's GLOBAL <c>~/.kiro/settings/mcp.json</c> servers into every ACP
-    /// session, so an unattended reviewer would be handed <c>kcap-flows</c> and could start nested
-    /// flows). Interactive hosting is unaffected by that inheritance — it is the desired behavior
-    /// there.
+    /// <summary>AWS Kiro CLI as an ACP hosted agent (<c>kiro-cli acp</c>). Hosted interactively and as
+    /// an unattended review-flow reviewer.
+    ///
+    /// <para><b>Unattended containment is SOURCE SUPPRESSION, not a tool clamp.</b> Kiro inherits the
+    /// operator's GLOBAL <c>~/.kiro/settings/mcp.json</c> servers into every ACP session, which would
+    /// hand a reviewer <c>kcap-flows</c> and let it start nested flows. A review launch therefore runs
+    /// with a daemon-owned, empty <c>KIRO_HOME</c> (measured: zero global servers initialize, while an
+    /// injected <c>session/new</c> server still starts), and branch-authored workspace config is
+    /// removed at the worktree layer. Interactive hosting keeps the inheritance — there it is the
+    /// desired behaviour.</para>
+    ///
+    /// <para><b>What is NOT contained, and is accepted.</b> A trusted <c>fs_read</c> is not
+    /// path-scoped, so an unattended reviewer can read anything the daemon user can. That is an
+    /// operator consent decision, gated by <c>KiroReviewerCapability</c>, not something the trust list
+    /// bounds.</para>
     ///
     /// <para><b><see cref="SupportsMcpServers"/> is <c>true</c> here while <see cref="Copilot"/> sets
     /// it <c>false</c>, and the reasoning is NOT contradictory.</b> Both vendors advertise the same
@@ -303,10 +345,28 @@ internal static class AcpVendorDescriptors {
         ResolveBinaryPath:   cfg => cfg.KiroPath,
         ResolveDefaultModel: cfg => cfg.KiroModel,
         Argv:                ["acp"],
-        UnattendedTrustArgv: [],
-        SupportsUnattended:  false,
+        // Built PER LAUNCH from the same injected MCP specs and the same LaunchIdentity session/new
+        // gets: a fixed list would omit the review's allowlist servers, and under the Fail policy
+        // their first tool call would end the round. Never fs_write, never execute_bash.
+        UnattendedTrustArgv:        [],
+        UnattendedTrustArgvBuilder: KiroReviewerTrustList.BuildArgv,
+        SupportsUnattended:  true,
+        // AllowlistedAutoApprove, and the reason is measured rather than preferred.
+        //
+        // Fail was the original choice, on the premise that a scoped-trust reviewer emits no frame at
+        // all. That premise is FALSE on kiro-cli 2.16.0: a live seeded-defect round raised a
+        // session/request_permission for @kcap-flow-result/submit_review_result -- a tool that is in
+        // this launch's own --trust-tools -- while an identical arm raised none. Under Fail that
+        // intermittently reaps the reviewer on the very call that delivers its result.
+        //
+        // AutoApprove is not the alternative: it does not inspect the tool, so it would approve
+        // exactly the out-of-surface request the scoping exists to reject. This policy approves only
+        // the tools THIS launch injected and reaps anything else, which keeps the scoped posture --
+        // still no fs_write, still no execute_bash -- while surviving the vendor's prompt leak.
+        UnattendedInteractionPolicy: AcpUnattendedInteractionPolicy.AllowlistedAutoApprove,
         ModelSelector:       SetModelSelector.Instance,
         SupportsMcpServers:  true,
+        ReviewFlowMcpTransport: AcpReviewFlowMcpTransport.SessionNew,
         // Measured INELIGIBLE 2026-08-04 (docs/probes/2026-08-04-acp-reconnect-c0/): Kiro advertises
         // loadSession but refuses session/load after a SIGKILLed owner with a DURABLE stale-owner
         // lock — "Failed to start session: Session is active in another process (PID <dead>)",

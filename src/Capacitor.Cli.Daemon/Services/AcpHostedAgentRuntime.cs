@@ -234,7 +234,91 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     string? _requestedModel;
     AcpMcpServerSpec[] _mcpServersForResume = NoMcpServers;
     int     _disposed;
-    int     _unexpectedUnattendedInteractionSeen;
+
+    /// <summary>Present only for an unattended Kiro review launch. Judges every MCP-surface
+    /// notification on arrival; a violation reaps the reviewer through the same path a forbidden
+    /// interaction frame does, because both mean the same thing — the containment contract this
+    /// launch was admitted under no longer holds.</summary>
+    readonly KiroMcpSurfaceMonitor? _mcpSurfaceMonitor;
+
+    /// <summary>Runs once the child is gone. Carries the Kiro reviewer's isolated-home deletion: the
+    /// home is transcript-bearing, and the FACTORY can only clean up launches that FAILED — a
+    /// successful review's home would otherwise sit on disk until a later daemon epoch swept it.</summary>
+    readonly Action? _onDisposed;
+
+    /// <summary>
+    /// The in-flight out-of-band reap, if one was started. Awaited by disposal so cleanup never runs
+    /// ahead of the termination it depends on.
+    ///
+    /// <para>Guarded by <see cref="_reapLock"/> rather than <c>volatile</c>: volatility publishes the
+    /// reference but cannot make "flip the single-shot guard" and "publish the task" atomic, so a
+    /// disposal landing between them would read null and skip the wait. Both reap paths — the
+    /// tripwire/watchdog violation and the forbidden-interaction frame — publish through it.</para>
+    /// </summary>
+    Task? _reapTask;
+    readonly object _reapLock = new();
+
+    /// <summary>
+    /// Claims the single reap slot. The claim and the later publication happen under ONE lock, and
+    /// <see cref="TakeReap"/> waits on that same lock — so a disposal can no longer land in the gap
+    /// between "the guard flipped" and "the task exists" and conclude there is nothing to await.
+    /// An interlocked flag alone cannot express that, because the two steps are not one operation.
+    /// </summary>
+    bool TryStartReap(Func<Task> start) {
+        lock (_reapLock) {
+            if (_reapClaimed) return false;
+
+            _reapClaimed = true;
+
+            // Started AND published inside the lock: claiming, releasing, then publishing leaves the
+            // gap this exists to close — a disposal taking the lock in between sees a claim with no
+            // task and concludes there is nothing to await.
+            //
+            // The callback runs SYNCHRONOUS work first (logging, _cts.Cancel()), so it can throw —
+            // notably when a dispatched notification races disposal past _cts.Dispose(). Unwinding
+            // out of here would release the lock with the slot claimed and no task published, which
+            // is precisely the prohibited state. So the claim is released on failure.
+            try {
+                _reapTask = start();
+            } catch {
+                _reapClaimed = false;
+                throw;
+            }
+
+            return true;
+        }
+    }
+
+    /// <summary>The in-flight reap, or null when none was ever claimed. A claim with no task yet
+    /// published cannot be observed: the claimant publishes before releasing the caller.</summary>
+    Task? TakeReap() { lock (_reapLock) return _reapTask; }
+
+    bool _reapClaimed;
+
+    /// <summary>
+    /// How long the FIRST turn may produce nothing at all before the child is reaped. Null disables
+    /// it, which is every launch but an unattended Kiro review.
+    ///
+    /// <para><b>Why first OUTPUT and not turn completion.</b> The obvious reading of "bound the first
+    /// prompt" is to time the turn — but a real review turn legitimately runs for minutes, which is
+    /// exactly why <see cref="StartAsync"/> enqueues it without awaiting. Bounding completion would
+    /// kill good reviews. The failure actually being defended against is a peer that is ALIVE and
+    /// SILENT: a kiro-cli whose credential expired sits on an interactive browser prompt and emits
+    /// nothing, ever. Time-to-first-update separates those two: once the model starts streaming, the
+    /// turn may take as long as it likes.</para>
+    /// </summary>
+    readonly TimeSpan? _firstOutputDeadline;
+
+    /// <summary>The <c>@server/tool</c> identities this launch injected — the set
+    /// <see cref="AcpUnattendedInteractionPolicy.AllowlistedAutoApprove"/> approves. Null for every
+    /// other policy.</summary>
+    readonly IReadOnlySet<string>? _admittedToolIds;
+
+    int _sawFirstUpdate;
+
+    /// <summary>Completes when the first turn ends, however it ends — the other way to disarm the
+    /// first-output watchdog.</summary>
+    readonly TaskCompletionSource _firstTurnSettled = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     /// <summary>Agent capabilities negotiated by <see cref="StartAsync"/>'s <c>initialize</c> call; null before that.</summary>
     AgentCapabilities? _negotiatedCapabilities;
@@ -295,8 +379,16 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
             string                                                                         vendor = "cursor",
             IAcpModelSelector?                                                             modelSelector = null,
             AcpUnattendedInteractionPolicy                                                  unattendedInteractionPolicy = AcpUnattendedInteractionPolicy.Disabled,
-            AcpReconnectSupport?                                                            reconnect = null
+            AcpReconnectSupport?                                                            reconnect = null,
+            KiroMcpSurfaceMonitor?                                                          mcpSurfaceMonitor = null,
+            Action?                                                                         onDisposed = null,
+            TimeSpan?                                                                       firstOutputDeadline = null,
+            IReadOnlySet<string>?                                                           admittedToolIds = null
         ) {
+        _admittedToolIds = admittedToolIds;
+        _firstOutputDeadline = firstOutputDeadline;
+        _mcpSurfaceMonitor = mcpSurfaceMonitor;
+        _onDisposed        = onDisposed;
         _reconnect     = reconnect;
         _logger        = logger;
         _timeProvider  = timeProvider ?? TimeProvider.System;
@@ -329,7 +421,8 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
                 agentId,
                 logger,
                 unattendedInteractionPolicy,
-                HandleUnexpectedUnattendedInteraction);
+                HandleUnexpectedUnattendedInteraction,
+                admittedToolIds);
         }
 
         // The original launch's incarnation. Every later candidate goes through the same wiring
@@ -370,15 +463,34 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
                 (request, ct) => RouteServerRequestAsync(incarnation.Id, request, ct);
     }
 
-    void HandleUnexpectedUnattendedInteraction(string method) {
-        if (Interlocked.Exchange(ref _unexpectedUnattendedInteractionSeen, 1) != 0)
-            return;
+    /// <summary>Reaps on a tripwire violation, reusing the forbidden-interaction path: same
+    /// out-of-band termination, same single-shot guard, and the same reason it must not await
+    /// termination on the read loop.</summary>
+    void HandleMcpSurfaceViolation(string violation) {
+        // TRACKED, not fire-and-forget. Disposal deletes the reviewer's transcript-bearing home, and
+        // doing that while an in-flight reap has not confirmed the child is gone would leave a live
+        // reviewer writing into a deleted path — and recreating it.
+        if (!TryStartReap(() => {
+                _logger.LogError("ACP: reaping unattended reviewer — {Violation}", violation);
+                _cts.Cancel();
 
+                return ReapUnexpectedInteractionAsync(violation);
+            }))
+            return;
+    }
+
+    void HandleUnexpectedUnattendedInteraction(string method) {
         // Do not await process termination on AcpConnection's read loop: that loop is currently
         // handling the offending request, and the child may wait for its response before exiting.
         // Reap out-of-band and cancel both runtime workers immediately.
-        _cts.Cancel();
-        _ = ReapUnexpectedInteractionAsync(method);
+        // Same channel as the violation path: this is the SAME termination, so disposal must wait on
+        // it too. Leaving either untracked would reintroduce the race for whichever path fired.
+        if (!TryStartReap(() => {
+                _cts.Cancel();
+
+                return ReapUnexpectedInteractionAsync(method);
+            }))
+            return;
     }
 
     async Task ReapUnexpectedInteractionAsync(string method) {
@@ -657,8 +769,37 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
         // awaiting it: a real ACP turn can run arbitrarily long, and blocking StartAsync on it would
         // delay agent registration/stoppability for the whole turn. Completion is
         // observed via the Updates/Envelopes channels, not this method's return.
-        if (!string.IsNullOrEmpty(initialPrompt))
+        if (!string.IsNullOrEmpty(initialPrompt)) {
             _ = EnqueueTurn(initialPrompt, acknowledgeWrite: false);
+            ArmFirstOutputWatchdog();
+        }
+    }
+
+    /// <summary>
+    /// Reaps a first turn that produces NO output at all within the deadline. Fire-and-forget by
+    /// design: StartAsync must not block on the turn (see <see cref="_firstOutputDeadline"/>), so the
+    /// bound cannot be a cancellation token threaded through it.
+    /// </summary>
+    void ArmFirstOutputWatchdog() {
+        if (_firstOutputDeadline is not { } deadline) return;
+
+
+        _ = Task.Run(async () => {
+            try {
+                await Task.Delay(deadline, _timeProvider, _cts.Token).ConfigureAwait(false);
+            } catch (OperationCanceledException) {
+                return;   // disposed, reaped, or already finished — nothing to police
+            }
+
+            if (Volatile.Read(ref _sawFirstUpdate) != 0) return;
+
+            HandleMcpSurfaceViolation(
+                $"kiro_reviewer_first_output_timeout: the reviewer produced no output within "
+              + $"{deadline.TotalSeconds:0}s of its first prompt. A kiro-cli whose credential has "
+              + "expired stays alive on an interactive browser prompt rather than failing, which is "
+              + "the shape this bound exists for — check that the daemon user's kiro-cli is still "
+              + "authenticated.");
+        });
     }
 
     /// <summary>
@@ -822,6 +963,16 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
                 // skip-whole-replay nothing is ever re-emitted from replay, so the flushed partial
                 // run cannot be duplicated; it is the only copy of what the agent said before dying.
                 FlushOpenRun();
+
+                // However this turn ended — stopReason, fault, cancellation — it is settled, which
+                // disarms the first-output watchdog. Without this a turn that legitimately produced
+                // no session/update at all would leave the timer armed to reap a healthy reviewer.
+                // Disarms the first-output watchdog SYNCHRONOUSLY, here, rather than through a
+                // continuation on _firstTurnSettled: continuations run asynchronously, so the
+                // watchdog could read zero after the turn settled but before the continuation ran,
+                // and reap a healthy reviewer whose zero-update turn finished near the deadline.
+                Interlocked.Exchange(ref _sawFirstUpdate, 1);
+                _firstTurnSettled.TrySetResult();
 
                 lock (_reconnectLock) {
                     if (_inFlight is { } f && ReferenceEquals(f.Turn, turn))
@@ -1008,6 +1159,16 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     }
 
     void HandleNotification(AcpNotification notification) {
+        // Before the session/update filter: the MCP-surface notifications are a different method, and
+        // enforcement runs for the WHOLE session rather than a window — a late server initialization
+        // is exactly the case a sampling scheme would miss.
+        if (_mcpSurfaceMonitor is { } monitor) {
+            monitor.Observe(notification);
+
+            if (monitor.Violation is { } violation)
+                HandleMcpSurfaceViolation(violation);
+        }
+
         if (notification.Method != "session/update")
             return;
 
@@ -1028,6 +1189,19 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
         }
 
         var reduced = Reduce(updateElement.Clone());
+
+        // Only an update that carries actual TURN OUTPUT disarms the watchdog.
+        //
+        // "Recognized kind" is not the same predicate and was too weak: Reduce validates the
+        // discriminator, not its payload, so an empty agent_message_chunk or an id-less tool_call
+        // yields a known kind while saying nothing — one such frame plus a never-settled turn would
+        // buy the unbounded silence this exists to catch. The session-scoped kinds
+        // (available_commands, session_info, usage) are excluded for the same reason: a peer can emit
+        // them and still never begin the turn.
+        if (reduced.Kind is AcpUpdateKind.AgentMessageChunk or AcpUpdateKind.AgentThoughtChunk
+                         or AcpUpdateKind.ToolCall or AcpUpdateKind.ToolCallUpdate
+                         or AcpUpdateKind.Plan)
+            Interlocked.Exchange(ref _sawFirstUpdate, 1);
         if (!_updates.Writer.TryWrite(reduced))
             _logger.LogDebug("ACP: dropped a session/update — updates channel already completed.");
 
@@ -1347,8 +1521,60 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
 
         _cts.Dispose();
 
-        await installed.Connection.DisposeAsync().ConfigureAwait(false);
-        await installed.Process.DisposeAsync().ConfigureAwait(false);
+        // In a finally, because _disposed is latched at the top: if connection or process disposal
+        // faults, a retry returns immediately and the callback would never run at all. For the Kiro
+        // reviewer that callback deletes the transcript-bearing home, so skipping it on a faulted
+        // teardown is precisely the leak this hook exists to close.
+        // Set false only when the child's exit could not be confirmed — see below.
+        var cleanupSafe = true;
+
+        // BEFORE disposing anything, when the child is still observable. AcpChildProcess.HasExited
+        // reports true as soon as the underlying Process is disposed, so asking afterwards mistakes
+        // "no longer observable" for "confirmed exited" — the opposite of what this gate is for.
+        if (_onDisposed is not null) {
+            if (TakeReap() is { } reap) {
+                try { await reap.ConfigureAwait(false); } catch { /* already logged by the reap */ }
+            }
+
+            try {
+                // Bounded HERE with WaitAsync rather than by trusting the timeout argument: the
+                // interface takes one but does not oblige an implementation to honour it, and the
+                // test doubles return a task completing only on an explicit exit signal — so relying
+                // on the parameter hung every suite that disposes a fake.
+                await installed.Process.WaitForExitAsync(TimeSpan.FromSeconds(5))
+                                       .WaitAsync(TimeSpan.FromSeconds(5))
+                                       .ConfigureAwait(false);
+            } catch (Exception ex) {
+                _logger.LogDebug(ex, "ACP: could not confirm child exit before post-dispose cleanup.");
+            }
+
+            // Unconfirmed means SKIP the deletion, not force it: deleting under a live reviewer would
+            // leave it writing into an unlinked path and recreating the directory, which is worse
+            // than leaving it. The epoch-keyed startup sweep collects it on the next boot.
+            if (!installed.Process.HasExited) {
+                _logger.LogWarning(
+                    "ACP: child for agent {AgentId} did not confirm exit; leaving its reviewer home "
+                  + "for the startup sweep rather than deleting it under a live process.", _agentId);
+
+                cleanupSafe = false;
+            }
+        }
+
+        try {
+            // NESTED, not sequential in one try: a faulting Connection.DisposeAsync would otherwise
+            // skip Process.DisposeAsync entirely.
+            try {
+                await installed.Connection.DisposeAsync().ConfigureAwait(false);
+            } finally {
+                await installed.Process.DisposeAsync().ConfigureAwait(false);
+            }
+        } finally {
+            try {
+                if (cleanupSafe) _onDisposed?.Invoke();
+            } catch (Exception ex) {
+                _logger.LogWarning(ex, "ACP: post-dispose cleanup failed for agent {AgentId}.", _agentId);
+            }
+        }
     }
 
     // ── Reconnect/resume (skip-whole-replay — docs/superpowers/specs/2026-08-04-ai1325-acp-reconnect-resume-design.md) ──

@@ -6,6 +6,7 @@ using Capacitor.Cli.Core.Acp;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Daemon.Acp;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Capacitor.Cli.Daemon.Services;
 
@@ -72,8 +73,13 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
     /// </summary>
     public bool SupportsUnattended {
         get {
-            if (!descriptor.SupportsUnattended)      return false;
-            if (!AliasesResultChannel(descriptor))   return true;
+            if (!descriptor.SupportsUnattended) return false;
+
+            if (descriptor.Vendor == AcpVendorDescriptors.Kiro.Vendor)
+                return KiroReviewerDecisionFor(descriptor, config, _resolveVendorVersion)
+                    == KiroReviewerDecision.Allowed;
+
+            if (!UsesMcpNameAllowlistArgv(descriptor)) return true;
 
             // Operator flag FIRST, and short-circuit. Review's point: evaluating the version probe as an
             // argument meant an installed-but-wedged vendor binary could hang daemon STARTUP even though the
@@ -81,7 +87,7 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
             if (!config.GeminiUnattendedReviewerEnabled) return false;
 
             return GeminiReviewerCapability.IsEnabled(
-                true, (_resolveVendorVersion ?? ResolveGeminiVersion)(descriptor.ResolveBinaryPath(config)));
+                true, (_resolveVendorVersion ?? VendorVersionResolver.Resolve)(descriptor.ResolveBinaryPath(config)));
         }
     }
     public bool   SupportsBorrowedReviewFlow => _policy.Supported;
@@ -127,7 +133,7 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
         // way — was invoked for a disabled daemon or an uncertified vendor version and could spawn directly.
         // "Unbypassable" has to mean before any source, not before the default one. The builder keeps its own
         // check as defence in depth, since a direct builder call is its own path.
-        RequireGeminiReviewerCapability(descriptor, config, ctx.IsReviewFlow, _resolveVendorVersion);
+        RequireReviewerCapability(descriptor, config, ctx.IsReviewFlow, _resolveVendorVersion);
 
         // Fail closed BEFORE _connectionSource spawns a child (a later gate would leak one). Null for
         // a non-review launch; the built MCP list for a valid review flow.
@@ -185,7 +191,35 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
             vendor: descriptor.Vendor,
             modelSelector: descriptor.ModelSelector,
             unattendedInteractionPolicy: unattendedInteractionPolicy,
-            reconnect: reconnect
+            reconnect: reconnect,
+            // Built from the SAME spec list session/new receives, so the expected set is what was
+            // actually sent rather than a re-derivation of it.
+            mcpSurfaceMonitor: KiroMcpSurfaceMonitor.For(
+                descriptor, ctx.IsReviewFlow, reviewMcp, ctx.LaunchIdentity),
+            // NULL for every launch with nothing to clean up, rather than a lambda that no-ops
+            // internally: the runtime keys its ordered-teardown path (await the reap, confirm child
+            // exit) on this being non-null, so an always-supplied callback made every ACP launch of
+            // every vendor pay that wait. The factory can only clean up launches that FAILED, so a
+            // successful review's home needs this hook — it holds review context, and would
+            // otherwise survive until a later daemon epoch swept it.
+            onDisposed: ctx.IsReviewFlow && descriptor.Vendor == AcpVendorDescriptors.Kiro.Vendor
+                ? (Action)(() => DeleteKiroReviewerHome(descriptor, config, ctx, _logger))
+                : null,
+            // The second half of the launch bound. The deadline below covers spawn through the
+            // handshake; StartAsync deliberately does NOT await the first turn, so a peer that
+            // completes initialize and then wedges on the credential path would otherwise be
+            // unbounded. Time-to-first-OUTPUT, never turn completion — a real review runs long.
+            firstOutputDeadline: ctx.IsReviewFlow && descriptor.Vendor == AcpVendorDescriptors.Kiro.Vendor
+                ? TimeSpan.FromSeconds(config.KiroReviewerLaunchTimeoutSeconds)
+                : null,
+            // The set AllowlistedAutoApprove admits, built from the SAME injected specs and identity
+            // the trust argv is built from. Two derivations would let the reviewer be TRUSTED to call
+            // a tool the policy then refuses to approve — a round that dies on its own result call.
+            admittedToolIds: descriptor.UnattendedInteractionPolicy
+                                 == AcpUnattendedInteractionPolicy.AllowlistedAutoApprove
+                          && ctx.IsReviewFlow && reviewMcp is { Count: > 0 } && ctx.LaunchIdentity is { } id
+                ? UnattendedToolAdmission.AdmittedFor(reviewMcp, id)
+                : null
         );
 
         // Review flow: the injected result channel + allowlist. Otherwise unchanged (null today).
@@ -241,20 +275,61 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
                 string.Join(",", (reviewMcp ?? []).Select(spec => spec.Name)));
         }
 
+        // ONE absolute budget across spawn -> initialize -> session/new -> model selection, not a
+        // fresh timeout per stage: re-deriving it per stage lets a slow sequence approach a multiple
+        // of it. It does NOT cover the first turn — StartAsync enqueues that without awaiting, by
+        // design, so the turn is bounded separately by the runtime's first-OUTPUT watchdog.
+        //
+        // Why this exists at all. Operator-managed authentication is a launch PRECONDITION, not an
+        // invariant: a credential can expire or be revoked between the operator's login and a review
+        // three weeks later. Measured, an unauthenticated kiro-cli does not fail — it prints
+        // "Opening browser..." and STAYS ALIVE FOREVER. Nothing else here bounds that: the runtime
+        // bounds only its settlement wait, and a server-side round timeout would fail the round while
+        // leaving this child, and its transcript-bearing home, behind.
+        using var launchDeadline = KiroReviewerLaunchDeadline(descriptor, config, ctx, ct);
+
         try {
             await runtime.StartAsync(
                 ctx.Worktree.Path,
                 ctx.Prompt,
-                ct,
+                launchDeadline?.Token ?? ct,
                 ResolveRequestedModel(descriptor, config, ctx),
                 mcpServers
             ).ConfigureAwait(false);
+        } catch (OperationCanceledException) when (launchDeadline is { IsCancellationRequested: true }
+                                                && !ct.IsCancellationRequested) {
+            LogSurfaceOnceIfEstablished();
+
+            // Terminate EXPLICITLY, and before disposal. Disposal alone is not a reap — it releases
+            // our handles, which for a child that is alive and silent (the shape this branch exists
+            // for) leaves it running. Caught by the alive-but-silent test, which asserted termination
+            // rather than just the coded error.
+            try {
+                await acpProcess.TerminateAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+            } catch (Exception ex) {
+                _logger.LogDebug(ex, "ACP: failed to reap Kiro reviewer after its launch deadline expired.");
+            }
+
+            // Only after the child is gone: deleting under a live Kiro leaves it writing into an
+            // unlinked path. The home is transcript-bearing, so this is disposal, not disk hygiene.
+            // No explicit delete here: runtime.DisposeAsync runs the ordered cleanup (await the
+            // reap, confirm exit, then delete), and deleting again afterwards would bypass exactly
+            // the exit-confirmed gate that ordering exists to enforce.
+            await runtime.DisposeAsync().ConfigureAwait(false);
+
+            throw new InvalidOperationException(
+                $"kiro_reviewer_launch_timeout: the reviewer did not complete its first prompt within "
+              + $"{config.KiroReviewerLaunchTimeoutSeconds}s. The child was terminated and its isolated "
+              + "home removed. A kiro-cli whose credential has expired stays alive on an interactive "
+              + "browser prompt rather than failing, which is the shape this bound exists for — check "
+              + "that the daemon user's kiro-cli is still authenticated.");
         } catch {
             // An established session is a fact the record must keep even though the launch failed.
             LogSurfaceOnceIfEstablished();
 
             // The runtime owns both the connection and the process; dispose on a failed handshake
             // so a half-started child process is never leaked.
+            // As above: disposal owns the exit-confirmed deletion.
             await runtime.DisposeAsync().ConfigureAwait(false);
 
             throw;
@@ -271,6 +346,32 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
     /// <summary>
     /// Fail-closed validation + build of the review-flow MCP list, run as the FIRST thing in
     /// <see cref="StartAsync"/> — before <c>_connectionSource</c> can spawn a child. Returns
+    /// <summary>The single absolute budget for a Kiro review launch, or null for every other launch
+    /// (which keeps their behaviour byte-identical). Linked to the caller's token so a real shutdown
+    /// still wins and is not misreported as a timeout.</summary>
+    static CancellationTokenSource? KiroReviewerLaunchDeadline(
+            AcpVendorDescriptor descriptor, DaemonConfig config, RuntimeStartContext ctx, CancellationToken ct) {
+        if (!ctx.IsReviewFlow || descriptor.Vendor != AcpVendorDescriptors.Kiro.Vendor) return null;
+
+        var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        linked.CancelAfter(TimeSpan.FromSeconds(config.KiroReviewerLaunchTimeoutSeconds));
+        return linked;
+    }
+
+    /// <summary>Best-effort disposal of a failed launch's reviewer home. Never throws: a home we
+    /// cannot delete must not replace the launch's real error with a cleanup one.</summary>
+    static void DeleteKiroReviewerHome(
+            AcpVendorDescriptor descriptor, DaemonConfig config, RuntimeStartContext ctx, ILogger log) {
+        if (!ctx.IsReviewFlow || descriptor.Vendor != AcpVendorDescriptors.Kiro.Vendor) return;
+
+        var stateDir = ReviewerStateDir(config);
+
+        KiroReviewerHome.Delete(
+            Path.Combine(KiroReviewerHome.RootFor(stateDir),
+                         KiroReviewerHome.NameFor(config.DaemonEpoch ?? "unpinned", ctx.AgentId)),
+            stateDir, log);
+    }
+
     internal static AcpUnattendedInteractionPolicy ResolveUnattendedInteractionPolicy(
             RuntimeStartContext ctx, AcpVendorDescriptor descriptor) =>
         !ctx.IsReviewFlow                 ? AcpUnattendedInteractionPolicy.Disabled
@@ -350,7 +451,26 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
     /// under review. Every other vendor keeps the canonical id on the wire, so their behaviour is
     /// byte-identical to before the alias existed.</para>
     /// </summary>
-    static bool AliasesResultChannel(AcpVendorDescriptor descriptor) =>
+    /// <summary>Vendors whose injected MCP servers carry PER-LAUNCH wire names.
+    ///
+    /// <para>Two different reasons, deliberately served by one mechanism. Gemini needs unguessable
+    /// names because its MCP gate is an exact-name allowlist the reviewed repository could declare a
+    /// server under. Kiro needs them because its MCP surface tripwire compares reported server names
+    /// against the injected set, and a canonical public id is a string any other source could also
+    /// produce — aliasing is what makes that comparison close to an identity check rather than a
+    /// string match.</para></summary>
+    internal static bool AliasesResultChannel(AcpVendorDescriptor descriptor) =>
+        descriptor.Vendor == AcpVendorDescriptors.Gemini.Vendor
+     || descriptor.Vendor == AcpVendorDescriptors.Kiro.Vendor;
+
+    /// <summary>Vendors whose ARGV carries an exact-name MCP allowlist a review launch must widen to
+    /// exactly its injected set — Gemini alone.
+    ///
+    /// <para><b>Split out of <see cref="AliasesResultChannel"/> rather than reusing it.</b> That one
+    /// predicate used to gate four separate behaviours; Kiro aliases but has no such flag, so running
+    /// the placeholder substitution or the canonical-argv assertion for it would assert against
+    /// machinery it does not have, and route it through Gemini's capability gate.</para></summary>
+    internal static bool UsesMcpNameAllowlistArgv(AcpVendorDescriptor descriptor) =>
         descriptor.Vendor == AcpVendorDescriptors.Gemini.Vendor;
 
     /// <summary>
@@ -431,7 +551,7 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
 
         // Defence in depth: StartAsync gates before any connection source runs, but a direct builder call
         // (a test, a future caller, a refactor that inlines the spawn) is its own path to an argv.
-        RequireGeminiReviewerCapability(descriptor, config, ctx.IsReviewFlow, resolveGeminiVersion);
+        RequireReviewerCapability(descriptor, config, ctx.IsReviewFlow, resolveGeminiVersion);
 
         var argv = SubstituteUnmatchableNames([.. descriptor.Argv], identity);
 
@@ -440,7 +560,15 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
         string? reviewGate = null;
 
         if (ctx.IsReviewFlow) {
-            argv.AddRange(descriptor.UnattendedTrustArgv);
+            // A vendor whose trust argv depends on what this launch injects builds it from the SAME
+            // spec list session/new gets and the SAME identity. Deriving it from server ids instead
+            // would be a second derivation of the same names, and that failure is silent: the
+            // reviewer starts normally and can never call its own channel.
+            if (descriptor.UnattendedTrustArgvBuilder is { } buildTrustArgv)
+                argv.AddRange(buildTrustArgv(
+                    ValidateAndBuildReviewFlowMcp(ctx, descriptor, resolved)!, identity));
+            else
+                argv.AddRange(descriptor.UnattendedTrustArgv);
 
             // A review launch REPLACES the deny-all allowlist value with the names of exactly the servers
             // this launch injects — the result channel plus any resolved allowlist servers — as ONE
@@ -456,7 +584,7 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
             // below) because only these two argv consumers need the list here — for every other vendor
             // session/new is the sole consumer and StartAsync builds it, so validating in the builder too
             // would change direct-builder behavior for vendors whose argv never carries MCP names.
-            if (AliasesResultChannel(descriptor)) {
+            if (UsesMcpNameAllowlistArgv(descriptor)) {
                 var reviewMcp = ValidateAndBuildReviewFlowMcp(ctx, descriptor, resolved)!;
                 reviewGate = string.Join(",", reviewMcp.Select(s => s.Name));
                 for (var i = 0; i < argv.Count; i++)
@@ -551,6 +679,15 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
         if (!string.IsNullOrEmpty(ctx.ServerUrl))
             psi.Environment["KCAP_URL"] = ctx.ServerUrl;
 
+        // The isolated home is what suppresses the operator's GLOBAL MCP servers — the flows server
+        // among them, which would let a reviewer start nested review flows. Created here rather than
+        // left to the vendor: it must exist, and be owner-only, before the child writes the first
+        // transcript line into it. Review launches only; an interactive hosted Kiro must behave as the
+        // user's own session does, global servers included.
+        if (ctx.IsReviewFlow && descriptor.Vendor == AcpVendorDescriptors.Kiro.Vendor)
+            psi.Environment["KIRO_HOME"] = KiroReviewerHome.Create(
+                ReviewerStateDir(config), config.DaemonEpoch ?? "unpinned", ctx.AgentId);
+
         if (stateRoot is not null) {
             // HOME and TMPDIR both move into the per-launch root, which is what keeps the reviewer
             // away from the user's vendor profile, command history and caches — and what removes the
@@ -564,7 +701,7 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
         // local list — this is the vector the process receives, and nothing between here and Process.Start
         // touches it. Asserting the local list instead would certify something the OS never sees, which is
         // worse than no assertion because it looks like coverage.
-        if (AliasesResultChannel(descriptor) && psi.FileName != BorrowedReviewSandbox.SandboxExecPath)
+        if (UsesMcpNameAllowlistArgv(descriptor) && psi.FileName != BorrowedReviewSandbox.SandboxExecPath)
             AssertGeminiArgvIsCanonical(psi.ArgumentList, ctx.IsReviewFlow, identity, reviewGate);
 
         return psi;
@@ -650,10 +787,50 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
     /// boundary) and <see cref="BuildProcessStartInfo"/> (defence in depth for a direct builder call).
     /// No-op for every other vendor and for every interactive launch.</para>
     /// </summary>
-    static void RequireGeminiReviewerCapability(
+    /// <summary>This daemon's own reviewer state directory — the same
+    /// <c>{StateDir}/{name}</c> shape DaemonRunner uses for consent, so a reviewer home and a
+    /// consent decision live under one owner-only root per daemon. Per DAEMON, never shared: the
+    /// reviewer-home sweep's safety depends on every directory in its root belonging to this
+    /// daemon.</summary>
+    internal static string ReviewerStateDir(DaemonConfig config) =>
+        Path.Combine(config.StateDir ?? DaemonLockPaths.Directory, DaemonLockPaths.Sanitize(config.Name));
+
+    static KiroReviewerVersionStore KiroVersionStoreFor(DaemonConfig config) =>
+        new(ReviewerStateDir(config));
+
+    /// <summary>Null unless the operator has opted in — the flag is checked first precisely so a
+    /// disabled daemon never executes the vendor binary.</summary>
+    static string? InstalledKiroVersion(
+            AcpVendorDescriptor descriptor, DaemonConfig config, Func<string, string?>? resolveVersion) =>
+        config.KiroUnattendedReviewerEnabled
+            ? (resolveVersion ?? VendorVersionResolver.Resolve)(descriptor.ResolveBinaryPath(config))
+            : null;
+
+    internal static KiroReviewerDecision KiroReviewerDecisionFor(
+            AcpVendorDescriptor descriptor, DaemonConfig config, Func<string, string?>? resolveVersion) {
+        var enabled = config.KiroUnattendedReviewerEnabled;
+
+        return KiroReviewerCapability.Decide(
+            enabled,
+            InstalledKiroVersion(descriptor, config, resolveVersion),
+            enabled ? KiroVersionStoreFor(config).Affirmed : null);
+    }
+
+    static void RequireReviewerCapability(
             AcpVendorDescriptor descriptor, DaemonConfig config, bool isReviewFlow,
             Func<string, string?>? resolveVersion) {
-        if (!isReviewFlow || !AliasesResultChannel(descriptor)) return;
+        if (!isReviewFlow) return;
+
+        if (descriptor.Vendor == AcpVendorDescriptors.Kiro.Vendor) {
+            var kiro = KiroReviewerDecisionFor(descriptor, config, resolveVersion);
+            if (kiro != KiroReviewerDecision.Allowed)
+                throw new InvalidOperationException(KiroReviewerCapability.DenialReason(
+                    kiro, InstalledKiroVersion(descriptor, config, resolveVersion),
+                    KiroVersionStoreFor(config).Affirmed));
+            return;
+        }
+
+        if (!UsesMcpNameAllowlistArgv(descriptor)) return;
 
         // Operator consent is checked FIRST so a disabled daemon never interrogates the vendor binary at all.
         // Review's point: probing an installed-but-wedged vendor while the feature is switched off is a way
@@ -661,78 +838,10 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
         if (!config.GeminiUnattendedReviewerEnabled)
             throw new InvalidOperationException(GeminiReviewerCapability.DenialReason(false, null));
 
-        var version = (resolveVersion ?? ResolveGeminiVersion)(descriptor.ResolveBinaryPath(config));
+        var version = (resolveVersion ?? VendorVersionResolver.Resolve)(descriptor.ResolveBinaryPath(config));
 
         if (!GeminiReviewerCapability.IsEnabled(true, version))
             throw new InvalidOperationException(GeminiReviewerCapability.DenialReason(true, version));
-    }
-
-    /// <summary>
-    /// Gemini's certified-version input: the installed binary's own reported version, or null when it
-    /// cannot be determined (which the capability treats as unknown, and therefore denies).
-    /// </summary>
-    static string? ResolveGeminiVersion(string binaryPath) {
-        try {
-            var resolved = CliResolver.ResolveExecutable(binaryPath);
-            if (resolved is null) return null;
-
-            using var proc = Process.Start(new ProcessStartInfo(resolved, ["--version"]) {
-                RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false,
-                CreateNoWindow = true
-            });
-            if (proc is null) return null;
-
-            // Both streams are drained CONCURRENTLY with the wait, and the wait is what bounds this.
-            //
-            // Review caught a deadlock: the previous shape called ReadToEnd() before WaitForExit(10s), so a
-            // vendor that never closed stdout blocked before the timeout could apply — and stderr was
-            // redirected but never drained, so filling its buffer wedged the child too. A bounded wait is
-            // only bounded if nothing ahead of it can block indefinitely.
-            var stdout = proc.StandardOutput.ReadToEndAsync();
-            var stderr = proc.StandardError.ReadToEndAsync();
-
-            if (!proc.WaitForExit(TimeSpan.FromSeconds(10))) {
-                try { proc.Kill(entireProcessTree: true); } catch { /* already gone */ }
-
-                return null;   // a timeout is an UNKNOWN version, which the capability denies
-            }
-
-            // The child has exited, so both reads are complete or completing; bounded again so a detached
-            // grandchild holding a pipe cannot keep us here.
-            if (!Task.WhenAll(stdout, stderr).Wait(TimeSpan.FromSeconds(5))) return null;
-
-            // Extract a version TOKEN from either stream rather than requiring the whole trimmed output to be
-            // one. Measured: gemini 0.53.0 prints the version to stdout AND stderr — but requiring exact
-            // equality is brittle either way, since the vendor already emits banner lines (skill-conflict
-            // warnings) on other paths, and a build that added an "update available" notice would make the
-            // gate fail closed and silently disable the reviewer. Review's point, and it applies even though
-            // today's format happens to work.
-            return proc.ExitCode == 0
-                ? ExtractVersionToken(stdout.Result) ?? ExtractVersionToken(stderr.Result)
-                : null;
-        } catch {
-            // Any failure to interrogate the binary is "unknown version", which the capability denies. A
-            // throw here would surface as a launch error rather than a coded capability refusal.
-            return null;
-        }
-    }
-
-    /// <summary>
-    /// The first dotted-numeric token in <paramref name="output"/>, or null. Deliberately narrow: a
-    /// certified-version check compares against an exact set, so anything that is not recognisably a version
-    /// must read as UNKNOWN (and therefore denied) rather than as some near-miss string.
-    /// </summary>
-    internal static string? ExtractVersionToken(string? output) {
-        if (string.IsNullOrWhiteSpace(output)) return null;
-
-        foreach (var raw in output.Split([' ', '\t', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries)) {
-            var tok = raw.Trim().TrimStart('v', 'V');
-
-            if (tok.Length > 0 && tok.All(c => char.IsAsciiDigit(c) || c == '.') && tok.Contains('.'))
-                return tok;
-        }
-
-        return null;
     }
 
     /// <summary>
