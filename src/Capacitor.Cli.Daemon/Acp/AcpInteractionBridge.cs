@@ -342,8 +342,10 @@ internal sealed partial class AcpInteractionBridge(
     }
 
     /// <summary>Stabilized `{"action":"cancel"}` — content-free by construction (the member is
-    /// omitted, not null). The permission path's <see cref="CancelledResult"/> is untouched.</summary>
-    static JsonElement? ElicitationCancelResult() =>
+    /// omitted, not null). The permission path's <see cref="CancelledResult"/> is untouched.
+    /// Internal (not private) so the ACP runtime's reconnect interaction router declines an
+    /// elicitation in THIS protocol's own shape — never the permission outcome.</summary>
+    internal static JsonElement? ElicitationCancelResult() =>
         JsonSerializer.SerializeToElement(
             new ElicitationResponse("cancel"),
             CapacitorJsonContext.Default.ElicitationResponse);
@@ -551,7 +553,10 @@ internal sealed partial class AcpInteractionBridge(
             new PermissionOutcomeResult(new PermissionOutcomeDto("selected", chosen.OptionId)),
             CapacitorJsonContext.Default.PermissionOutcomeResult);
 
-    static JsonElement? CancelledResult() =>
+    /// <summary>Internal (not private) so the ACP runtime's reconnect interaction router can answer
+    /// a declined/uninstalled-incarnation request with the SAME well-formed cancelled outcome this
+    /// bridge uses everywhere — one decline shape, never two that could drift.</summary>
+    internal static JsonElement? CancelledResult() =>
         JsonSerializer.SerializeToElement(
             new PermissionOutcomeResult(new PermissionOutcomeDto("cancelled")),
             CapacitorJsonContext.Default.PermissionOutcomeResult);
