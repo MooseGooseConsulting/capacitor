@@ -7,6 +7,16 @@ using Capacitor.Cli.Core.LocalIpc;
 namespace Capacitor.Cli.Daemon.Services;
 
 /// <summary>
+/// A runtime's unattended-hosting advertisement: whether it is offered, and — when a daemon-local
+/// gate is what withholds it — the operator-actionable reason.
+/// </summary>
+/// <param name="Supported">What <see cref="IHostedAgentRuntimeFactory.SupportsUnattended"/> reports.</param>
+/// <param name="WithheldReason">Non-null only when the vendor CAN host unattended agents and this
+/// daemon is refusing to offer it. Null both when the vendor is offered and when it never claimed
+/// unattended support in the first place.</param>
+internal readonly record struct UnattendedSupport(bool Supported, string? WithheldReason);
+
+/// <summary>
 /// Runtime-selection seam: one implementation per vendor family, chosen by
 /// <see cref="AgentOrchestrator.HandleLaunchAgent"/> via <c>cmd.Vendor</c> instead of the orchestrator
 /// itself building the vendor-specific runtime inline. <see cref="PtyHostedAgentRuntimeFactory"/>
@@ -29,6 +39,16 @@ internal interface IHostedAgentRuntimeFactory {
     /// The orchestrator refuses an unattended launch for a vendor that returns <c>false</c>.
     /// </summary>
     bool SupportsUnattended { get; }
+
+    /// <summary>
+    /// <see cref="SupportsUnattended"/> and the reason it is withheld, in ONE evaluation — the gated
+    /// reviewers spawn their vendor binary to decide, so two calls would probe it twice per startup.
+    ///
+    /// <para><see cref="UnattendedSupport.WithheldReason"/> is populated ONLY for a vendor THIS daemon's
+    /// configuration is refusing, never for one that simply does not offer unattended hosting. That
+    /// asymmetry is what makes the reason worth surfacing to an operator.</para>
+    /// </summary>
+    UnattendedSupport DescribeUnattendedSupport() => new(SupportsUnattended, null);
 
     /// <summary>Whether this runtime has a certified containment strategy for review flows that
     /// request the caller's current checkout contents.</summary>

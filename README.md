@@ -737,7 +737,7 @@ kcap daemon consent log -n 50                                    # tail consent-
 > **Two different gates, deliberately.** `daemon consent` authorises an individual launch and defaults to
 > *allow*; the Gemini reviewer flag below is a **capability** gate that defaults to *off* and asks a
 > different question — whether this daemon may run that vendor unattended **at all**. A per-launch deny is
-> not a substitute: the reviewer's containment rests on a vendor behaviour certified per version, so the
+> not a substitute: the reviewer's containment rests on a behaviour of the installed vendor build, so the
 > safe default has to be off rather than on-until-denied.
 
 #### Gemini as an unattended review-flow reviewer — off by default, and why
@@ -780,10 +780,13 @@ review is not necessarily you) and defaults off.
 
 Two further things it does *not* do:
 
-- it does not bypass the **certified-version** check. The reviewer's only containment is Gemini's exact-name
-  MCP allowlist, whose behaviour was verified against specific builds — so an uncertified `gemini` version is
-  refused even with the flag on, with a coded error naming the version. An upgrade takes the reviewer offline
-  rather than silently running on unverified semantics; re-certification is how it comes back.
+- it does not bypass the **build affirmation**. The reviewer's only containment is Gemini's exact-name MCP
+  allowlist, which is a behaviour of the installed build — so a `gemini` version other than the one this
+  daemon affirmed is refused even with the flag on, with a coded error naming both builds. Enabling the
+  reviewer affirms whatever is installed at that moment, so you only meet this after an upgrade; clear it
+  with `kcap daemon reviewer affirm --vendor gemini`. (This replaced a maintainer-curated *certified version
+  set*, which took the reviewer offline on every Gemini release until a new kcap shipped — a build one patch
+  ahead of the certified one made the feature unreachable.)
 - it does not make Gemini a default reviewer. It is only ever reached by an explicit `vendor: "gemini"`.
 
 #### Unattended Kiro reviews
@@ -820,11 +823,40 @@ kcap daemon reviewer affirm --vendor kiro
 ```
 
 Enabling the reviewer affirms whatever is installed at that moment, so you only meet this after an upgrade.
-The command records the version and nothing else — it does not enable the reviewer. Unlike Gemini's
-maintainer-certified version set, no kcap release is needed to clear it.
+The command records the version and nothing else — it does not enable the reviewer. No kcap release is
+needed to clear it; Gemini uses the same model and the same command (`--vendor gemini`).
 
 POSIX only: the isolated home holds the reviewer's own transcript, and therefore the review context, and
 cannot be created owner-only on Windows.
+
+#### If your daemon runs as a service
+
+Both flags above are read from the **daemon's own environment**, and a supervised daemon (`kcap daemon
+service install` — launchd, systemd, or a Windows scheduled task) inherits nothing from the shell you
+installed it from. Exporting a flag in your shell therefore does nothing for a service-installed daemon until
+the unit itself carries it, so export it *first* and then reinstall:
+
+```bash
+export KCAP_GEMINI_UNATTENDED_REVIEWER=1
+kcap daemon service install --name "$(whoami)"    # captures the flag into the unit
+```
+
+Install prints a `Consent:` line naming each reviewer flag it captured. That freeze is the point to notice:
+the unit outlives the shell, so the reviewer stays enabled for that service until you reinstall without the
+variable set — unsetting it in your shell later changes nothing.
+
+If a reviewer is still not offered, the daemon says why in its own log at startup — one line per vendor that
+is installed and unattended-capable but withheld, carrying the same text the launch path would have thrown
+(consent not set, version unresolved, version uncertified/unaffirmed). It logs at `Information`, not
+`Warning`: a daemon with Gemini or Kiro installed purely for interactive use and no opt-in is in a
+perfectly normal state, so this is a line to find when you go looking, not an alert.
+
+```bash
+grep -i "is NOT offering it" ~/.config/kcap/daemon-*.log
+```
+
+Without that line the only symptom is the server's `reviewer_vendor_unavailable`, which reports that no
+connected daemon advertises the vendor and cannot say why.
 
 #### Hosted Codex agents
 
@@ -1062,7 +1094,7 @@ KCAP_CURSOR_PATH=/opt/cursor/bin/cursor-agent kcap daemon
 KCAP_CURSOR_MODEL=claude-opus-4-8 kcap daemon
 ```
 
-`KCAP_COPILOT_PATH` overrides the `copilot` binary the daemon spawns for **GitHub Copilot hosted agents** (`copilot --acp --stdio`), mirroring `KCAP_CURSOR_PATH` — the daemon now hosts Claude, Codex, Cursor, Copilot, and Kiro. `KCAP_OPENCODE_PATH` and `KCAP_GEMINI_PATH` remain **reserved** plumbing for the not-yet-hosted OpenCode and Gemini vendors, so setting those two has no observable effect yet.
+`KCAP_COPILOT_PATH` overrides the `copilot` binary the daemon spawns for **GitHub Copilot hosted agents** (`copilot --acp --stdio`), mirroring `KCAP_CURSOR_PATH` — the daemon hosts Claude, Codex, Cursor, Copilot, Kiro, and Gemini. `KCAP_GEMINI_PATH` overrides the `gemini` binary the same way (`gemini --experimental-acp`), and applies to both hosted Gemini agents and the opt-in [unattended Gemini reviewer](#gemini-as-an-unattended-review-flow-reviewer--off-by-default-and-why) — whose build-affirmation check reads whichever binary it names. `KCAP_OPENCODE_PATH` remains **reserved** plumbing for the not-yet-hosted OpenCode vendor, so setting it has no observable effect yet.
 
 ```bash
 KCAP_COPILOT_PATH=/opt/copilot/bin/copilot kcap daemon
