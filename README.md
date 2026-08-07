@@ -835,14 +835,62 @@ kcap daemon reviewer affirm --vendor kiro
 Run that to move the minimum to whatever is installed now — which is how you exclude a build you have found
 to be broken, and, if you run it while an older build is installed, how you deliberately lower the bar
 again. The command records the version and nothing else — it does not enable the reviewer. No kcap release
-is ever needed; Gemini uses the same model and the same command (`--vendor gemini`).
+is ever needed; Gemini and Antigravity use the same model and the same command (`--vendor gemini`,
+`--vendor antigravity`).
 
 POSIX only: the isolated home holds the reviewer's own transcript, and therefore the review context, and
 cannot be created owner-only on Windows.
 
+#### Unattended Antigravity reviews
+
+```bash
+export KCAP_ANTIGRAVITY_UNATTENDED_REVIEWER=1   # this DAEMON's environment — not a server setting
+```
+
+The prerequisite is the Antigravity **CLI** — the `agy` binary on `PATH` (or `KCAP_ANTIGRAVITY_PATH`
+pointing at it). The Antigravity **IDE** alone is not enough: it ships no `agy`, and a daemon with only the
+IDE installed never offers the vendor at all.
+
+**Everything in the Gemini warning above applies.** Reviews run in a daemon-owned worktree under a
+per-launch, owner-only `HOME` (removed when the reviewer is disposed), so your own `~/.gemini` config and
+the kcap capture plugin inside it do not reach the reviewer, and your interactive Antigravity sessions are
+unaffected. POSIX only, for the same reason as Kiro: that home holds the reviewer's own transcript, and
+therefore the review context, and cannot be created owner-only on Windows.
+
+**Give the daemon durable credentials.** An unattended reviewer's stdin is closed, so it cannot complete an
+interactive login — an unauthenticated `agy` fails the launch with a coded
+`antigravity_reviewer_auth_unavailable` rather than hanging. Application Default Credentials are the
+supported setup:
+
+```bash
+gcloud auth application-default login
+export GOOGLE_CLOUD_PROJECT=<your-project>
+export AGY_ADC_AUTH=1                           # selects ADC; without it agy still demands an OAuth login
+```
+
+**Minimum version.** Containment here depends on the installed build honouring `HOME` and reading no other
+global config source, so the daemon records a minimum `agy` version the first time you enable the reviewer.
+It is a **minimum, not an exact match**: any build at or above it runs, so **an `agy` upgrade needs no
+action from you** — which matters more here than for the other reviewers, since `agy` updates itself
+(observed going 1.1.8 → 1.1.10 mid-session). A build older than the recorded minimum, or one whose
+`agy --version` cannot be read, is withheld with a coded reason naming both versions.
+
+```bash
+kcap daemon reviewer affirm --vendor antigravity
+```
+
+Same command and same model as Kiro and Gemini: run it to move the minimum to whatever is installed now —
+which is how you exclude a build you have found to be broken, and, if you run it while an older build is
+installed, how you deliberately lower the bar again. It records the version and nothing else; it does not
+enable the reviewer. No kcap release is ever needed.
+
+Like Gemini and Kiro, this never makes Antigravity a default reviewer — it is only ever reached by an
+explicit `vendor: "antigravity"`. Borrowed (in-place) review is not offered; a borrowed request falls back
+to a daemon-owned worktree.
+
 #### If your daemon runs as a service
 
-Both flags above are read from the **daemon's own environment**, and a supervised daemon (`kcap daemon
+All three consent flags above are read from the **daemon's own environment**, and a supervised daemon (`kcap daemon
 service install` — launchd, systemd, or a Windows scheduled task) inherits nothing from the shell you
 installed it from. Exporting a flag in your shell therefore does nothing for a service-installed daemon until
 the unit itself carries it, so export it *first* and then reinstall:
@@ -852,6 +900,11 @@ export KCAP_GEMINI_UNATTENDED_REVIEWER=1
 kcap daemon service install --name "$(whoami)"    # captures the flag into the unit
 ```
 
+The Antigravity ADC variables (`GOOGLE_CLOUD_PROJECT`, `AGY_ADC_AUTH`, `GOOGLE_APPLICATION_CREDENTIALS`)
+are captured by the same install, so a daemon installed *before* this shipped must be reinstalled from an
+interactive shell to pick them up. `KCAP_ANTIGRAVITY_PATH` is **not** captured — like the other vendor path
+overrides, set it where the unit can see it if you need a non-default value.
+
 Install prints a `Consent:` line naming each reviewer flag it captured. That freeze is the point to notice:
 the unit outlives the shell, so the reviewer stays enabled for that service until you reinstall without the
 variable set — unsetting it in your shell later changes nothing.
@@ -859,8 +912,8 @@ variable set — unsetting it in your shell later changes nothing.
 If a reviewer is still not offered, the daemon says why in its own log at startup — one line per vendor that
 is installed and unattended-capable but withheld, carrying the same text the launch path would have thrown
 (consent not set, version unresolved, no minimum recorded, version below the minimum). It logs at `Information`, not
-`Warning`: a daemon with Gemini or Kiro installed purely for interactive use and no opt-in is in a
-perfectly normal state, so this is a line to find when you go looking, not an alert.
+`Warning`: a daemon with Gemini, Kiro or the Antigravity CLI installed purely for interactive use and no
+opt-in is in a perfectly normal state, so this is a line to find when you go looking, not an alert.
 
 ```bash
 grep -i "is NOT offering it" ~/.config/kcap/daemon-*.log

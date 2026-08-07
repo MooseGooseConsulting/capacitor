@@ -157,7 +157,14 @@ public static partial class DaemonRunner {
         if (Environment.GetEnvironmentVariable("KCAP_GEMINI_PATH") is { Length: > 0 } envGeminiPath)
             config.GeminiPath = envGeminiPath;
 
-        // The operator consent flags for the two unattended ACP reviewers. Both were previously
+        if (Environment.GetEnvironmentVariable("KCAP_ANTIGRAVITY_PATH") is { Length: > 0 } agyPath)
+            config.AntigravityPath = agyPath;
+        if (Environment.GetEnvironmentVariable("KCAP_ANTIGRAVITY_MODEL") is { Length: > 0 } agyModel)
+            config.AntigravityModel = agyModel;
+        if (Environment.GetEnvironmentVariable("KCAP_ANTIGRAVITY_UNATTENDED_REVIEWER") is { } agyConsent)
+            config.AntigravityUnattendedReviewerEnabled = ParseConsentFlag(agyConsent);
+
+        // The operator consent flags for the unattended ACP/CLI reviewers. Both were previously
         // reachable only from a test constructor, which made the shipped Gemini reviewer impossible
         // to turn on in production; binding one and not the other would just move that hole.
         config.GeminiUnattendedReviewerEnabled =
@@ -243,6 +250,10 @@ public static partial class DaemonRunner {
             coverageStateDir, AcpVendorDescriptors.Gemini.Vendor,
             config.GeminiUnattendedReviewerEnabled, config.GeminiPath);
 
+        SeedReviewerAffirmation(
+            coverageStateDir, AntigravityVendor,
+            config.AntigravityUnattendedReviewerEnabled, config.AntigravityPath);
+
         // Recovers reviewer homes left by a SIGKILLed predecessor. Runs unconditionally: a daemon
         // whose operator has since disabled the reviewer still owns whatever its last incarnation
         // left behind, and those directories hold review context.
@@ -251,6 +262,14 @@ public static partial class DaemonRunner {
         // emit. The host's logging is not built yet at this point, so this writes to stderr like the
         // seeding block above.
         KiroReviewerHome.SweepStale(
+            coverageStateDir, config.DaemonEpoch ?? "unpinned", new ConsoleErrorLogger());
+
+        // The Antigravity reviewer disposes its own home on the normal path (the runtime's onDisposed
+        // hook), so this sweep covers exactly ONE case: a predecessor that was SIGKILLed and never ran
+        // it. Unconditional for the same reason as the line above — a daemon whose operator has since
+        // disabled the reviewer still owns the transcript-bearing directories its last incarnation
+        // left behind.
+        AntigravityReviewerHome.SweepStale(
             coverageStateDir, config.DaemonEpoch ?? "unpinned", new ConsoleErrorLogger());
 
         config.RecordlessSurvivorsImpossible = new CoverageJournal(coverageStateDir, NullLogger.Instance)
@@ -382,6 +401,17 @@ public static partial class DaemonRunner {
                 sp.GetRequiredService<DaemonConfig>(),
                 sp.GetRequiredService<ILoggerFactory>(),
                 sp.GetRequiredService<ServerConnection>()
+            )
+        );
+
+        // Not an ACP factory: agy speaks NDJSON over one child process PER TURN, so it carries its own
+        // runtime rather than AcpHostedAgentRuntimeFactory's persistent-child shape. Takes the logger
+        // FACTORY, like the ACP registrations beside it — it builds a logger for the runtime and one
+        // per turn process, not a single typed logger.
+        builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp =>
+            new AntigravityHostedAgentRuntimeFactory(
+                sp.GetRequiredService<DaemonConfig>(),
+                sp.GetRequiredService<ILoggerFactory>()
             )
         );
 
@@ -889,13 +919,22 @@ public static partial class DaemonRunner {
     /// <see cref="ClassifyUnattendedVendors"/> so there is one rule rather than two that have to
     /// agree. Prefer classifying once where the reasons are also wanted — this overload re-probes.
     /// </summary>
-    internal static string[] ComputeUnattendedVendors(IEnumerable<IHostedAgentRuntimeFactory> factories) =>
+    /// <param name="config">Accepted, and required rather than defaulted, so a caller cannot silently
+    /// classify against a different daemon's configuration than the one whose factories it passed —
+    /// the gate ladders themselves read it through the factories.</param>
+    internal static string[] ComputeUnattendedVendors(
+            IEnumerable<IHostedAgentRuntimeFactory> factories, DaemonConfig config) =>
         AdvertisedUnattendedVendors(ClassifyUnattendedVendors(factories));
 
     internal const string ClaudeLauncherPolicyVersion = "claude-unattended-v1";
     internal const string CursorLauncherPolicyVersion = "cursor-unattended-v4";
     internal const string CodexLauncherPolicyVersion = "codex-unattended-v1";
     internal const string CopilotLauncherPolicyVersion = "copilot-unattended-v1";
+    internal const string AntigravityLauncherPolicyVersion = "antigravity-unattended-v1";
+
+    /// <summary>The one vendor token this daemon knows agy by. Never <c>agy</c> — that is a binary
+    /// name, and the server routes on the vendor.</summary>
+    internal const string AntigravityVendor = "antigravity";
 
     /// <param name="advertised">The already-classified advertised vendors, when the caller has them.
     /// Passing them avoids re-running a classification that spawns vendor binaries; omitting them
@@ -903,7 +942,7 @@ public static partial class DaemonRunner {
     internal static IReadOnlyList<UnattendedVendorCapability> ComputeUnattendedVendorCapabilities(
             IEnumerable<IHostedAgentRuntimeFactory> factories, DaemonConfig config,
             IEnumerable<string>? advertised = null) {
-        var unattended = advertised?.ToArray() ?? ComputeUnattendedVendors(factories);
+        var unattended = advertised?.ToArray() ?? ComputeUnattendedVendors(factories, config);
         var capabilities = new List<UnattendedVendorCapability>();
         foreach (var vendor in unattended) {
             var factory = factories.First(f => string.Equals(f.Vendor, vendor, StringComparison.Ordinal));
@@ -912,6 +951,9 @@ public static partial class DaemonRunner {
                 "cursor"  => (config.CursorPath, CursorLauncherPolicyVersion),
                 "codex"   => (config.CodexPath, CodexLauncherPolicyVersion),
                 "copilot" => (config.CopilotPath, CopilotLauncherPolicyVersion),
+                // Named rather than left to the generic arm, which advertises CliVersion: null — there
+                // is a real configured path here to probe, and the floor is stated in that version.
+                AntigravityVendor => (config.AntigravityPath, AntigravityLauncherPolicyVersion),
                 _         => ("", $"{vendor}-unattended-v1")
             };
             // Trust-by-default: a vendor's borrowed-review capability is a property of its FACTORY,

@@ -4,7 +4,7 @@ using Capacitor.Cli.Core.Config;
 namespace Capacitor.Cli.Commands;
 
 /// <summary>
-/// <c>kcap daemon reviewer affirm --vendor &lt;kiro|gemini&gt;</c> — the operator's explicit
+/// <c>kcap daemon reviewer affirm --vendor &lt;kiro|gemini|antigravity&gt;</c> — the operator's explicit
 /// acknowledgement that the installed vendor build may host an unattended reviewer on this daemon.
 ///
 /// <para><b>Why a command and not a config key.</b> The record it writes is what makes a vendor
@@ -100,8 +100,8 @@ public static class DaemonReviewerCommand {
     }
 
     /// <summary>
-    /// A reviewer whose build an operator can affirm. Both gated reviewers use the same model, so the
-    /// verb is a table rather than a per-vendor branch — a third one is a row here, not a new arm.
+    /// A reviewer whose build an operator can affirm. Every gated reviewer uses the same model, so the
+    /// verb is a table rather than a per-vendor branch — the next one is a row here, not a new arm.
     /// </summary>
     /// <param name="Vendor">Canonical vendor token, and the key the daemon's store is written under.</param>
     /// <param name="DefaultBinary">Binary probed when the path env var is unset.</param>
@@ -111,8 +111,9 @@ public static class DaemonReviewerCommand {
     internal sealed record AffirmableReviewer(
             string Vendor, string DefaultBinary, string PathEnvVar, string EnableEnvVar) {
         internal static readonly AffirmableReviewer[] All = [
-            new("kiro",   "kiro-cli", "KCAP_KIRO_PATH",   "KCAP_KIRO_UNATTENDED_REVIEWER"),
-            new("gemini", "gemini",   "KCAP_GEMINI_PATH", "KCAP_GEMINI_UNATTENDED_REVIEWER")
+            new("kiro",        "kiro-cli", "KCAP_KIRO_PATH",        "KCAP_KIRO_UNATTENDED_REVIEWER"),
+            new("gemini",      "gemini",   "KCAP_GEMINI_PATH",      "KCAP_GEMINI_UNATTENDED_REVIEWER"),
+            new("antigravity", "agy",      "KCAP_ANTIGRAVITY_PATH", "KCAP_ANTIGRAVITY_UNATTENDED_REVIEWER")
         ];
 
         internal static string VendorList => string.Join(" | ", All.Select(r => r.Vendor));
