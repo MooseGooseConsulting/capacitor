@@ -141,9 +141,12 @@ static class McpSessionsServer {
             return BuildErrorResponse(id, -32602, "Missing params.name");
         }
 
+        if (toolName == "search_sessions") {
+            return await HandleSearchSessionsAsync(id, arguments, client, baseUrl, cwdRepoHash);
+        }
+
         try {
             using var httpResponse = toolName switch {
-                "search_sessions"        => await SendWithRefreshRetryAsync(client, baseUrl, c => c.GetAsync(BuildSearchUrl(baseUrl, arguments, cwdRepoHash))),
                 "get_session_summary"    => await SendWithRefreshRetryAsync(client, baseUrl, c => c.GetAsync(BuildSummaryUrl(baseUrl, arguments))),
                 "get_session_transcript" => await SendWithRefreshRetryAsync(client, baseUrl, c => c.GetAsync(BuildTranscriptUrl(baseUrl, arguments))),
                 "get_turn"               => await SendWithRefreshRetryAsync(client, baseUrl, c => c.GetAsync(BuildTurnDetailUrl(baseUrl, arguments))),
@@ -165,6 +168,66 @@ static class McpSessionsServer {
             var payload = toolName == "get_session_summary" ? ProjectRecapToSummary(body) : body;
 
             return BuildToolResult(id, payload);
+        } catch (ArgumentException ex) {
+            return BuildToolResult(id, $"Error: {ex.Message}", isError: true);
+        } catch (HttpRequestException ex) {
+            return BuildToolResult(id, $"Error: {ex.Message}", isError: true);
+        }
+    }
+
+    /// <summary>
+    /// Search with auto-widen. The cwd-pinned search runs first; when it
+    /// comes back thin (see ShouldWiden) a second repo:"all" request runs and the
+    /// bodies merge cwd-first. The widened call is best-effort — its failure
+    /// returns the first (successful) body untouched.
+    /// </summary>
+    static async Task<string> HandleSearchSessionsAsync(
+            JsonNode    id,
+            JsonObject? arguments,
+            HttpClient  client,
+            string      baseUrl,
+            string?     cwdRepoHash
+        ) {
+        try {
+            using var first = await SendWithRefreshRetryAsync(client, baseUrl, c => c.GetAsync(BuildSearchUrl(baseUrl, arguments, cwdRepoHash)));
+            var       body  = await first.Content.ReadAsStringAsync();
+
+            if (first.StatusCode == HttpStatusCode.Unauthorized) {
+                return BuildToolResult(id, NotLoggedInMessage, isError: true);
+            }
+
+            if (!first.IsSuccessStatusCode) {
+                return BuildToolResult(id, $"Error: HTTP {(int)first.StatusCode} — {body}", isError: true);
+            }
+
+            if (ShouldWiden(arguments, cwdRepoHash, body, out var limit)) {
+                // Widening is best-effort and must NEVER turn a working search into a failure —
+                // a thrown failure on this path (including a slower all-repos query tripping the
+                // HttpClient timeout as TaskCanceledException, which would otherwise escape to the
+                // outer dispatcher catch-all as "internal error") must not cost the caller the
+                // already-successful first result. Swallow everything here, not just HTTP errors.
+                try {
+                    var widenedArgs = arguments?.DeepClone().AsObject() ?? new JsonObject();
+                    widenedArgs["repo"] = "all";
+
+                    // The stdio loop is serial — a stalled widen would withhold the already-ready
+                    // first body and block every subsequent MCP request, so bound it well below the
+                    // shared HttpClient's default 100s timeout.
+                    using var widenCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                    var       url      = BuildSearchUrl(baseUrl, widenedArgs, cwdRepoHash);
+                    using var second   = await SendWithRefreshRetryAsync(client, baseUrl, c => c.GetAsync(url, widenCts.Token));
+
+                    if (second.IsSuccessStatusCode) {
+                        var widenedBody = await second.Content.ReadAsStringAsync(widenCts.Token);
+                        body = MergeWidenedBody(body, widenedBody, limit);
+                    }
+                } catch (Exception ex) {
+                    await Console.Error.WriteLineAsync($"kcap mcp sessions: auto-widen failed ({ex.GetType().Name}: {ex.Message}); returning the pinned-repo result.");
+                    // fall through — return the first (successful) body untouched.
+                }
+            }
+
+            return BuildToolResult(id, body);
         } catch (ArgumentException ex) {
             return BuildToolResult(id, $"Error: {ex.Message}", isError: true);
         } catch (HttpRequestException ex) {
@@ -260,6 +323,87 @@ static class McpSessionsServer {
         }
 
         return qs.Count == 0 ? url : url + "?" + string.Join("&", qs);
+    }
+
+    /// <summary>
+    /// Auto-widen, decision half: the implicit cwd-repo pin is the #1 cause
+    /// of "agent can't find it, human can". Widen ONLY when the pin was implicit
+    /// (no explicit repo arg), a cwd repo actually resolved, the caller isn't
+    /// paginating, the response isn't an author short-circuit (disambiguation /
+    /// no-match — widening can't fix those), and the pinned search came back thin.
+    /// </summary>
+    internal static bool ShouldWiden(JsonObject? args, string? cwdRepoHash, string firstBody, out int limit) {
+        limit = 10;
+        if (TryReadInt(args, "limit", out var requested)) limit = requested;
+
+        // Three-way repo check: absent (null) → proceed; string (blank or not) → if non-blank return false; else proceed; anything else → return false
+        if (args?["repo"] is not null) {
+            if (args["repo"] is JsonValue repoValue && repoValue.TryGetValue(out string? repoStr)) {
+                // It's a JsonValue holding a string
+                if (!string.IsNullOrWhiteSpace(repoStr)) {
+                    // Explicit, non-blank repo → don't widen
+                    return false;
+                }
+                // else: blank/whitespace repo → treat as absent, proceed
+            } else {
+                // Present but not a string JsonValue (object, array, or non-string) → attempted explicit repo but invalid → don't widen
+                return false;
+            }
+        }
+
+        if (cwdRepoHash is null) return false;
+        if (TryReadInt(args, "offset", out var offset) && offset > 0) return false;
+
+        try {
+            if (JsonNode.Parse(firstBody) is not JsonObject root) return false;
+            if (root["disambiguation"] is JsonArray { Count: > 0 }) return false;
+            if (root["no_author_match"]?.GetValue<bool>() is true) return false;
+            if (root["too_many_author_matches"]?.GetValue<bool>() is true) return false;
+
+            var hits = root["hits"] as JsonArray;
+
+            return (hits?.Count ?? 0) < limit;
+        } catch {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Auto-widen, merge half: cwd-repo hits first, widened hits appended
+    /// (deduped by session_id), capped at the requested limit, with a top-level
+    /// widened_to_all_repos marker so the agent knows the scope grew. Falls back to
+    /// the first body untouched on any parse failure — widening is best-effort and
+    /// must never cost the caller a successful result.
+    /// </summary>
+    internal static string MergeWidenedBody(string firstBody, string widenedBody, int limit) {
+        try {
+            if (JsonNode.Parse(firstBody) is not JsonObject first) return firstBody;
+            if (JsonNode.Parse(widenedBody) is not JsonObject widened) return firstBody;
+
+            var firstHits   = first["hits"] as JsonArray ?? new JsonArray();
+            var widenedHits = widened["hits"] as JsonArray ?? new JsonArray();
+            var seen        = new HashSet<string>(StringComparer.Ordinal);
+            var merged      = new JsonArray();
+
+            foreach (var hit in firstHits) {
+                if (merged.Count >= limit) break;
+                if (hit?["session_id"]?.GetValue<string>() is not { } sid || !seen.Add(sid)) continue;
+                merged.Add(hit.DeepClone());
+            }
+
+            foreach (var hit in widenedHits) {
+                if (merged.Count >= limit) break;
+                if (hit?["session_id"]?.GetValue<string>() is not { } sid || !seen.Add(sid)) continue;
+                merged.Add(hit.DeepClone());
+            }
+
+            first["hits"]                 = merged;
+            first["widened_to_all_repos"] = true;
+
+            return first.ToJsonString();
+        } catch {
+            return firstBody;
+        }
     }
 
     static string BuildSummaryUrl(string baseUrl, JsonObject? args) {
@@ -509,14 +653,14 @@ static class McpSessionsServer {
     static McpTool[] BuildToolsList() => [
         new(
             "search_sessions",
-            "Search past Kurrent Capacitor sessions in the current repo (or across all visible repos with repo: \"all\") by free-text question and/or author name. Returns ranked hits with session_id, title, owner, snippet, and (for transcript hits) hit_event_index + agent_id for drilling into the exact moment with get_session_transcript. For 'have we done this before / why did we / who decided X / when did we work on Y' questions, search here before grepping the code or git log — it searches the reasoning across past sessions, not just the code.",
+            "Search past Kurrent Capacitor sessions by free-text question and/or author name. Searches the current repo first and AUTOMATICALLY widens to all visible repos when results are thin (response then carries widened_to_all_repos: true); every hit includes its repo, so check it before assuming a hit is from this repo. Pass repo: \"all\" to search everywhere explicitly, or repo: \"<owner>/<name>\" to pin another repo (explicit repo never widens). Returns ranked hits with session_id, title, owner, snippet, and (for transcript hits) hit_event_index + agent_id for drilling into the exact moment with get_session_transcript. For 'have we done this before / why did we / who decided X / when did we work on Y' questions, search here before grepping the code or git log — it searches the reasoning across past sessions, not just the code.",
             new(
                 "object",
                 new() {
                     ["query"] = new("string", "Free-text FTS query. Empty allowed when author is set."),
                     ["author"] = new("string", "Optional: GitHub username or display name. Fuzzy match."),
                     ["author_github_id"] = new("integer", "Optional: explicit GitHub numeric id. Takes precedence over `author`."),
-                    ["repo"] = new("string", "Optional: \"all\" for cross-repo, \"<owner>/<name>\", or a 16-hex repo hash. Defaults to the current repo (resolved from cwd at server startup)."),
+                    ["repo"] = new("string", "Optional: \"all\" for cross-repo, \"<owner>/<name>\", or a 16-hex repo hash. Defaults to the current repo (resolved from cwd at server startup) with automatic widening to all repos when results are thin."),
                     ["limit"] = new("integer", "Default 10, max 50."),
                     ["offset"] = new("integer", "Default 0, max 500.")
                 },
