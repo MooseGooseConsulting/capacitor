@@ -197,8 +197,10 @@ static class McpFlowsServer {
                     "start_flow"          => wasModelStart
                         ? new SettlementSendResult.Response(await SendWithRefreshRetryAsync(client, apiRoot, (c, ct) => StartFlowAsync(c, apiRoot, arguments, cwd, repoRoot, repoInfo, kindArgName: "definition_id", requestingSessionId: requestingSessionId, ct: ct)))
                         : await SendWithSettlementRetryAsync(client, apiRoot, (c, ct) => StartFlowAsync(c, apiRoot, arguments, cwd, repoRoot, repoInfo, kindArgName: "definition_id", requestingSessionId: requestingSessionId, ct: ct), clock, backoff),
-                    "submit_review_round" => await SendWithSettlementRetryAsync(client, apiRoot, (c, ct) => SubmitRoundAsync(c, apiRoot, arguments, contextArgName: "context", participant: null, async: true, ct: ct), clock, backoff),
-                    _                     => await SendWithSettlementRetryAsync(client, apiRoot, (c, ct) => SubmitRoundAsync(c, apiRoot, arguments, contextArgName: "message", participant: GetRequiredArg(arguments, "participant"), async: ParseAsyncArg(arguments), ct: ct), clock, backoff)
+                    // Round submission also retries the coded participant_unreachable 409 (see
+                    // ParticipantUnreachableCode) — never a start, which can't return it.
+                    "submit_review_round" => await SendWithSettlementRetryAsync(client, apiRoot, (c, ct) => SubmitRoundAsync(c, apiRoot, arguments, contextArgName: "context", participant: null, async: true, ct: ct), clock, backoff, extraRetryableCode: ParticipantUnreachableCode),
+                    _                     => await SendWithSettlementRetryAsync(client, apiRoot, (c, ct) => SubmitRoundAsync(c, apiRoot, arguments, contextArgName: "message", participant: GetRequiredArg(arguments, "participant"), async: ParseAsyncArg(arguments), ct: ct), clock, backoff, extraRetryableCode: ParticipantUnreachableCode)
                 };
 
                 // Settlement-admission design (§3.2 G): the elapsed deadline is mapped HERE, at the
@@ -489,6 +491,16 @@ static class McpFlowsServer {
     static readonly HashSet<string> SettlementRetryableCodes =
         new(StringComparer.Ordinal) { "flow_settlement_busy", "reviewer_launch_incarnation_superseded" };
 
+    /// <summary>The coded, eventually-retryable 409 a round-submit POST returns when a role's prior
+    /// reviewer agent isn't durably proven absent yet (e.g. inactivity-stopped) — the server declares
+    /// it retryable and converges once an attributable daemon unregister or the reconcile sweep
+    /// proves the old agent gone. Passed as <see cref="SendWithSettlementRetryAsync"/>'s
+    /// <c>extraRetryableCode</c> only by round-submit call sites, never start_review_flow/start_flow:
+    /// the server can only return this for a PREVIOUSLY-ASSIGNED role with a completed settlement, a
+    /// shape a start never has. Not in <see cref="SettlementRetryableCodes"/> — unlike those two, it
+    /// carries no sequenced-lane watermark to observe progress from.</summary>
+    internal const string ParticipantUnreachableCode = "participant_unreachable";
+
     /// <summary>Parses the coded-rejection envelope: a JSON object with a non-empty string
     /// "error" code and a string "message". Returns false for an uncoded/unparseable body.
     /// Shared by <see cref="FormatFlowStartError"/> and the settlement-retry gate below so both
@@ -543,10 +555,19 @@ static class McpFlowsServer {
     /// IsCurrentSettlementCompletion is true means a coded rejection here never recorded a round
     /// — so retrying the same flow_run_id can't double-submit.
     ///
-    /// Only these two codes (via <see cref="TryParseCodedError"/>) trigger a retry; every other
-    /// coded 4xx (budget_unverifiable, server_catching_up, client_upgrade_required, etc.) passes
-    /// through untouched — as does an UNCODED failure, deliberately: the CLI cannot invent a code,
-    /// so an old server's uncoded 400 still surfaces on the first attempt.
+    /// Only these two codes (via <see cref="TryParseCodedError"/>) trigger a retry, plus whatever
+    /// single code the caller names in <paramref name="extraRetryableCode"/> (today only
+    /// <see cref="ParticipantUnreachableCode"/>). Every other coded 4xx, and an uncoded failure,
+    /// passes through untouched — an older server that has never heard of the extra code simply
+    /// never sends it, so this is additive, not a capability negotiation.
+    ///
+    /// <para><see cref="ParticipantUnreachableCode"/> never carries a <c>last_processed_seq</c>, so
+    /// the rolling no-progress window never re-arms for it and it always exhausts at the flat
+    /// <see cref="SettlementElapsedDeadline"/> (3 minutes). That bound is load-bearing, not
+    /// redundant with a faster server-side signal: the incarnation-cleared append that would let a
+    /// retry succeed lands in the reviewer gateway / settlement service, not in the reconciler, so
+    /// 3 minutes is sized to give that reconcile sweep (<c>FlowReconcilerService.SweepInterval</c>)
+    /// one full cycle to prove the prior agent's absence.</para>
     ///
     /// <para>Bounded by <see cref="SettlementElapsedDeadline"/> rather than an attempt count, on the
     /// <see cref="SettlementBackoff"/> schedule, with the deadline's remaining time propagated as a
@@ -582,7 +603,11 @@ static class McpFlowsServer {
             FlowRetryClock                                                clock,
             SettlementBackoff                                             backoff,
             CancellationToken                                             callerToken = default,
-            DateTimeOffset?                                               budgetStartedAt = null
+            DateTimeOffset?                                               budgetStartedAt = null,
+            // A single additional coded 409 this call treats as retryable, alongside the two
+            // settlement codes — see the class remarks above and ParticipantUnreachableCode's own
+            // doc. Null (every caller except round-submit) preserves today's behavior exactly.
+            string?                                                       extraRetryableCode = null
         ) {
         var startedAt         = budgetStartedAt ?? clock.UtcNow;
         var absoluteDeadline  = startedAt + SettlementAbsoluteDeadline;
@@ -624,7 +649,12 @@ static class McpFlowsServer {
             // block on the network and needs no token of its own.
             var body = await response.Content.ReadAsStringAsync();
 
-            if (!TryParseCodedError(body, out var code, out var message) || !SettlementRetryableCodes.Contains(code!))
+            // extraRetryableCode requires an actual 409 — the server only ever raises it as a
+            // Conflict, so a same-coded body on another status must surface immediately.
+            // SettlementRetryableCodes stays status-agnostic (pre-existing).
+            if (!TryParseCodedError(body, out var code, out var message)
+                    || !(SettlementRetryableCodes.Contains(code!)
+                         || (code == extraRetryableCode && response.StatusCode == HttpStatusCode.Conflict)))
                 return new SettlementSendResult.Response(response);
 
             lastCode    = code;
@@ -1187,6 +1217,15 @@ static class McpFlowsServer {
         var attempts = exhausted.Attempts == 1 ? "1 attempt" : $"{exhausted.Attempts} attempts";
         var elapsed  = FormatElapsed(exhausted.Elapsed);
         var detail   = string.IsNullOrWhiteSpace(exhausted.LastMessage) ? "" : $" Last server message: {exhausted.LastMessage}";
+
+        // Distinct cause from the busy-lane wording below: this is absence-not-proven-yet, not
+        // settlement contention.
+        if (exhausted.LastCode == ParticipantUnreachableCode) {
+            return $"Error ({ParticipantUnreachableCode}): gave up after {attempts} over {elapsed} — the " +
+                   "server has not yet proven the previous reviewer agent for this role is gone. This is " +
+                   "retryable: try again in a minute or two, once the daemon reports it absent or the " +
+                   $"server's periodic sweep confirms it.{detail}";
+        }
 
         // LastCode is null when the deadline cancelled an in-flight request before ANY coded response
         // was parsed — the very first attempt can time out. Claiming "the daemon is still settling"
