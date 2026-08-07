@@ -24,9 +24,20 @@ internal static class AcpReviewFlowMcp {
         var channelName = ctx.LaunchIdentity?.ResultChannelWireName
                        ?? KcapMcpRegistry.ReservedResultChannelId;
 
+        // A borrowed launch delivers through a daemon capability, never KCAP_URL — that variable
+        // routes the channel at the token store, which its redirected HOME cannot reach. Mutually
+        // exclusive on purpose: passing both leaves the broken path reachable as a silent fallback.
+        if (ctx.IsBorrowedSnapshot && string.IsNullOrWhiteSpace(ctx.FlowResultCapabilityUrl))
+            throw new InvalidOperationException(
+                "Borrowed-snapshot review cannot inject kcap-flow-result (missing result capability URL).");
+
+        var resultEnv = ctx.IsBorrowedSnapshot
+            ? new AcpMcpServerEnvVar[] { new("KCAP_FLOW_CAPABILITY_URL", ctx.FlowResultCapabilityUrl!),
+                                         new("KCAP_FLOW_AGENT_ID", ctx.AgentId) }
+            : [new("KCAP_URL", ctx.ServerUrl!), new("KCAP_FLOW_AGENT_ID", ctx.AgentId)];
+
         var servers = new List<AcpMcpServerSpec> {
-            new(channelName, ctx.CapacitorPath, ["mcp", "flow-result"],
-                [new("KCAP_URL", ctx.ServerUrl!), new("KCAP_FLOW_AGENT_ID", ctx.AgentId)])
+            new(channelName, ctx.CapacitorPath, ["mcp", "flow-result"], resultEnv)
         };
 
         foreach (var id in allowlistServerIds) {
