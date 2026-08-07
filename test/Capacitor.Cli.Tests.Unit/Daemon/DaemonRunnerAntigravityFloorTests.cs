@@ -1,5 +1,6 @@
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Daemon;
+using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -128,6 +129,163 @@ public class DaemonRunnerAntigravityFloorTests {
             File.Delete(stub);
         }
     }
+
+    /// <summary>
+    /// <b>The half of the hosted-launch fix that lives in the daemon rather than the factory.</b>
+    /// Antigravity's floor gates hosted launches too, and those need no reviewer consent — so a
+    /// consent-less daemon must still SEED a floor. Seeded from the consent event (as Kiro and Gemini
+    /// are) it never would, and every hosted launch on such a daemon would refuse as
+    /// <c>version_no_minimum</c>: the consent gate removed from the front of the ladder and quietly
+    /// reinstated behind it.
+    ///
+    /// <para>Driven through <c>SeedReviewerFloors</c> — the whole seeding block, exactly as
+    /// <c>RunAsync</c> invokes it — and NOT through <c>SeedVersionFloor</c> directly. Calling the
+    /// unconditional helper by hand would pin only the directory shape and leave the CONDITIONALITY,
+    /// which is the half this fix changed, asserted by nothing: reinstating
+    /// <c>SeedReviewerAffirmation(…, config.AntigravityUnattendedReviewerEnabled, …)</c> at the call
+    /// site would still pass.</para>
+    ///
+    /// <para>Asserted through a real hosted <c>StartAsync</c> reaching PAST the ladder rather than by
+    /// reading the record back, which would only re-derive the writer's own answer. The observable is
+    /// that a turn child was REQUESTED — the first thing beyond the gate — and not the launch's
+    /// outcome: <c>StartAsync</c> wraps everything after the gate in its own coded
+    /// <c>InvalidOperationException</c>, so a thrown sentinel is indistinguishable from a refusal,
+    /// while a turn source that was never called is exactly what a refusal looks like.</para>
+    /// </summary>
+    [Test]
+    public async Task AConsentLessDaemonSeedsTheFloorThatAdmitsAHostedLaunch() {
+        Skip.Unless(!OperatingSystem.IsWindows(), "The stub binary below is a POSIX shell script.");
+
+        var stub = await StubAgyAsync("1.1.10");
+
+        try {
+            var config = Config(minimum: null);
+            config.AntigravityPath                      = stub;
+            config.AntigravityUnattendedReviewerEnabled = false;
+
+            // Restated rather than taken from the factory: this is the shape RunAsync computes.
+            var stateDir = Path.Combine(config.StateDir!, DaemonLockPaths.Sanitize(config.Name));
+
+            DaemonRunner.SeedReviewerFloors(stateDir, config);
+
+            var spawned = false;
+            var factory = new AntigravityHostedAgentRuntimeFactory(
+                config, NullLoggerFactory.Instance,
+                turnSource: (_, _) => {
+                    spawned = true;
+                    throw new NotSupportedException("the launch itself is not what this test is about");
+                });
+
+            try {
+                await factory.StartAsync(HostedCtx(), CancellationToken.None);
+            } catch (InvalidOperationException) {
+                // Expected: the turn source above cannot produce a conversation.
+            }
+
+            await Assert.That(spawned).IsTrue();
+
+            // The control: consent is still withheld, so the REVIEWER is still not advertised. Without
+            // it, seeding having somehow re-enabled the reviewer would read as a pass.
+            await Assert.That(factory.SupportsUnattended).IsFalse();
+        } finally {
+            File.Delete(stub);
+        }
+    }
+
+    /// <summary>
+    /// The ASYMMETRY inside the one seeding block, asserted as a difference rather than described in a
+    /// comment. With consent withheld for all three vendors and all three binaries resolvable, only
+    /// antigravity records a floor — because only antigravity's floor gates something (a hosted
+    /// launch) that consent does not govern.
+    ///
+    /// <para>Both directions are load-bearing. Without the antigravity arm, seeding it from consent
+    /// like its siblings passes. Without the kiro/gemini arms, dropping the consent condition
+    /// altogether — "tidying" three call sites into one unconditional loop — passes too, and silently
+    /// seeds an affirmation for a reviewer nobody opted into, which is the "consent that isn't
+    /// consent" failure <c>ReviewerVersionStore</c> exists to avoid.</para>
+    ///
+    /// <para>All three paths point at REAL stubs on purpose: with a bare <c>kiro-cli</c>/<c>gemini</c>
+    /// default the siblings would record nothing because their binary does not resolve, and the test
+    /// would pass with the consent condition deleted.</para>
+    /// </summary>
+    [Test]
+    public async Task OnlyAntigravitySeedsAFloorWithoutConsent() {
+        Skip.Unless(!OperatingSystem.IsWindows(), "The stub binaries below are POSIX shell scripts.");
+
+        var agy    = await StubAgyAsync("1.1.10");
+        var kiro   = await StubAgyAsync("2.0.0");
+        var gemini = await StubAgyAsync("3.0.0");
+
+        try {
+            var config = Config(minimum: null);
+            config.AntigravityPath                      = agy;
+            config.KiroPath                             = kiro;
+            config.GeminiPath                           = gemini;
+            config.AntigravityUnattendedReviewerEnabled = false;
+            config.KiroUnattendedReviewerEnabled        = false;
+            config.GeminiUnattendedReviewerEnabled      = false;
+
+            // Restated rather than taken from the factory: this is the shape RunAsync computes.
+            var stateDir = Path.Combine(config.StateDir!, DaemonLockPaths.Sanitize(config.Name));
+
+            DaemonRunner.SeedReviewerFloors(stateDir, config);
+
+            await Assert.That(ReviewerVersionStore.RecordExists(stateDir, DaemonRunner.AntigravityVendor))
+                .IsTrue();
+            await Assert.That(ReviewerVersionStore.RecordExists(stateDir, AcpVendorDescriptors.Kiro.Vendor))
+                .IsFalse();
+            await Assert.That(ReviewerVersionStore.RecordExists(stateDir, AcpVendorDescriptors.Gemini.Vendor))
+                .IsFalse();
+        } finally {
+            File.Delete(agy);
+            File.Delete(kiro);
+            File.Delete(gemini);
+        }
+    }
+
+    /// <summary>The positive twin of the siblings' half above: with consent GIVEN they do seed, so
+    /// their absence in that test is the consent condition and not a broken stub or a mis-keyed
+    /// vendor token.</summary>
+    [Test]
+    public async Task ConsentingSiblingsSeedTheirOwnFloors() {
+        Skip.Unless(!OperatingSystem.IsWindows(), "The stub binaries below are POSIX shell scripts.");
+
+        var agy    = await StubAgyAsync("1.1.10");
+        var kiro   = await StubAgyAsync("2.0.0");
+        var gemini = await StubAgyAsync("3.0.0");
+
+        try {
+            var config = Config(minimum: null);
+            config.AntigravityPath                 = agy;
+            config.KiroPath                        = kiro;
+            config.GeminiPath                      = gemini;
+            config.KiroUnattendedReviewerEnabled   = true;
+            config.GeminiUnattendedReviewerEnabled = true;
+
+            var stateDir = Path.Combine(config.StateDir!, DaemonLockPaths.Sanitize(config.Name));
+
+            DaemonRunner.SeedReviewerFloors(stateDir, config);
+
+            await Assert.That(new ReviewerVersionStore(stateDir, AcpVendorDescriptors.Kiro.Vendor).Affirmed)
+                .IsEqualTo("2.0.0");
+            await Assert.That(new ReviewerVersionStore(stateDir, AcpVendorDescriptors.Gemini.Vendor).Affirmed)
+                .IsEqualTo("3.0.0");
+        } finally {
+            File.Delete(agy);
+            File.Delete(kiro);
+            File.Delete(gemini);
+        }
+    }
+
+    static RuntimeStartContext HostedCtx() => new(
+        AgentId: "agent-1", Vendor: "antigravity", SourceRepoPath: "/repo",
+        Worktree: new WorktreeInfo(Path: Path.GetTempPath(), Branch: "b", SourceRepo: "/repo"),
+        Prompt: "do the thing",
+        Model: null, Effort: null, Tools: null,
+        IsReview: false, IsReviewFlow: false, Review: null,
+        Cols: 80, Rows: 24,
+        ServerUrl: "http://kcap.test", DaemonBridgeUrl: null, CapacitorPath: "/usr/local/bin/kcap",
+        DaemonId: "daemon-1", DaemonEpoch: "epoch-1");
 
     static async Task<string> StubAgyAsync(string version) {
         var stub = Path.Combine(Path.GetTempPath(), "kcap-agy-stub-" + Guid.NewGuid().ToString("N"));

@@ -23,6 +23,14 @@ namespace Capacitor.Cli.Core;
 /// consent" failure the enable flag exists to avoid. The daemon writes it; only an explicit operator
 /// command changes it.</para>
 ///
+/// <para><b>ONE per-vendor exception: antigravity's floor is seeded from the binary resolving, not
+/// from a consent event</b> — it also gates HOSTED <c>agy</c> launches, which take no consent, and a
+/// consent-less daemon with no floor refuses every one as <c>version_no_minimum</c>. Seeding is
+/// once-only, so a floor recorded before consent is not raised when the reviewer is later enabled:
+/// a downgrade to that pre-consent build is admitted where a consent-anchored floor would refuse it.
+/// Accepted — bounded to builds at or above that one, remedy is
+/// <c>kcap daemon reviewer affirm --vendor antigravity</c>. Consent must not re-seed.</para>
+///
 /// <para>Keyed by vendor, one file each, so affirming one vendor's build says nothing about another's.
 /// Kiro's filename is unchanged from when this type was Kiro-only — renaming it would have silently
 /// discarded every existing affirmation and taken shipped reviewers offline on upgrade.</para>

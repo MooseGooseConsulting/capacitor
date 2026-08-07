@@ -1,6 +1,9 @@
 // test/Capacitor.Cli.Tests.Unit/Services/AntigravityReviewerLaunchTests.cs
 using System.Diagnostics;
+using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Acp;
+using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Daemon;
 using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Services;
@@ -55,21 +58,39 @@ public class AntigravityReviewerLaunchTests {
         return config;
     }
 
+    /// <param name="serverUrl">Defaulted to a real value; blanked by the result-channel tests, which
+    /// is the ONE input a hosted launch legitimately lacks and a review legitimately cannot.</param>
+    /// <param name="mcpAllowlist">The review-flow DEFINITION's allowlist. Never populated for a hosted
+    /// launch in production — a test passes one only to assert that the hosted arm ignores it rather
+    /// than validating it.</param>
+    /// <param name="mcpServers">The literal per-launch MCP server list. No production caller populates
+    /// it today (see the field's own comment on <see cref="RuntimeStartContext"/>); a test passes one
+    /// to pin which arm forwards it.</param>
+    /// <param name="isReview">The PR-review launch kind (<c>LaunchKind.Review</c>) — a THIRD shape,
+    /// distinct from both arms above and refused outright; see the test that pins it.</param>
     static RuntimeStartContext Ctx(
-            bool isReviewFlow = true, AgentActivityClock? clock = null, string? model = null) => new(
+            bool isReviewFlow = true, AgentActivityClock? clock = null, string? model = null,
+            string? serverUrl = "http://kcap.test", string capacitorPath = "/usr/local/bin/kcap",
+            string[]? mcpAllowlist = null, IReadOnlyList<AcpMcpServerSpec>? mcpServers = null,
+            bool isReview = false) => new(
         AgentId: "agent-1", Vendor: "antigravity", SourceRepoPath: "/repo",
         Worktree: new WorktreeInfo(Path: "/abs/wt", Branch: "b", SourceRepo: "/repo"),
         Prompt: "review this",
         Model: model, Effort: null, Tools: null,
-        IsReview: false, IsReviewFlow: isReviewFlow, Review: null,
+        IsReview: isReview, IsReviewFlow: isReviewFlow,
+        Review: isReview ? new ReviewLaunchInfo("owner", "repo", 42) : null,
         Cols: 80, Rows: 24,
-        ServerUrl: "http://kcap.test", DaemonBridgeUrl: null, CapacitorPath: "/usr/local/bin/kcap",
+        ServerUrl: serverUrl, DaemonBridgeUrl: null, CapacitorPath: capacitorPath,
+        McpAllowlist: mcpAllowlist,
         DaemonId: "daemon-1", DaemonEpoch: "epoch-1",
+        McpServers: mcpServers,
         ActivityClock: clock);
 
-    static ProcessStartInfo BuildPsi(DaemonConfig config, string? conversationId = null) =>
+    static ProcessStartInfo BuildPsi(
+            DaemonConfig config, string? conversationId = null, bool isReviewFlow = true) =>
         AntigravityHostedAgentRuntimeFactory.BuildTurnPsi(
-            config, Ctx(), prompt: "<PROMPT>", conversationId: conversationId, home: HomePath);
+            config, Ctx(isReviewFlow: isReviewFlow), prompt: "<PROMPT>",
+            conversationId: conversationId, home: HomePath);
 
     // ── argv ──────────────────────────────────────────────────────────────────────────────────────
 
@@ -97,6 +118,43 @@ public class AntigravityReviewerLaunchTests {
         // reviewer never needs.
         await Assert.That(psi.ArgumentList).DoesNotContain("--dangerously-skip-permissions");
         await Assert.That(psi.ArgumentList).DoesNotContain("--sandbox");
+    }
+
+    /// <summary>
+    /// The hosted/reviewer asymmetry, pinned in ONE test so the two directions cannot drift apart —
+    /// and as WHOLE vectors, because the interesting regression is a flag appearing on the arm that
+    /// must not have it, which every substring check would pass.
+    ///
+    /// <para><b>What the flag actually buys, measured on agy 1.1.10:</b> with it, an absolute
+    /// out-of-workspace <c>view_file</c> succeeds; without it the same read is refused with a typed
+    /// <c>tool_info.error</c>. So the flag IS the read boundary — the daemon-owned worktree is not one
+    /// — and a hosted agent launched without it soft-denies shell and out-of-workspace work and merely
+    /// looks broken. A reviewer only reads its own worktree, so the soft-deny is the posture it
+    /// wants.</para>
+    ///
+    /// <para>Pure builder, so both arms run on every host — no process, no filesystem.</para>
+    /// </summary>
+    [Test]
+    public async Task A_hosted_launch_widens_permissions_but_a_reviewer_launch_does_not() {
+        var config = EnabledConfig();
+
+        var hosted   = BuildPsi(config, isReviewFlow: false);
+        var reviewer = BuildPsi(config, isReviewFlow: true);
+
+        await Assert.That(string.Join(" ", hosted.ArgumentList)).IsEqualTo(string.Join(" ", [
+            "-p", "<PROMPT>",
+            "--output-format", "stream-json",
+            "--disable-slash-commands",
+            "--dangerously-skip-permissions",
+            "--print-timeout", "600s"
+        ]));
+
+        await Assert.That(string.Join(" ", reviewer.ArgumentList)).IsEqualTo(string.Join(" ", [
+            "-p", "<PROMPT>",
+            "--output-format", "stream-json",
+            "--disable-slash-commands",
+            "--print-timeout", "600s"
+        ]));
     }
 
     [Test]
@@ -461,23 +519,85 @@ public class AntigravityReviewerLaunchTests {
     }
 
     /// <summary>
-    /// An interactive launch is refused, not silently accepted. This runtime parses agy's NDJSON from
-    /// stdout once per turn, and an inherited HOME lets agy's own kcap capture hooks fire — which
-    /// spawns a watcher that can hold a write end of that stdout open after agy exits, so every turn
-    /// would block forever. A coded refusal is the honest shape until the interactive lane is built.
+    /// An interactive (hosted) launch runs — it is not refused — and it runs under the SAME per-launch
+    /// isolated home the reviewer gets, with the widened permission flag the reviewer never gets.
+    ///
+    /// <para>Both halves are measured facts rather than preferences. The refusal this replaces claimed
+    /// an inherited HOME would let agy's capture hooks spawn a watcher that holds the turn's stdout
+    /// open; four piped runs under a real HOME, on a kcap predating the descriptor fix, all reached
+    /// EOF in 6–16s, so the wedge does not reproduce. What those runs DID show is that each was also
+    /// recorded by the hook lane as its own watcher session — and this runtime is already the
+    /// transcript source, so an inherited HOME would not add capture, it would DUPLICATE it. Isolation
+    /// is the fix here, not a cost, which is why the hosted arm keeps it.</para>
     /// </summary>
     [Test]
-    public async Task An_interactive_launch_is_refused_rather_than_hanging_on_an_inherited_home() {
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            Factory(EnabledConfig(), new SpyTurnSource().SpawnAsync)
-                .StartAsync(Ctx(isReviewFlow: false), CancellationToken.None));
+    public async Task An_interactive_launch_is_hosted_under_the_isolated_home_with_permissions_widened() {
+        Skip.Unless(!OperatingSystem.IsWindows(), "POSIX-only: the per-launch home cannot be owner-only on Windows.");
 
-        await Assert.That(ex!.Message).StartsWith("antigravity_interactive_launch_unsupported");
+        var config = EnabledConfig();
+        var spy    = new SpyTurnSource();
+
+        var start = await Factory(config, spy.SpawnAsync)
+            .StartAsync(Ctx(isReviewFlow: false), CancellationToken.None).WaitAsync(HangGuard);
+
+        await using var runtime = start.Runtime;
+
+        // The launch completed and bound a conversation — the same contract a review launch owes.
+        await Assert.That(start.Transcript).IsNotNull();
+        await Assert.That(start.Transcript!.AcpSessionId).IsEqualTo(FixedConversationId);
+
+        // Positive containment assertion, not an inequality against the ambient HOME: the child's home
+        // is one this daemon created under its OWN state root, and is therefore removed with it.
+        await Assert.That(spy.Spawns[0].Environment["HOME"]!)
+            .StartsWith(AntigravityHostedAgentRuntimeFactory.ReviewerStateDir(config));
+
+        // The widened argv reaches the real spawn path, not merely the pure builder.
+        await Assert.That(spy.Spawns[0].ArgumentList).Contains("--dangerously-skip-permissions");
+    }
+
+    /// <summary>
+    /// <b>The split this ladder exists for, asserted on ONE daemon so it is a split and not two
+    /// independent facts.</b> The consent flag is REVIEWER-ONLY, and its own justification is what
+    /// makes that so: an unattended review runs under the daemon user's authority and returns what it
+    /// read to whoever requested the review, who need not be the operator. A hosted launch has no such
+    /// exposure — the server's <c>DaemonRegistry</c> is keyed
+    /// <c>(TeamId, OwnerUserId, Name)</c> and the launch hub resolves a daemon with the CALLER's own
+    /// normalized user id, so the launcher IS the daemon's owner — and hosted Antigravity therefore
+    /// ships on by default, like every other hosted vendor.
+    ///
+    /// <para>Before this, a hosted launch on a daemon that had simply never set the reviewer flag
+    /// failed with <c>antigravity_unattended_reviewer_disabled</c> — a review complaint about a launch
+    /// that is not a review.</para>
+    /// </summary>
+    [Test]
+    public async Task Consent_gates_a_review_launch_but_not_a_hosted_launch_on_the_same_daemon() {
+        Skip.Unless(!OperatingSystem.IsWindows(), "POSIX-only: the per-launch home cannot be owner-only on Windows.");
+
+        var config = EnabledConfig();
+        config.AntigravityUnattendedReviewerEnabled = false;
+
+        var factory = Factory(config, new SpyTurnSource().SpawnAsync);
+
+        // Hosted: runs. Reading the bound conversation id (not merely "did not throw") is what makes
+        // this a launch assertion rather than a gate assertion.
+        var start = await factory.StartAsync(Ctx(isReviewFlow: false), CancellationToken.None)
+            .WaitAsync(HangGuard);
+
+        await using (var runtime = start.Runtime)
+            await Assert.That(start.Transcript!.AcpSessionId).IsEqualTo(FixedConversationId);
+
+        // Review: still refused, on the SAME factory instance, with the text that names the switch.
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            factory.StartAsync(Ctx(isReviewFlow: true), CancellationToken.None));
+
+        await Assert.That(ex!.Message).StartsWith("antigravity_unattended_reviewer_disabled");
+        await Assert.That(ex.Message).Contains("KCAP_ANTIGRAVITY_UNATTENDED_REVIEWER");
     }
 
     /// <summary>Defence in depth: the orchestrator's unattended gate runs first, but an explicit
     /// vendor request can reach a factory directly, so the consent gate is re-applied at the launch
-    /// boundary rather than trusted to advertisement.</summary>
+    /// boundary rather than trusted to advertisement. Separate from the split test above because this
+    /// arm throws before touching the filesystem, so it is assertable on Windows too.</summary>
     [Test]
     public async Task A_consent_withheld_daemon_refuses_a_review_launch() {
         var config = EnabledConfig();
@@ -488,6 +608,336 @@ public class AntigravityReviewerLaunchTests {
                 .StartAsync(Ctx(), CancellationToken.None));
 
         await Assert.That(ex!.Message).StartsWith("antigravity_unattended_reviewer_disabled");
+    }
+
+    /// <summary>
+    /// <b>The arm most likely to be lost by an over-broad "hosted skips the ladder" fix.</b> The build
+    /// minimum is not reviewer-specific: it protects the per-launch isolated <c>HOME</c>, which is
+    /// containment a hosted launch depends on exactly as a review does — losing it silently removes
+    /// that protection.
+    ///
+    /// <para>Asserted on a CONSENT-LESS daemon deliberately. On a consenting one the refusal could not
+    /// distinguish "the floor applies to hosted" from "the ladder still runs at all", and a fix that
+    /// skipped the whole ladder for hosted launches would pass.</para>
+    /// </summary>
+    [Test]
+    public async Task A_below_minimum_build_is_refused_for_a_hosted_launch_too() {
+        var config = EnabledConfig();
+        config.AntigravityUnattendedReviewerEnabled = false;
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            Factory(config, new SpyTurnSource().SpawnAsync, version: "1.1.8")
+                .StartAsync(Ctx(isReviewFlow: false), CancellationToken.None));
+
+        await Assert.That(ex!.Message).StartsWith("antigravity_reviewer_version_below_minimum");
+    }
+
+    /// <summary>The platform arm is shared for the same reason as the floor: Windows cannot create the
+    /// per-launch home owner-only, and that home holds a hosted agent's own conversation transcript as
+    /// surely as it holds a reviewer's.</summary>
+    [Test]
+    public async Task A_windows_host_refuses_a_hosted_launch_too() {
+        var config = EnabledConfig();
+        config.AntigravityUnattendedReviewerEnabled = false;
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            Factory(config, new SpyTurnSource().SpawnAsync, posixHost: false)
+                .StartAsync(Ctx(isReviewFlow: false), CancellationToken.None));
+
+        await Assert.That(ex!.Message).StartsWith("antigravity_reviewer_unsupported_platform");
+    }
+
+    /// <summary>Binary presence is shared too — there is nothing to launch either way.</summary>
+    [Test]
+    public async Task A_missing_binary_refuses_a_hosted_launch_too() {
+        var config = EnabledConfig();
+        config.AntigravityUnattendedReviewerEnabled = false;
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            Factory(config, new SpyTurnSource().SpawnAsync, binaryExists: false)
+                .StartAsync(Ctx(isReviewFlow: false), CancellationToken.None));
+
+        await Assert.That(ex!.Message).StartsWith("antigravity_reviewer_binary_missing");
+    }
+
+    /// <summary>
+    /// The floor's "nothing recorded" arm reaches a hosted launch, and its remedy must not send a
+    /// hosted operator to the REVIEWER consent flag. That switch has no bearing on a hosted launch, and
+    /// telling someone to set it is the same confusion — one layer down — that this whole split
+    /// removes. The affirm verb is the remedy that works for both.
+    /// </summary>
+    [Test]
+    public async Task A_hosted_launch_with_no_recorded_minimum_is_refused_without_naming_the_reviewer_flag() {
+        var config = EnabledConfig(minimum: null);
+        config.AntigravityUnattendedReviewerEnabled = false;
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            Factory(config, new SpyTurnSource().SpawnAsync)
+                .StartAsync(Ctx(isReviewFlow: false), CancellationToken.None));
+
+        await Assert.That(ex!.Message).StartsWith("antigravity_reviewer_version_no_minimum");
+        await Assert.That(ex.Message).DoesNotContain("KCAP_ANTIGRAVITY_UNATTENDED_REVIEWER");
+        await Assert.That(ex.Message).Contains("kcap daemon reviewer affirm");
+    }
+
+    /// <summary>Advertisement is specifically an offer to REVIEW unattended, so it keeps the full
+    /// ladder — consent included. Lifting consent from the launch boundary must not lift it here: the
+    /// server refuses an unadvertised reviewer, and a daemon that advertised without consent would be
+    /// offering the very thing its operator never opted into.</summary>
+    [Test]
+    public async Task Advertisement_still_requires_consent_even_though_a_hosted_launch_does_not() {
+        Skip.Unless(!OperatingSystem.IsWindows(), "POSIX-only: the per-launch home cannot be owner-only on Windows.");
+
+        var config = EnabledConfig();
+        config.AntigravityUnattendedReviewerEnabled = false;
+
+        var factory = Factory(config, new SpyTurnSource().SpawnAsync);
+
+        // Withheld from advertisement...
+        await Assert.That(factory.SupportsUnattended).IsFalse();
+        await Assert.That(factory.DescribeUnattendedSupport().WithheldReason!)
+            .StartsWith("antigravity_unattended_reviewer_disabled");
+
+        // ...on the very daemon whose hosted launches this same factory admits.
+        var start = await factory.StartAsync(Ctx(isReviewFlow: false), CancellationToken.None)
+            .WaitAsync(HangGuard);
+
+        await start.Runtime.DisposeAsync();
+    }
+
+    /// <summary>A borrowed workspace is refused because this runtime has no containment strategy for
+    /// one — a fact about the runtime, not about reviews — so the refusal must not describe the launch
+    /// as a review. Reachable from the hosted arm, which is exactly where the old wording read wrong.
+    /// </summary>
+    [Test]
+    public async Task A_borrowed_workspace_is_refused_without_calling_the_launch_a_review() {
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            Factory(EnabledConfig(), new SpyTurnSource().SpawnAsync)
+                .StartAsync(Ctx(isReviewFlow: false) with { Work = WorkLocation.BorrowedCwd },
+                            CancellationToken.None));
+
+        await Assert.That(ex!.Message).StartsWith("antigravity_reviewer_requires_owned_worktree");
+        await Assert.That(ex.Message).Contains("daemon-owned worktree");
+        await Assert.That(ex.Message).DoesNotContain("a review must run");
+    }
+
+    // ── the injected MCP surface ───────────────────────────────────────────────────────────────────
+    //
+    // The per-launch home's mcp_config.json IS the launch's whole MCP surface (the home carries no
+    // operator config to merge with), so these assertions read that file rather than a builder's
+    // return value — the same file agy would load.
+
+    /// <summary>Reads the mcp_config.json the launch actually wrote, from the home the child was
+    /// handed. Literal path rather than <c>AntigravityPaths.McpConfigJson</c>: that resolver honours
+    /// the TEST PROCESS's own <c>GEMINI_CLI_HOME</c>, so it could read somewhere the launch never
+    /// wrote.</summary>
+    static async Task<string> McpConfigOf(SpyTurnSource spy) {
+        var home = spy.Spawns[0].Environment["HOME"]!;
+        var path = Path.Combine(home, ".gemini", "config", "mcp_config.json");
+
+        if (!File.Exists(path))
+            throw new FileNotFoundException($"The launch wrote no mcp_config.json under '{home}'.", path);
+
+        // Shared read: this file lives in the child's own config dir, so agy may rewrite it. A
+        // write-denying open is mandatory sharing on Windows and invisible on macOS/Linux.
+        return await WatchCommand.ReadAllTextSharedAsync(path);
+    }
+
+    /// <summary>
+    /// <b>A hosted agent has no flow to report a result to</b>, so it gets neither the
+    /// <c>kcap-flow-result</c> channel nor the fail-closed validation of that channel's inputs. Both
+    /// halves matter, and the second is what this test is shaped around: the launch runs with a BLANK
+    /// server url — the exact input the review-side guard rejects — because a hosted launch refused
+    /// with <c>antigravity_reviewer_result_channel_incomplete</c> would be refused for a channel it
+    /// never needed.
+    ///
+    /// <para>The config file must still EXIST and be valid: its presence is what replaces the
+    /// operator's global config with an empty surface, which is the same mechanism that keeps a
+    /// reviewer from starting a nested flow. Absent, agy would be free to fall back.</para>
+    /// </summary>
+    [Test]
+    public async Task A_hosted_launch_gets_no_result_channel_and_is_not_refused_for_missing_one() {
+        Skip.Unless(!OperatingSystem.IsWindows(), "POSIX-only: the per-launch home cannot be owner-only on Windows.");
+
+        var spy = new SpyTurnSource();
+
+        var start = await Factory(EnabledConfig(), spy.SpawnAsync)
+            .StartAsync(Ctx(isReviewFlow: false, serverUrl: null, capacitorPath: ""), CancellationToken.None)
+            .WaitAsync(HangGuard);
+
+        await using var runtime = start.Runtime;
+
+        // It launched — bound conversation, not merely "did not throw".
+        await Assert.That(start.Transcript!.AcpSessionId).IsEqualTo(FixedConversationId);
+
+        // Present, valid, and EMPTY — no result channel smuggled in under any name.
+        await Assert.That(await McpConfigOf(spy)).IsEqualTo("""{"mcpServers":{}}""");
+    }
+
+    /// <summary>
+    /// The review direction of the same split, and the harder one to lose safely: a reviewer with no
+    /// result channel starts, runs, and can never report — the flow then waits for a verdict that
+    /// cannot arrive. Asserts the channel's COMMAND and both env vars, not just its name: the server
+    /// exits when <c>KCAP_FLOW_AGENT_ID</c> is absent, so a name-only assertion would pass a channel
+    /// that dies on first use.
+    ///
+    /// <para>Also pins that the review arm builds its OWN list rather than forwarding
+    /// <c>ctx.McpServers</c> — a caller-supplied server must not join a reviewer's surface.</para>
+    /// </summary>
+    [Test]
+    public async Task A_review_launch_injects_the_flow_result_channel_and_ignores_caller_supplied_servers() {
+        Skip.Unless(!OperatingSystem.IsWindows(), "POSIX-only: the per-launch home cannot be owner-only on Windows.");
+
+        var spy = new SpyTurnSource();
+
+        var start = await Factory(EnabledConfig(), spy.SpawnAsync)
+            .StartAsync(Ctx(isReviewFlow: true,
+                            mcpServers: [new AcpMcpServerSpec("caller-supplied", "/bin/false", null, null)]),
+                        CancellationToken.None)
+            .WaitAsync(HangGuard);
+
+        await using var runtime = start.Runtime;
+
+        var config = await McpConfigOf(spy);
+
+        await Assert.That(config).Contains("\"kcap-flow-result\"");
+        await Assert.That(config).Contains("\"/usr/local/bin/kcap\"");
+        await Assert.That(config).Contains("\"KCAP_FLOW_AGENT_ID\"");
+        await Assert.That(config).Contains("\"agent-1\"");
+        await Assert.That(config).Contains("\"KCAP_URL\"");
+        await Assert.That(config).DoesNotContain("caller-supplied");
+    }
+
+    /// <summary>
+    /// <b>The THIRD launch shape is refused, not silently degraded.</b> Everything hosted here keys off
+    /// <c>!ctx.IsReviewFlow</c>, which is true for <c>LaunchKind.Default</c> AND
+    /// <c>LaunchKind.Review</c> — so a PR-review launch would otherwise take the hosted arm and run
+    /// with <c>--dangerously-skip-permissions</c>, an EMPTY MCP surface (no <c>kcap mcp review</c>
+    /// tools) and no review system prompt: only <c>PtyHostedAgentRuntimeFactory</c> builds
+    /// <c>LauncherContext.ReviewLaunch</c>, so nothing on this path can supply them. A PR-review agent
+    /// with none of its review tools and no error is worse than no PR-review agent.
+    ///
+    /// <para>Refused BEFORE the containment ladder deliberately: no amount of installing, affirming or
+    /// consenting can make this shape work, so the operator should read that rather than "install
+    /// agy". The shipped UI cannot request it today (the server's
+    /// <c>AgentStoreDataService.RequestLaunchReviewAgentAsync</c> hard-codes Claude, and
+    /// <c>ReviewPrDialog</c> has no vendor picker) — but the hub's <c>RequestLaunchAgent</c> takes
+    /// <c>vendor</c> and <c>kind</c> as independent client-supplied arguments and rejects only
+    /// Codex+Review, so this is a wire-reachable shape, not merely a latent one.</para>
+    /// </summary>
+    [Test]
+    public async Task A_pr_review_launch_is_refused_rather_than_taking_the_hosted_arm() {
+        var spy = new SpyTurnSource();
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            Factory(EnabledConfig(), spy.SpawnAsync)
+                .StartAsync(Ctx(isReviewFlow: false, isReview: true), CancellationToken.None));
+
+        await Assert.That(ex!.Message).StartsWith("antigravity_pr_review_unsupported");
+
+        // Refused, not merely reported: nothing was spawned.
+        await Assert.That(spy.Spawns.Count).IsEqualTo(0);
+    }
+
+    /// <summary>The negative control for the refusal above: an ordinary hosted launch shares its
+    /// <c>!IsReviewFlow</c> arm, so a guard written against the wrong predicate would refuse every
+    /// interactive agent — and this vendor's whole hosted lane with it.</summary>
+    [Test]
+    public async Task An_ordinary_hosted_launch_is_not_refused_as_a_pr_review() {
+        Skip.Unless(!OperatingSystem.IsWindows(), "POSIX-only: the per-launch home cannot be owner-only on Windows.");
+
+        var spy = new SpyTurnSource();
+
+        var start = await Factory(EnabledConfig(), spy.SpawnAsync)
+            .StartAsync(Ctx(isReviewFlow: false), CancellationToken.None).WaitAsync(HangGuard);
+
+        await using var runtime = start.Runtime;
+
+        await Assert.That(spy.Spawns.Count).IsGreaterThan(0);
+    }
+
+    /// <summary>A review whose result-channel inputs are incomplete must STILL fail closed with the
+    /// coded reason — scoping the injection to review flows must not weaken it. Blank server url only:
+    /// the guard is an OR over three inputs, and blanking one is what proves it still runs.</summary>
+    [Test]
+    public async Task A_review_launch_missing_result_channel_inputs_still_fails_closed() {
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            Factory(EnabledConfig(), new SpyTurnSource().SpawnAsync)
+                .StartAsync(Ctx(isReviewFlow: true, serverUrl: null), CancellationToken.None));
+
+        await Assert.That(ex!.Message).StartsWith("antigravity_reviewer_result_channel_incomplete");
+    }
+
+    /// <summary>The allowlist is the review-flow DEFINITION's, so its rejection is review-only too —
+    /// asserted as a split on one factory, because a hosted launch refused for a definition it has no
+    /// definition for is the same category error as the result-channel refusal above.</summary>
+    [Test]
+    public async Task A_non_auto_approvable_allowlist_refuses_a_review_but_not_a_hosted_launch() {
+        Skip.Unless(!OperatingSystem.IsWindows(), "POSIX-only: the per-launch home cannot be owner-only on Windows.");
+
+        var spy     = new SpyTurnSource();
+        var factory = Factory(EnabledConfig(), spy.SpawnAsync);
+
+        // kcap-flows starts flows — the recursion the reviewer allowlist exists to refuse.
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            factory.StartAsync(Ctx(isReviewFlow: true, mcpAllowlist: ["kcap-flows"]), CancellationToken.None));
+
+        await Assert.That(ex!.Message).StartsWith("antigravity_reviewer_mcp_allowlist_rejected");
+
+        // The same allowlist on a hosted launch is simply not its concern — and is never materialized.
+        var start = await factory
+            .StartAsync(Ctx(isReviewFlow: false, mcpAllowlist: ["kcap-flows"]), CancellationToken.None)
+            .WaitAsync(HangGuard);
+
+        await using var runtime = start.Runtime;
+
+        await Assert.That(await McpConfigOf(spy)).DoesNotContain("kcap-flows");
+    }
+
+    /// <summary>An auto-approvable allowlist entry reaches the reviewer's surface alongside the result
+    /// channel. Without this the allowlist could be resolved and then dropped, and every assertion
+    /// above would still pass.</summary>
+    [Test]
+    public async Task An_auto_approvable_allowlist_entry_reaches_the_reviewers_surface() {
+        Skip.Unless(!OperatingSystem.IsWindows(), "POSIX-only: the per-launch home cannot be owner-only on Windows.");
+
+        var spy = new SpyTurnSource();
+
+        var start = await Factory(EnabledConfig(), spy.SpawnAsync)
+            .StartAsync(Ctx(isReviewFlow: true, mcpAllowlist: ["kcap-review"]), CancellationToken.None)
+            .WaitAsync(HangGuard);
+
+        await using var runtime = start.Runtime;
+
+        var config = await McpConfigOf(spy);
+
+        await Assert.That(config).Contains("\"kcap-review\"");
+        await Assert.That(config).Contains("\"kcap-flow-result\"");
+    }
+
+    /// <summary>The hosted arm forwards <c>ctx.McpServers</c> verbatim, mirroring
+    /// <c>AcpHostedAgentRuntimeFactory</c>'s hosted arm. <b>No production caller populates that field
+    /// today</b>, so this pins a contract rather than a live path — the point being that a hosted agy
+    /// launch ends up with nothing DELIBERATELY (nothing is offered) rather than by a drop this
+    /// change introduced.</summary>
+    [Test]
+    public async Task A_hosted_launch_forwards_the_mcp_servers_it_was_given() {
+        Skip.Unless(!OperatingSystem.IsWindows(), "POSIX-only: the per-launch home cannot be owner-only on Windows.");
+
+        var spy = new SpyTurnSource();
+
+        var start = await Factory(EnabledConfig(), spy.SpawnAsync)
+            .StartAsync(Ctx(isReviewFlow: false,
+                            mcpServers: [new AcpMcpServerSpec("caller-supplied", "/bin/echo", ["hi"], null)]),
+                        CancellationToken.None)
+            .WaitAsync(HangGuard);
+
+        await using var runtime = start.Runtime;
+
+        var config = await McpConfigOf(spy);
+
+        await Assert.That(config).Contains("\"caller-supplied\"");
+        await Assert.That(config).DoesNotContain("kcap-flow-result");
     }
 
     /// <summary>

@@ -24,8 +24,22 @@ internal interface IAgyTurnDiagnostics {
 }
 
 /// <summary>
-/// <see cref="IHostedAgentRuntimeFactory"/> for Antigravity's CLI (<c>agy</c>) as an unattended
-/// review-flow reviewer, over the exec-per-turn <see cref="AntigravityHostedAgentRuntime"/>.
+/// <see cref="IHostedAgentRuntimeFactory"/> for Antigravity's CLI (<c>agy</c>) — both an unattended
+/// review-flow reviewer and an interactive hosted agent — over the exec-per-turn
+/// <see cref="AntigravityHostedAgentRuntime"/>.
+///
+/// <para><b>The two launch shapes it SERVES differ in exactly two things:</b> one argument
+/// (<c>--dangerously-skip-permissions</c>, hosted only; see <see cref="BuildTurnPsi"/>) and the
+/// injected MCP surface (the <c>kcap-flow-result</c> channel plus the flow definition's allowlist,
+/// review only; see <see cref="BuildReviewFlowMcp"/>). In particular the per-launch isolated
+/// <c>HOME</c> is NOT reviewer-only: this runtime is itself the transcript source, so a launch under
+/// the operator's own home is captured a second time by the hook lane — isolation removes a duplicate
+/// rather than removing capture.</para>
+///
+/// <para><b>The context carries a THIRD, which this factory refuses.</b> <c>LaunchKind.Review</c> (a
+/// PR review, <c>ctx.IsReview</c>) is neither of the above and shares the hosted arm's
+/// <c>!IsReviewFlow</c> predicate, so it is rejected at the top of <see cref="StartAsync"/> with
+/// <c>antigravity_pr_review_unsupported</c> rather than served degraded — see the guard for why.</para>
 ///
 /// <para><b>What this factory owns that the runtime deliberately does not:</b> the argv and
 /// environment of every turn child, the per-launch isolated <c>HOME</c> (and its removal), the
@@ -33,6 +47,13 @@ internal interface IAgyTurnDiagnostics {
 /// <see cref="StartAsync"/> does not return until turn 1's <c>init</c> has resolved the conversation
 /// id, because the orchestrator reads <c>transcript.AcpSessionId</c> synchronously the moment a
 /// launch returns and would otherwise bind the transcript to <c>""</c> forever.</para>
+///
+/// <para><b>One gate ladder, parameterised by launch shape</b> (<see cref="LaunchRefusal"/>). Platform,
+/// binary presence and the recorded build minimum gate BOTH shapes — they protect the isolated
+/// <c>HOME</c> above, which is not reviewer-specific. Operator CONSENT
+/// (<c>KCAP_ANTIGRAVITY_UNATTENDED_REVIEWER</c>) gates only a review, because only a review is
+/// cross-principal; hosted Antigravity ships on by default like the other hosted vendors. Advertisement
+/// keeps the full ladder, consent included — advertising IS the offer to review unattended.</para>
 ///
 /// <para><b>Auth is deliberately not an advertisement gate</b> (owner decision). The factory
 /// advertises whenever consent is given and the binary resolves; an operator whose only auth is an
@@ -98,24 +119,30 @@ internal sealed partial class AntigravityHostedAgentRuntimeFactory(
     public bool SupportsUnattended => DescribeUnattendedSupport().Supported;
 
     /// <summary>
-    /// The gate ladder, in ONE pass — consent, then platform, then binary presence. Consent is read
-    /// first so a daemon that has not opted in never touches the filesystem to decide.
+    /// Advertisement keeps the FULL ladder, consent included, because advertising is specifically an
+    /// offer to REVIEW unattended — the one thing the consent flag governs. A daemon that advertised
+    /// without consent would be offering exactly what its operator never opted into, and the server
+    /// refuses an unadvertised reviewer, so this is also the only seam that can withhold one.
     ///
     /// <para>Every refusal here carries a reason, because this vendor DOES offer unattended hosting:
     /// the <see langword="null"/> case in <see cref="UnattendedSupport"/> is for a vendor that never
     /// claimed it, which is not this one. The reason names the switch an operator can act on.</para>
     /// </summary>
     public UnattendedSupport DescribeUnattendedSupport() {
-        var withheld = ReviewerRefusal();
+        var withheld = LaunchRefusal(reviewFlow: true);
 
         return new(withheld is null, withheld);
     }
 
-    /// <summary>Why this daemon refuses an unattended Antigravity reviewer, or null when it does not.
-    /// The ONE place the ladder is written — advertisement and the launch boundary both read it, so a
-    /// vendor cannot be dropped from advertisement and thereby never reach the path that holds the
-    /// explanation, and the recorded MINIMUM cannot be enforced at only one of the two (an explicit
-    /// <c>vendor: "antigravity"</c> request reaches a launch without consulting advertisement).
+    /// <summary>Why this daemon refuses to launch <c>agy</c> for a launch of the given shape, or null
+    /// when it does not. The ONE place the ladder is written — advertisement and the launch boundary
+    /// both read it, so a vendor cannot be dropped from advertisement and thereby never reach the path
+    /// that holds the explanation, and the recorded MINIMUM cannot be enforced at only one of the two
+    /// (an explicit <c>vendor: "antigravity"</c> request reaches a launch without consulting
+    /// advertisement).
+    ///
+    /// <para><b>The two launch shapes differ in ONE arm, and it is a parameter rather than a second
+    /// ladder</b> — two ladders that must agree is a shape this file has already paid for once.</para>
     ///
     /// <para>Every verdict and every text comes from <see cref="AntigravityReviewerCapability"/>; the
     /// only arm written here is the one that decision cannot express — a binary that does not resolve
@@ -126,8 +153,27 @@ internal sealed partial class AntigravityHostedAgentRuntimeFactory(
     /// removed) under it rather than read a startup snapshot — and, since the minimum is a record on
     /// disk rather than configuration, an affirmation taken while this daemon runs is picked up on the
     /// next decision.</para></summary>
-    internal string? ReviewerRefusal() {
+    /// <param name="reviewFlow">Whether this launch is an unattended review, which is the ONLY shape
+    /// the operator consent flag governs.
+    ///
+    /// <para><b>Consent is reviewer-only because its whole justification is cross-principal.</b> An
+    /// unattended reviewer runs under the daemon user's authority and returns what it read to whoever
+    /// requested the review — who need not be the operator. A hosted launch has no such exposure: the
+    /// server's daemon registry is keyed <c>(TeamId, OwnerUserId, Name)</c> and both daemon discovery
+    /// and the launch hub resolve a daemon with the CALLER's own normalized user id, so the launcher
+    /// IS the daemon's owner. Hosted Antigravity therefore ships on by default, like the other hosted
+    /// vendors, and a hosted launch on a consent-less daemon must not fail with a review complaint.
+    /// </para>
+    ///
+    /// <para><b>Every OTHER arm applies to both shapes</b> — platform, binary presence and the
+    /// recorded build minimum all exist to protect the per-launch isolated <c>HOME</c>, which a hosted
+    /// launch depends on exactly as a review does.</para></param>
+    internal string? LaunchRefusal(bool reviewFlow) {
         var posixHost = _posixHost;
+
+        // The one parameterised arm. `true` for a hosted launch means "consent is not a question
+        // here", so Decide's consent arm cannot fire and the ladder continues at platform.
+        var consented = !reviewFlow || config.AntigravityUnattendedReviewerEnabled;
 
         // Consent and platform decided with NO probe and NO filesystem read. Decide short-circuits
         // both before it looks at a version, but C# evaluates arguments first — so reading the record
@@ -137,8 +183,7 @@ internal sealed partial class AntigravityHostedAgentRuntimeFactory(
         // installed side first), so that verdict is precisely "consent and platform passed", and the
         // ORDER between them stays owned by Decide rather than restated here.
         var beforeProbe = AntigravityReviewerCapability.Decide(
-            posixHost, config.AntigravityUnattendedReviewerEnabled,
-            installedVersion: null, minimumVersion: null);
+            posixHost, consented, installedVersion: null, minimumVersion: null);
 
         if (beforeProbe != AntigravityReviewerDecision.VersionUnresolved)
             return AntigravityReviewerCapability.DenialReason(
@@ -154,8 +199,7 @@ internal sealed partial class AntigravityHostedAgentRuntimeFactory(
         var installed = _resolveVersion(config.AntigravityPath);
         var minimum   = VersionStoreFor(config).Affirmed;
 
-        var decision = AntigravityReviewerCapability.Decide(
-            posixHost, config.AntigravityUnattendedReviewerEnabled, installed, minimum);
+        var decision = AntigravityReviewerCapability.Decide(posixHost, consented, installed, minimum);
 
         return decision == AntigravityReviewerDecision.Allowed
             ? null
@@ -171,52 +215,65 @@ internal sealed partial class AntigravityHostedAgentRuntimeFactory(
         new(ReviewerStateDir(config), DaemonRunner.AntigravityVendor);
 
     public async Task<HostedRuntimeStart> StartAsync(RuntimeStartContext ctx, CancellationToken ct) {
-        // An interactive launch is refused rather than silently accepted. This runtime parses agy's
-        // NDJSON from stdout once per turn, and an inherited HOME lets agy's own kcap capture hooks
-        // fire — which spawns a watcher that can hold a write end of that stdout open after agy exits,
-        // so every turn would block forever with no visible cause. The isolated home below is what
-        // makes that unreachable, and it is a reviewer-only construct today.
-        if (!ctx.IsReviewFlow)
+        // A THIRD launch shape. Everything hosted below keys off !ctx.IsReviewFlow, which is true for
+        // LaunchKind.Default AND LaunchKind.Review — so without this a PR-review launch takes the
+        // hosted arm and runs with --dangerously-skip-permissions, an EMPTY MCP surface and no review
+        // system prompt, because only PtyHostedAgentRuntimeFactory builds LauncherContext.ReviewLaunch
+        // (the `kcap mcp review` config and that prompt). A PR-review agent silently missing every
+        // review tool is worse than none; refuse it.
+        //
+        // FIRST, ahead of the containment ladder: no install, affirmation or consent can make this
+        // shape work, so an operator should read that rather than a remedy that would not help.
+        if (ctx.IsReview)
             throw new InvalidOperationException(
-                "antigravity_interactive_launch_unsupported: the Antigravity runtime hosts unattended "
-              + "review-flow reviewers only. An interactive launch would run under the operator's own "
-              + "HOME, where agy's capture hooks fire and can hold this runtime's stdout open after the "
-              + "turn exits.");
+                "antigravity_pr_review_unsupported: this runtime hosts interactive agents and "
+              + "review-flow reviewers only. A PR review needs the `kcap mcp review` tool surface and "
+              + "review prompt, which only the PTY launchers build — launch the PR review with Claude.");
 
-        // Defence in depth: the orchestrator's unattended gate runs first, but an explicit
-        // `vendor: "antigravity"` request can reach a factory without consulting advertisement.
-        if (ReviewerRefusal() is { } refusal) throw new InvalidOperationException(refusal);
+        // ONE ladder, told which shape of launch it is judging. Every arm but consent applies to both
+        // — they protect the per-launch isolated home below, which a hosted launch relies on exactly
+        // as a review does. Defence in depth for a review (the orchestrator's unattended gate runs
+        // first, but an explicit `vendor: "antigravity"` request can reach a factory without
+        // consulting advertisement), and the whole gate for a hosted launch, whose vendor is
+        // advertised on binary presence alone.
+        if (LaunchRefusal(ctx.IsReviewFlow) is { } refusal) throw new InvalidOperationException(refusal);
 
+        // A property of THIS RUNTIME, not of reviews: there is no sandbox-exec substrate here, so
+        // nothing bounds what a launch could read out of a checkout it does not own. Worded for either
+        // shape — a borrowed request is review-only today, but the guard reads ctx.Work, not IsReviewFlow.
         if (ctx.Work != WorkLocation.OwnedWorktree)
             throw new InvalidOperationException(
-                "antigravity_reviewer_requires_owned_worktree: this runtime has no borrowed-review "
-              + "containment strategy, so a review must run in a daemon-owned worktree.");
-
-        // A blank agent id would still yield a non-empty server list and slip past a count-only guard,
-        // so all three result-channel inputs are checked — a dead channel wedges the round.
-        if (string.IsNullOrWhiteSpace(ctx.ServerUrl) || string.IsNullOrWhiteSpace(ctx.CapacitorPath)
-         || string.IsNullOrWhiteSpace(ctx.AgentId))
-            throw new InvalidOperationException(
-                "antigravity_reviewer_result_channel_incomplete: cannot inject the kcap-flow-result "
-              + "channel (missing server url / kcap path / agent id).");
+                "antigravity_reviewer_requires_owned_worktree: this runtime has no containment "
+              + "strategy for a borrowed workspace, so it runs only in a daemon-owned worktree.");
 
         // Canonical wire names: agy's MCP surface is the file this launch writes, not a name-matched
         // allowlist the reviewed repository could impersonate an entry in, so the per-launch aliasing
-        // Gemini and Kiro need buys nothing here.
+        // Gemini and Kiro need buys nothing here. Overwritten for BOTH shapes, so a caller-supplied
+        // identity can never reach a launch of either kind.
         ctx = ctx with { LaunchIdentity = LaunchIdentity.ForLaunch(aliasResultChannel: false) };
 
-        if (!KcapMcpRegistry.TryResolveReviewFlowAllowlist(ctx.McpAllowlist, out var allowlistServerIds, out var rejected))
-            throw new InvalidOperationException(
-                $"antigravity_reviewer_mcp_allowlist_rejected: '{rejected}' is not an auto-approvable "
-              + "read-only server.");
+        // Both the result channel AND its fail-closed validation are review-only — the same split
+        // AcpHostedAgentRuntimeFactory.ValidateAndBuildReviewFlowMcp draws. A hosted agent has no flow
+        // to report to, so injecting kcap-flow-result would hand it a tool it can only call
+        // meaninglessly, and validating that channel's inputs would refuse a hosted launch for a
+        // channel it never needed. The allowlist is the review-flow DEFINITION's, so its rejection is
+        // review-only for the same reason.
+        //
+        // The hosted arm forwards ctx.McpServers, mirroring the ACP factory's hosted arm. No caller
+        // populates that field today (see its comment on RuntimeStartContext), so a hosted launch's
+        // surface is empty — deliberately, because nothing is offered, rather than by a drop here.
+        var injected = ctx.IsReviewFlow ? BuildReviewFlowMcp(ctx) : ctx.McpServers ?? [];
 
-        var injected = AcpReviewFlowMcp.Build(ctx, allowlistServerIds);
+        LogLaunching(ctx.AgentId, ctx.Worktree.Path, ctx.IsReviewFlow);
 
-        LogLaunching(ctx.AgentId, ctx.Worktree.Path);
-
-        // Created BEFORE any child exists, and owner-only from its first instant — the reviewer's own
+        // Created BEFORE any child exists, and owner-only from its first instant — the agent's own
         // conversation state lands in it. Its ABSENCE of a kcap plugin directory is what keeps capture
-        // single-lane; the injected mcp_config.json is the reviewer's whole MCP surface.
+        // single-lane; the injected mcp_config.json is the agent's whole MCP surface.
+        //
+        // Kept for interactive launches too, and for the capture reason rather than a stdout one:
+        // measured, a run under the operator's real HOME is recorded a SECOND time by the hook lane as
+        // its own watcher session, while this runtime is already the transcript source. An inherited
+        // HOME would duplicate capture, not add it.
         var stateDir = ReviewerStateDir(config);
         var home     = AntigravityReviewerHome.Create(
             stateDir, config.DaemonEpoch ?? "unpinned", ctx.AgentId, injected, _logger);
@@ -294,6 +351,31 @@ internal sealed partial class AntigravityHostedAgentRuntimeFactory(
         return new HostedRuntimeStart(runtime, McpConfigPath: null, Transcript: runtime);
     }
 
+    /// <summary>The reviewer's injected MCP surface — the <c>kcap-flow-result</c> submit channel plus
+    /// the flow definition's allowlist — or a throw naming what makes it undeliverable. Called for a
+    /// review flow ONLY: every refusal in here describes a review, and a hosted launch that hit one
+    /// would be refused for machinery it has no use for.
+    ///
+    /// <para>Fails closed rather than launching a reviewer with a missing or partial channel: such a
+    /// reviewer starts, runs and can never report, so the flow waits for a verdict that cannot
+    /// arrive.</para></summary>
+    static IReadOnlyList<AcpMcpServerSpec> BuildReviewFlowMcp(RuntimeStartContext ctx) {
+        // A blank agent id would still yield a non-empty server list and slip past a count-only guard,
+        // so all three result-channel inputs are checked — a dead channel wedges the round.
+        if (string.IsNullOrWhiteSpace(ctx.ServerUrl) || string.IsNullOrWhiteSpace(ctx.CapacitorPath)
+         || string.IsNullOrWhiteSpace(ctx.AgentId))
+            throw new InvalidOperationException(
+                "antigravity_reviewer_result_channel_incomplete: cannot inject the kcap-flow-result "
+              + "channel (missing server url / kcap path / agent id).");
+
+        if (!KcapMcpRegistry.TryResolveReviewFlowAllowlist(ctx.McpAllowlist, out var allowlistServerIds, out var rejected))
+            throw new InvalidOperationException(
+                $"antigravity_reviewer_mcp_allowlist_rejected: '{rejected}' is not an auto-approvable "
+              + "read-only server.");
+
+        return AcpReviewFlowMcp.Build(ctx, allowlistServerIds);
+    }
+
     /// <summary>
     /// Turns a failed handshake into a reason an operator can act on. The auth arm is
     /// <b>non-retryable and names the ADC remedy</b> — a generic launch failure would send an operator
@@ -304,8 +386,8 @@ internal sealed partial class AntigravityHostedAgentRuntimeFactory(
             Exception cause, IAgyTurnProcess? firstTurn, CancellationToken callerToken, CancellationToken launchToken) {
         if (firstTurn is IAgyTurnDiagnostics { Diagnostics: { } diagnostics } && LooksLikeAuthFailure(diagnostics))
             return new InvalidOperationException(
-                "antigravity_reviewer_auth_unavailable: agy could not authenticate, and an unattended "
-              + "reviewer has no way to complete an interactive login (its stdin is closed). Give the "
+                "antigravity_reviewer_auth_unavailable: agy could not authenticate, and a daemon-hosted "
+              + "agy has no way to complete an interactive login (its stdin is closed). Give the "
               + "daemon durable credentials: `gcloud auth application-default login`, then "
               + "GOOGLE_CLOUD_PROJECT=<project> and AGY_ADC_AUTH=1 in the daemon's environment. A "
               + "supervised daemon installed before this shipped must be reinstalled to capture them.",
@@ -361,12 +443,30 @@ internal sealed partial class AntigravityHostedAgentRuntimeFactory(
     /// spawn path and the launch tests both go through it, so an assertion here certifies the vector
     /// the OS actually receives rather than a re-derivation of it.
     ///
-    /// <para><b>What is deliberately absent.</b> No <c>--dangerously-skip-permissions</c>: the
-    /// reviewer runs in a daemon-OWNED worktree and needs only to read it, which agy's headless
+    /// <para><b>The one asymmetry between a hosted agent and a reviewer</b> is
+    /// <c>--dangerously-skip-permissions</c>, added on the hosted arm only. A hosted agent exists to DO
+    /// work, and without it agy's shell and out-of-workspace operations soft-deny while the run still
+    /// exits 0 — so the agent merely looks broken. <b>That flag is also the read boundary, and the
+    /// worktree is not:</b> measured on agy 1.1.10, with it an absolute <c>view_file</c> of a path
+    /// OUTSIDE the workspace succeeds, and without it the same read is refused with a typed
+    /// <c>tool_info.error</c>. Nothing here should be read as the daemon-owned worktree confining what
+    /// a hosted agent can see.</para>
+    ///
+    /// <para><b>Claude is a precedent for a single-axis no-prompt posture existing, NOT for which
+    /// launch kind gets it.</b> Codex is not the analogue — its posture is two axes
+    /// (<c>Sandbox</c> × <c>Approval</c>), so a no-prompt Codex still sits on a sandbox. But Claude's
+    /// own split runs the OTHER way: <c>ClaudeLauncher.BuildArgs</c> adds
+    /// <c>bypassPermissions</c> only under <c>ctx.IsReviewFlow</c>, because its reviewer writes into a
+    /// throwaway worktree while its interactive agent has a human to answer the dialog. This runtime
+    /// has neither property. Do not "align with the precedent" by moving this flag to the reviewer
+    /// arm — that is the direction the split exists to prevent.</para>
+    ///
+    /// <para><b>What is deliberately absent.</b> No <c>--dangerously-skip-permissions</c> for a
+    /// reviewer: it runs in a daemon-OWNED worktree and needs only to read it, which agy's headless
     /// defaults already permit — its soft-deny of shell and out-of-workspace operations IS the desired
     /// unattended posture, and widening it would grant a reviewer shell access it has no reason to
-    /// hold. No <c>--sandbox</c>: a vendor-side terminal restriction overlapping what containment
-    /// already provides, and unprobed.</para>
+    /// hold. No <c>--sandbox</c> on either arm: a vendor-side terminal restriction overlapping what
+    /// containment already provides, and unprobed.</para>
     ///
     /// <para><c>--print-timeout</c> is passed on EVERY invocation rather than relying on agy's own
     /// <c>5m0s</c> default — a vendor change would otherwise silently move a bound we did not
@@ -377,9 +477,15 @@ internal sealed partial class AntigravityHostedAgentRuntimeFactory(
         var argv = new List<string> {
             "-p", prompt,
             "--output-format", "stream-json",
-            "--disable-slash-commands",
-            "--print-timeout", $"{Math.Max(1, config.AntigravityReviewerTurnTimeoutSeconds)}s"
+            "--disable-slash-commands"
         };
+
+        // Hosted only, never a reviewer — see this method's doc for what the flag does and does not
+        // bound. Passed unconditionally on that arm: no caller input selects it.
+        if (!ctx.IsReviewFlow) argv.Add("--dangerously-skip-permissions");
+
+        argv.Add("--print-timeout");
+        argv.Add($"{Math.Max(1, config.AntigravityReviewerTurnTimeoutSeconds)}s");
 
         // Absent on turn 1 (there is nothing to resume yet) and present on every turn after it — this
         // is what makes a multi-round review land as ONE conversation rather than one per round.
@@ -426,8 +532,9 @@ internal sealed partial class AntigravityHostedAgentRuntimeFactory(
         return psi;
     }
 
-    [LoggerMessage(Level = LogLevel.Information, Message = "Antigravity reviewer launch: agentId={AgentId} cwd={Cwd}")]
-    partial void LogLaunching(string agentId, string cwd);
+    [LoggerMessage(Level = LogLevel.Information,
+        Message = "Antigravity launch: agentId={AgentId} cwd={Cwd} reviewFlow={ReviewFlow}")]
+    partial void LogLaunching(string agentId, string cwd, bool reviewFlow);
 }
 
 /// <summary>
