@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.SessionStartMemory;
 
 namespace Capacitor.Cli.Commands;
 
@@ -33,10 +34,21 @@ namespace Capacitor.Cli.Commands;
 /// same way, so a conversation captured live and later re-imported dedupes to one stream.
 /// </summary>
 static class AntigravityHookCommand {
-    public static Task<int> Handle(string baseUrl, string[] args) =>
-        Handle(baseUrl, args, Console.In);
+    public static Task<int> Handle(string baseUrl, string[] args, long processStart = 0) =>
+        Handle(baseUrl, args, Console.In, Console.Out, processStart);
 
-    internal static async Task<int> Handle(string baseUrl, string[] args, TextReader stdin) {
+    internal static Task<int> Handle(string baseUrl, string[] args, TextReader stdin, TextWriter stdout,
+            long processStart = 0,
+            Func<string?, CancellationToken, Task<HttpClient>>? memoryClientFactory = null,
+            Func<SessionStartMemoryLeaseStore>?                 memoryStoreFactory  = null) =>
+        HandleCore(baseUrl, args, stdin, stdout,
+            processStart == 0 ? System.Diagnostics.Stopwatch.GetTimestamp() : processStart,
+            memoryClientFactory, memoryStoreFactory);
+
+    static async Task<int> HandleCore(string baseUrl, string[] args, TextReader stdin, TextWriter stdout,
+            long processStart,
+            Func<string?, CancellationToken, Task<HttpClient>>? memoryClientFactory,
+            Func<SessionStartMemoryLeaseStore>?                 memoryStoreFactory) {
         var eventName = EventArg(args);
         if (string.IsNullOrWhiteSpace(eventName)) {
             // Control hooks must always exit 0 (a non-zero exit makes Antigravity treat the
@@ -84,7 +96,38 @@ static class AntigravityHookCommand {
         }
 
         return await HandleSessionStart(
-            baseUrl, sessionId, transcriptPath!, cwd, payload, activeProfile);
+            baseUrl, sessionId, transcriptPath!, cwd, payload, activeProfile,
+            stdout, processStart, memoryClientFactory, memoryStoreFactory);
+    }
+
+    /// <summary>
+    /// Writes the team-memory fragment in Antigravity's PreInvocation shape:
+    /// <c>{"injectSteps":[{"userMessage":"…"}]}</c>. <c>userMessage</c> rather than
+    /// <c>ephemeralMessage</c> because the vendor's own embedded hook contract documents the latter as
+    /// transient, and the index is meant to persist for the conversation.
+    ///
+    /// <para><b>A null fragment writes ZERO BYTES.</b> This hook emitted nothing at all before the
+    /// memory index existed, so rendering the adapter's <c>{}</c> on the no-fragment path would change
+    /// the wire behaviour of EVERY invocation for EVERY user — including the IDE-only majority, whose
+    /// product was never probed — to buy nothing. Mirrors Copilot and Kiro. Do not "simplify" this by
+    /// rendering the null case: the shared adapter's own null rendering is <c>{}</c>, which is exactly
+    /// what must not reach stdout here.</para>
+    ///
+    /// <para>Serialized before the first byte so a renderer fault degrades to silence rather than a
+    /// partial document.</para>
+    /// </summary>
+    internal static void WritePreInvocationOutput(TextWriter writer, string? fragment) {
+        if (fragment is null) return;
+
+        string payload;
+
+        try {
+            payload = SessionStartMemoryOutputAdapters.Render(SessionStartHarness.Antigravity, fragment);
+        } catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) {
+            return;
+        }
+
+        writer.Write(payload);
     }
 
     static async Task<int> HandleSessionStart(
@@ -93,7 +136,11 @@ static class AntigravityHookCommand {
             string      transcriptPath,
             string?     cwd,
             JsonObject  payload,
-            Profile?    activeProfile
+            Profile?    activeProfile,
+            TextWriter  stdout,
+            long        processStart,
+            Func<string?, CancellationToken, Task<HttpClient>>? memoryClientFactory,
+            Func<SessionStartMemoryLeaseStore>?                 memoryStoreFactory
         ) {
         var forwarded = new JsonObject {
             ["hook_event_name"] = "sessionStart",
@@ -128,14 +175,57 @@ static class AntigravityHookCommand {
             return 0;
         }
 
+        // Scope root: the git root discovered from the payload cwd (stamped onto `forwarded` above,
+        // if found) is preferred; the payload cwd is the fallback. Read back from `enriched` (not a
+        // local captured above) so the fallback matches exactly what the server received. Never a
+        // process-cwd fallback — see StartMemoryIndexTask's scope-safety note.
+        var scopeRoot = AsString(JsonNode.Parse(enriched)?["workspace_root"]) ?? cwd;
+
+        // Start the memory fetch so it OVERLAPS the lifecycle POST. Never before it, and never
+        // awaited before it — the POST is what capture depends on.
+        var memoryTask = StartMemoryIndexTask(
+            baseUrl, sessionId, scopeRoot,
+            activeProfile?.DisableMemoryIndex is true,
+            HookBudget.Remaining(processStart, "session-start"),
+            memoryClientFactory, memoryStoreFactory);
+
         // Task 6: spawn-before-post. Route through the shared spool-aware poster (which
         // replaced this dispatcher's former bespoke poster) — a lapse/outage durably spools the
         // payload for a later drain AND still proceeds to spawn the watcher, so capture never
         // depends on lifecycle-POST delivery. Only a permanent Failed withholds the watcher.
-        var spool   = new HookSpool(PathHelpers.ConfigPath("spool"));
-        var outcome = await AgentHookPoster.PostOrSpoolAsync(
+        //
+        // Started but NOT awaited yet, so the POST cannot stand between a fetched fragment and
+        // stdout: PostOrSpoolAsync retries for ~30s, far beyond this hook's 5s ceiling. A slow or
+        // unreachable server must never leave the once-per-conversation lease committed while the
+        // fragment it paid for is still stuck behind the POST — the vendor kills the hook at its own
+        // timeout, and that firing never retries.
+        var spool    = new HookSpool(PathHelpers.ConfigPath("spool"));
+        var postTask = AgentHookPoster.PostOrSpoolAsync(
             baseUrl, "session-start/antigravity", enriched, "antigravity-hook",
             spool, sessionId, route: "session-start/antigravity");
+
+        // The fragment reaches stdout as soon as the bounded fetch resolves — before the POST is
+        // awaited and before the watcher branch — so neither a slow POST nor a later
+        // EnsureWatcherRunning stall can strand an already-committed injection. AwaitBounded already
+        // subtracts HookBudget.Safety — do NOT subtract it again. Written even when the watcher-spawn
+        // gate below returns early — a withheld watcher must not suppress injection.
+        WritePreInvocationOutput(
+            stdout, await SessionStartMemoryHookSupport.AwaitBounded(memoryTask, processStart, "session-start"));
+        await stdout.FlushAsync();
+
+        // BOUNDED by what remains of the ceiling — the POST retries for ~30s, far past this hook's 5s
+        // budget. On a lapse we stop waiting and spool durably instead, so a later drain pass replays
+        // it; double delivery is harmless (the server's deterministic lifecycle event id collapses
+        // both onto one SessionStarted).
+        HookPostOutcome outcome;
+
+        try {
+            outcome = await postTask.WaitAsync(HookBudget.Remaining(processStart, "session-start"));
+        } catch (TimeoutException) {
+            outcome = spool.Append(sessionId, "session-start/antigravity", enriched)
+                ? HookPostOutcome.Spooled
+                : HookPostOutcome.Skipped;
+        }
 
         // Fail-open: a non-zero exit would surface as a failed hook; skip the watcher
         // this firing and let the next PreInvocation retry.
@@ -144,11 +234,19 @@ static class AntigravityHookCommand {
         // Watcher key = the dashless session id (kcap watch strips dashes too, so the pid
         // file + the spawned watcher's stream all agree). The dashed conversation id lives on
         // in transcriptPath, from which the watcher derives the sibling gen_metadata db.
-        await WatcherManager.EnsureWatcherRunning(
-            baseUrl, sessionId, transcriptPath,
-            agentId: null, sessionIdOverride: null, cwd: cwd,
-            skipTitle: false, vendor: "antigravity"
-        );
+        //
+        // Bounded for the same reason as the POST, and this is the LAST step between the committed
+        // injection and the zero exit — a stall here would discard an already-written fragment. The
+        // stale-watcher path can wait up to 5s for a graceful kill.
+        try {
+            await WatcherManager.EnsureWatcherRunning(
+                baseUrl, sessionId, transcriptPath,
+                agentId: null, sessionIdOverride: null, cwd: cwd,
+                skipTitle: false, vendor: "antigravity"
+            ).WaitAsync(HookBudget.Remaining(processStart, "session-start"));
+        } catch (TimeoutException) {
+            // Budget exhausted. The next PreInvocation ensures the watcher.
+        }
 
         return 0;
     }
@@ -157,6 +255,64 @@ static class AntigravityHookCommand {
     /// start on <c>Posted</c> OR <c>Spooled</c>, never gated behind lifecycle-POST delivery.</summary>
     internal static bool SpawnGateForTest(HookPostOutcome o, string? baseUrl)
         => AgentHookPoster.ShouldSpawnAfter(o, baseUrl);
+
+    /// <summary>
+    /// The lifecycle this adapter reports. PreInvocation fires ONCE PER INVOCATION within a
+    /// conversation (its payload carries `invocationNum`), so this is a REPEATING callback and the
+    /// fenced lease is what makes injection once-per-conversation. Kiro's agentSpawn is the only
+    /// other harness with this shape; every other adapter is CallbackMayRepeat: false and copying
+    /// one would re-inject the index on every turn.
+    ///
+    /// <para>The lease key is derived from the harness token and the normalized session id only.
+    /// `invocationNum` must never reach it, directly or transitively — it is the one field that
+    /// varies between callbacks, so keying on it would mint a fresh lease per invocation.</para>
+    /// </summary>
+    internal static SessionMemoryLifecycle LifecycleFor(string sessionId) =>
+        new(SessionStartHarness.Antigravity, sessionId, LifecycleInstanceId: null,
+            IsTopLevel: true, ClassificationAuthoritative: true,
+            SessionLifecycleReason.RepeatedTurnCallback, CallbackMayRepeat: true);
+
+    /// <summary>
+    /// Starts the shared memory fetch so it overlaps the lifecycle POST. Returns a task that never
+    /// faults — every failure resolves to null, which the writer renders as zero bytes.
+    ///
+    /// <para><b>Scope safety:</b> git root preferred, payload cwd as fallback; with neither, injection
+    /// is skipped rather than letting the shared resolver fall back to the hook PROCESS's cwd and
+    /// inject an unrelated repository's memories.</para>
+    ///
+    /// <para><c>CanAttempt</c> is checked BEFORE any client is constructed, because the client
+    /// factory's EnsureAbsolute calls Environment.Exit(2) on an unusable base url — which would kill
+    /// the hook before it can write its output.</para>
+    /// </summary>
+    internal static Task<string?> StartMemoryIndexTask(
+            string     baseUrl,
+            string     sessionId,
+            string?    scopeRoot,
+            bool       disabled,
+            TimeSpan   budget,
+            Func<string?, CancellationToken, Task<HttpClient>>? memoryClientFactory,
+            Func<SessionStartMemoryLeaseStore>?                 memoryStoreFactory) {
+        if (disabled || string.IsNullOrWhiteSpace(sessionId) || string.IsNullOrWhiteSpace(scopeRoot)
+         || budget <= TimeSpan.Zero
+         || !SessionStartMemoryHookSupport.CanAttempt(baseUrl))
+            return Task.FromResult<string?>(null);
+
+        try {
+            var store = memoryStoreFactory?.Invoke() ?? new SessionStartMemoryLeaseStore();
+            var provider = new SessionStartMemoryContextProvider(
+                new SessionStartMemoryScopeResolver(),
+                memoryClientFactory ?? SessionStartMemoryHookSupport.ClientFactory(baseUrl),
+                // Only clients we created are ours to dispose; an injected factory's client belongs
+                // to its caller and may be handed back again on the 401-refresh call.
+                disposeClients: memoryClientFactory is null);
+
+            return new SessionStartMemoryOrchestrator(store, provider).GetFragmentAsync(
+                LifecycleFor(sessionId),
+                new SessionStartMemoryContextRequest(baseUrl, scopeRoot, disabled, budget, CancellationToken.None));
+        } catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) {
+            return Task.FromResult<string?>(null);
+        }
+    }
 
     /// <summary>The event name — the first positional token after <c>--antigravity</c>.</summary>
     internal static string? EventArg(string[] args) {
