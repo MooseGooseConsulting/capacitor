@@ -1,8 +1,13 @@
+using System.Collections.ObjectModel;
 using System.Reactive;
 using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
+using Avalonia.Media;
 using Capacitor.App.Services;
+using Capacitor.Cli.Core.LocalIpc;
+using DynamicData;
+using DynamicData.Binding;
 using ReactiveUI;
 
 namespace Capacitor.App.ViewModels;
@@ -14,7 +19,9 @@ namespace Capacitor.App.ViewModels;
 /// CONSTRUCTOR, not inside WhenActivated — commands must exist (and be assertable via
 /// CanExecute) independent of window activation; service.Status/service.Snapshots are the
 /// service's own long-lived subjects, not resources the VM needs to scope to a window's
-/// lifetime.
+/// lifetime. StartVisible/RetryVisible mirror that same constructor scoping (spec: presentation
+/// visibility must track the identical state predicate the command's own canExecute uses,
+/// independent of activation too).
 public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel {
     const string IncompatibleReason = "daemon_incompatible";
     const string UnreachableReason  = "daemon_unreachable";
@@ -23,6 +30,16 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     // an unexpected frame can equally mean the APP is the older side — so the UI must not
     // prescribe an upgrade direction.
     const string SkewMessage = "app and daemon are incompatible — make sure both are up to date";
+
+    // StatusColors (shared with TrayIconRenderer's tray-icon overlay, spec §4) is hex-only
+    // constants (plain strings, not Brush instances). A Brush is an AvaloniaObject with UI-thread
+    // affinity enforced the moment the renderer references it; caching one as a shared
+    // `static readonly` field would tie its affinity to whichever thread happens to trigger this
+    // type's static initializer FIRST (e.g. a plain unit test calling a static helper off the UI
+    // thread) and then poison every later render that reuses the same cached instance. DotBrush
+    // below constructs a fresh instance per call instead — cheap, and always on whatever thread
+    // the caller is on.
+    static IBrush DotBrush(string hex) => new SolidColorBrush(Color.Parse(hex));
 
     readonly IDaemonClientService _service;
 
@@ -34,6 +51,12 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     ObservableAsPropertyHelper<string>? _daemonVersion;
     public string DaemonVersion => _daemonVersion?.Value ?? "";
 
+    // SEMVER-only projection of DaemonVersion (everything from the first '+' is build metadata —
+    // never meaningful to a human glancing at the status line); the untruncated value still lives
+    // on DaemonVersion for the version TextBlock's ToolTip.Tip.
+    ObservableAsPropertyHelper<string>? _versionDisplay;
+    public string VersionDisplay => _versionDisplay?.Value ?? "";
+
     ObservableAsPropertyHelper<string>? _serverUrl;
     public string ServerUrl => _serverUrl?.Value ?? "";
 
@@ -42,6 +65,17 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     // are this app's local attach status to the daemon.
     ObservableAsPropertyHelper<string>? _connectionText;
     public string ConnectionText => _connectionText?.Value ?? "";
+
+    // Single-word presentation of the OVERALL connection situation (local attach State first,
+    // falling back to the daemon's own upstream Connection only once State is Connected — see
+    // ConnectionDisplayFor). Capitalized, in-progress words get a trailing ellipsis ("Connecting…").
+    ObservableAsPropertyHelper<string>? _connectionDisplay;
+    public string ConnectionDisplay => _connectionDisplay?.Value ?? "";
+
+    // Status-dot color for ConnectionDisplay's same bucket — kept as a single source of truth so
+    // the dot and the word can never disagree.
+    ObservableAsPropertyHelper<IBrush>? _statusDotBrush;
+    public IBrush StatusDotBrush => _statusDotBrush?.Value ?? DotBrush(StatusColors.Unavailable);
 
     // "n of m agents" only while Connected (spec §1.5: active_agents is a display count, never
     // a free-slots/launch-capacity claim) — "—" otherwise, even though the last-known snapshot
@@ -58,6 +92,25 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     ObservableAsPropertyHelper<string?>? _reason;
     public string? Reason => _reason?.Value;
 
+    static readonly IComparer<AgentRowViewModel> RowComparer = Comparer<AgentRowViewModel>.Create((a, b) => {
+        var byCreated = a.CreatedAt.CompareTo(b.CreatedAt);
+        return byCreated != 0 ? byCreated : string.CompareOrdinal(a.Id, b.Id);
+    });
+
+    // ONE stable collection, created once here and never replaced: WhenActivated re-runs on
+    // every activation (hide-to-tray/reopen included), and Agents is a plain get-only property
+    // with no change notification — swapping the bound INSTANCE on each activation (the prior
+    // `SortAndBind(out _agents, ...)` shape) would leave the view's ItemsControl bound to a dead
+    // collection forever. SortAndBind's IList-targeting overload mutates THIS instance in place
+    // instead. Spec §8: rows persist across disconnects (the underlying SourceCache is retained
+    // by the service) — GridEnabled below is what disables actions and dims the XAML, never a
+    // local removal of rows.
+    readonly ObservableCollectionExtended<AgentRowViewModel> _agentsSource = new();
+    public ReadOnlyObservableCollection<AgentRowViewModel> Agents { get; }
+
+    ObservableAsPropertyHelper<bool>? _gridEnabled;
+    public bool GridEnabled => _gridEnabled?.Value ?? false;
+
     string? _startMessage;
     // Start-daemon failure text. Cleared on every new start attempt AND on any transition to
     // Connected (spec §5); set only when a start attempt actually fails.
@@ -69,13 +122,61 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     public ReactiveCommand<Unit, Unit> StartDaemonCommand { get; }
     public ReactiveCommand<Unit, Unit> RetryCommand { get; }
 
+    // Button IsVisible projections (spec: "shows ONLY when its action is meaningful"). Deliberately
+    // NOT ReactiveCommand.CanExecute — that ANDs in "not currently executing", which would hide the
+    // button mid-attempt instead of just disabling it. These track the exact same state predicate
+    // (canStart/canRetry below) the commands' own canExecute pipelines use, ctor-scoped for the
+    // same reason those pipelines are (see class doc comment).
+    readonly ObservableAsPropertyHelper<bool> _startVisible;
+    public bool StartVisible => _startVisible.Value;
+
+    readonly ObservableAsPropertyHelper<bool> _retryVisible;
+    public bool RetryVisible => _retryVisible.Value;
+
+    // ONE shared ticker for every row (spec §8): Publish().RefCount() makes it HOT, so all rows
+    // observe the same Interval and tick in lockstep instead of each cold-subscribing its own.
+    //
+    // SubscribeOn is load-bearing. Rows are built inside DynamicData's Transform, which runs on
+    // whatever thread mutates the SourceCache — in production DaemonClientService's socket pump
+    // thread, never the UI thread. AvaloniaScheduler's non-zero-dueTime path does NOT marshal: it
+    // calls DispatcherTimer.RunOnce, which resolves Dispatcher.CurrentDispatcher — a THREAD-LOCAL
+    // lookup that, off the UI thread, silently constructs a brand-new dispatcher for that thread
+    // which nothing ever pumps. Its Tick never fires, so the Interval produces no value at all and
+    // every row's Uptime freezes at its seed forever, with no exception and no log. SubscribeOn
+    // forces the subscription — and therefore Interval's first Schedule call — onto the real UI
+    // dispatcher via AvaloniaScheduler's zero-dueTime Dispatcher.UIThread.Post path.
+    //
+    // No StartWith: a row's immediate first value is the OAPH's initialUptime argument
+    // (AgentRowViewModel), so a StartWith would only re-emit the identical string. The scheduler is
+    // captured NOW (Rx operators take a scheduler by value, not a live reference to
+    // RxSchedulers.MainThreadScheduler) and RefCount defers the connection until a row subscribes —
+    // which is what lets a test construct this VM inside AvaloniaSession.WithImmediateRxScheduler
+    // WITHOUT ever subscribing a row: subscribing an Interval under an immediate scheduler would
+    // block/spin forever, since Interval never completes.
+    readonly IObservable<long> _ticker = Observable
+        .Interval(TimeSpan.FromSeconds(1), RxSchedulers.MainThreadScheduler)
+        .SubscribeOn(RxSchedulers.MainThreadScheduler)
+        .Publish()
+        .RefCount();
+
+    // Test seam: the only way to exercise the REAL ticker (real 1s Interval on the real
+    // AvaloniaScheduler) from the production subscription thread — the row-level tests inject a
+    // Subject and so cannot observe the off-UI-thread hazard the SubscribeOn above exists for.
+    internal IObservable<long> Ticker => _ticker;
+
+    readonly TimeProvider _time;
+
     /// <param name="shutdownToken">
     /// Abandons StartDaemonAsync's WAIT (never the spawned daemon) on app shutdown. MUST be a
     /// token linked to the app lifetime — never CancellationToken.None (Task 4 carry-note: an
     /// unbounded wait would survive app exit).
     /// </param>
-    public MainWindowViewModel(IDaemonClientService service, CancellationToken shutdownToken) {
+    public MainWindowViewModel(
+            IDaemonClientService service, AgentActionService actions,
+            CancellationToken shutdownToken, TimeProvider? time = null) {
         _service = service;
+        _time = time ?? TimeProvider.System;
+        Agents = new ReadOnlyObservableCollection<AgentRowViewModel>(_agentsSource);
 
         // ReactiveCommand's own CanExecute observable already ANDs the supplied canExecute with
         // "not currently executing" (confirmed against the installed ReactiveUI 23.2.28 API
@@ -99,9 +200,23 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         StartDaemonCommand = ReactiveCommand.CreateFromTask(() => RunStartAsync(shutdownToken), canStart);
         RetryCommand        = ReactiveCommand.CreateFromTask(service.RestartLoopAsync, canRetry);
 
+        // Independent subscriptions to the SAME canStart/canRetry state predicates the commands
+        // above were built from (service.Status is hot/multicast, so a second subscriber replays
+        // the current value same as the first) — visibility that never disagrees with why a button
+        // is enabled, without inheriting CanExecute's "not currently executing" hide-while-running
+        // behavior. Ctor-scoped for the same reason as the commands themselves.
+        _startVisible = canStart.ToProperty(this, x => x.StartVisible, initialValue: false);
+        _retryVisible = canRetry.ToProperty(this, x => x.RetryVisible, initialValue: false);
+
         this.WhenActivated(disposables => {
             var status    = service.Status.ObserveOn(RxSchedulers.MainThreadScheduler);
             var snapshots = service.Snapshots.ObserveOn(RxSchedulers.MainThreadScheduler);
+            var connected = status.Select(s => s.State == AttachState.Connected);
+            // Pre-scheduled here (not inside AgentRowViewModel) so every row's ActionsEnabled
+            // OAPH only ever observes on the UI thread — StopsInFlight is a plain BehaviorSubject
+            // that AgentActionService pushes to from a background Task.Run, same class of bug the
+            // canStart/canRetry comment above documents.
+            var stopsInFlight = actions.StopsInFlight.ObserveOn(RxSchedulers.MainThreadScheduler);
 
             _daemonName = snapshots.Select(s => s.Daemon.Name)
                 .ToProperty(this, x => x.DaemonName, "")
@@ -111,12 +226,31 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
                 .ToProperty(this, x => x.DaemonVersion, "")
                 .DisposeWith(disposables);
 
+            _versionDisplay = snapshots.Select(s => StripBuildMetadata(s.Daemon.Version))
+                .ToProperty(this, x => x.VersionDisplay, "")
+                .DisposeWith(disposables);
+
             _serverUrl = snapshots.Select(s => s.Daemon.ServerUrl)
                 .ToProperty(this, x => x.ServerUrl, "")
                 .DisposeWith(disposables);
 
             _connectionText = snapshots.Select(s => s.Daemon.Connection)
                 .ToProperty(this, x => x.ConnectionText, "")
+                .DisposeWith(disposables);
+
+            // Seeded with "" so this fires even before the FIRST snapshot ever arrives (a daemon
+            // never previously connected has nothing in Snapshots yet) — ConnectionDisplayFor/
+            // StatusDotFor only read the daemon-connection word once status.State is Connected,
+            // where DaemonClientService's ordering guarantee (snapshot applied before the Connected
+            // transition, see its own comment) means a real value is always already there by then.
+            var daemonConnection = snapshots.Select(s => s.Daemon.Connection).StartWith("");
+
+            _connectionDisplay = status.CombineLatest(daemonConnection, ConnectionDisplayFor)
+                .ToProperty(this, x => x.ConnectionDisplay, "")
+                .DisposeWith(disposables);
+
+            _statusDotBrush = status.CombineLatest(daemonConnection, StatusDotFor)
+                .ToProperty(this, x => x.StatusDotBrush, DotBrush(StatusColors.Unavailable))
                 .DisposeWith(disposables);
 
             _agentCountText = status.CombineLatest(snapshots, (st, snap) => (st, snap))
@@ -137,6 +271,40 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             status.Where(s => s.State == AttachState.Connected)
                 .Subscribe(_ => StartMessage = null)
                 .DisposeWith(disposables);
+
+            _gridEnabled = connected
+                .ToProperty(this, x => x.GridEnabled, initialValue: false)
+                .DisposeWith(disposables);
+
+            // _agentsSource is reused across activations (see its field comment) but SortAndBind
+            // below starts a brand-new pipeline — and DynamicData internal Cache<> — on every
+            // activation, so without this Clear a reactivation's initial replay would INSERT a
+            // second copy of every currently-cached row alongside whatever was left over (frozen,
+            // already-disposed) from the previous activation, since SortAndBind only clears its
+            // target on a reset, not on ordinary Add changes.
+            _agentsSource.Clear();
+
+            // Connect -> Transform to row VMs -> DisposeMany (disposes a row the instant Transform
+            // replaces or removes it — AgentRowViewModel's OAPHs otherwise stay subscribed to the
+            // shared ticker/stopsInFlight forever, since Transform recreates a row on every dto
+            // revision rather than updating one in place) -> ObserveOn BEFORE the operator that
+            // mutates the bound collection (SortAndBind counts as "Bind" here — DynamicData
+            // requires marshaling onto the UI thread before that mutation, not after) ->
+            // SortAndBind (spec §8: CreatedAt asc, Id ordinal tiebreak), targeting the stable
+            // _agentsSource in place rather than the out-param overload that would allocate a
+            // fresh collection every activation. EditDiff removals flow through as Remove changes,
+            // which is how a stopped agent's row disappears (spec §7 — no local removal on stop,
+            // only the next snapshot's absence) and DisposeMany's Remove path is what cleans up
+            // its subscriptions. Disposing this Subscribe() (window deactivation) also disposes
+            // whatever rows are still live at that point — DisposeMany disposes its full current
+            // set on teardown, not just on per-item Remove/Update.
+            service.Agents.Connect()
+                .Transform(dto => new AgentRowViewModel(dto, actions, _ticker, _time, connected, stopsInFlight))
+                .DisposeMany()
+                .ObserveOn(RxSchedulers.MainThreadScheduler)
+                .SortAndBind(_agentsSource, RowComparer)
+                .Subscribe()
+                .DisposeWith(disposables);
         });
     }
 
@@ -145,6 +313,44 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         AttachState.Unreachable => status.Reason,
         _ => null,
     };
+
+    // SEMVER-only: everything from the first '+' is build metadata (e.g. "1.2.3+a1b2c3"), never
+    // meaningful on a compact status line. Null/empty-safe — returns the input unchanged.
+    internal static string StripBuildMetadata(string? version) {
+        if (string.IsNullOrEmpty(version)) return version ?? "";
+        var plus = version.IndexOf('+');
+        return plus < 0 ? version : version[..plus];
+    }
+
+    static string Capitalize(string word) => word.Length == 0 ? word : char.ToUpperInvariant(word[0]) + word[1..];
+
+    // Single word for the merged status line. Local attach State is checked FIRST — the daemon's
+    // own upstream Connection word is only meaningful once State is Connected (see the
+    // daemonConnection seam comment above); an Unreachable/Connecting attach state always wins
+    // regardless of whatever Connection word a stale retained snapshot might carry.
+    internal static string ConnectionDisplayFor(AttachStatus status, string daemonConnection) {
+        if (status.State == AttachState.Connecting) return "Connecting…";
+        if (status.State == AttachState.Unreachable)
+            return status.Reason == IncompatibleReason ? "Incompatible" : "Unreachable";
+
+        var word = Capitalize(daemonConnection);
+        return daemonConnection is "connecting" or "reconnecting" ? word + "…" : word;
+    }
+
+    // Same bucketing as ConnectionDisplayFor, kept as a parallel switch (not derived from the text)
+    // so a future wording tweak there can never silently detune the dot's color.
+    internal static IBrush StatusDotFor(AttachStatus status, string daemonConnection) {
+        if (status.State == AttachState.Connecting) return DotBrush(StatusColors.InProgress);
+        if (status.State == AttachState.Unreachable)
+            return status.Reason == IncompatibleReason ? DotBrush(StatusColors.Disrupted) : DotBrush(StatusColors.Unavailable);
+
+        return daemonConnection switch {
+            "connected" => DotBrush(StatusColors.Connected),
+            "connecting" or "reconnecting" => DotBrush(StatusColors.InProgress),
+            "disconnected" => DotBrush(StatusColors.Disrupted),
+            _ => DotBrush(StatusColors.Unavailable),
+        };
+    }
 
     async Task RunStartAsync(CancellationToken ct) {
         StartMessage = null; // clear on every new attempt

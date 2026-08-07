@@ -5,6 +5,8 @@ using Avalonia.VisualTree;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.App.Views;
+using Capacitor.Cli.Core.LocalIpc;
+using DynamicData;
 using static Capacitor.App.Tests.Unit.FakeDaemonClientService;
 
 namespace Capacitor.App.Tests.Unit;
@@ -15,6 +17,15 @@ namespace Capacitor.App.Tests.Unit;
 /// that the VM's properties hold the right values (MainWindowViewModelTests already covers
 /// that in isolation).
 public class MainWindowSmokeTests {
+    // Real AppNotifier (not RecordingNotifier) — the production notifier is fine here; most of
+    // these tests don't exercise the toast overlay at all (window.Notifier is left unset), and
+    // the one that does (below) needs a real IObservable<string> to subscribe through.
+    static (AgentActionService Actions, IAppNotifier Notifier) NewActions(FakeDaemonClientService service) {
+        var notifier = new AppNotifier();
+        var actions = new AgentActionService(new ScriptedLocalControlOps(), notifier, new RecordingOpener(), service.SnapshotsSubject, CancellationToken.None, NeverConfirm.Confirm);
+        return (actions, notifier);
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task MainWindow_renders_daemon_identity_server_url_and_agent_count() {
@@ -26,7 +37,8 @@ public class MainWindowSmokeTests {
                     connection: "connected", active: 1, max: 5));
                 service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
 
-                var vm = new MainWindowViewModel(service, CancellationToken.None);
+                var (actions, _) = NewActions(service);
+                var vm = new MainWindowViewModel(service, actions, CancellationToken.None);
                 var window = new MainWindow { DataContext = vm };
                 window.Show();
                 // Control.Loaded is POSTED at DispatcherPriority.Loaded (Avalonia defers it, it
@@ -71,7 +83,8 @@ public class MainWindowSmokeTests {
     public async Task Status_transition_from_a_background_thread_does_not_throw_and_converges() {
         var (thrown, startEnabledAfter) = await AvaloniaSession.DispatchAsync(() => {
             var service = new FakeDaemonClientService();
-            var vm = new MainWindowViewModel(service, CancellationToken.None);
+            var (actions, _) = NewActions(service);
+            var vm = new MainWindowViewModel(service, actions, CancellationToken.None);
             var window = new MainWindow { DataContext = vm };
             window.Show();
             Dispatcher.UIThread.RunJobs();
@@ -125,7 +138,8 @@ public class MainWindowSmokeTests {
             service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
 
             var shutdown = new CancellationTokenSource();
-            var vm = new MainWindowViewModel(service, shutdown.Token);
+            var (actions, _) = NewActions(service);
+            var vm = new MainWindowViewModel(service, actions, shutdown.Token);
             var window = new MainWindow { DataContext = vm };
             window.Show();
             Dispatcher.UIThread.RunJobs();
@@ -165,5 +179,148 @@ public class MainWindowSmokeTests {
 
         await Assert.That(thrown).IsNull();
         await Assert.That(completed).IsTrue();
+    }
+
+    /// Spec §8 empty state: "No agents running" renders only while Connected AND the Agents
+    /// cache is empty. Deliberately NOT wrapped in WithImmediateRxScheduler: no agent is ever
+    /// added to service.Agents here, so the real shared ticker inside MainWindowViewModel is
+    /// never subscribed either way — but the real dispatcher is what MainWindowViewModel's own
+    /// production ctor is meant to run under, so this stays close to that path.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Empty_agents_grid_shows_no_agents_running_while_connected() {
+        var (rendered, emptyStateVisible) = await AvaloniaSession.DispatchAsync(() => {
+            var service = new FakeDaemonClientService();
+            service.SnapshotsSubject.OnNext(Snap(connection: "connected"));
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+
+            var (actions, _) = NewActions(service);
+            var vm = new MainWindowViewModel(service, actions, CancellationToken.None);
+            var window = new MainWindow { DataContext = vm };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var emptyState = window.GetVisualDescendants().OfType<TextBlock>()
+                .FirstOrDefault(t => t.Name == "EmptyStateText");
+            var texts = string.Join('\n', window.GetVisualDescendants().OfType<TextBlock>().Select(t => t.Text ?? ""));
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+
+            return (texts, emptyState is { IsVisible: true });
+        });
+
+        await Assert.That(rendered).Contains("No agents running");
+        await Assert.That(emptyStateVisible).IsTrue();
+    }
+
+    /// Fix-round 2: the column-header row (Kind/Vendor/Repo/...) rendered even with zero agents
+    /// and read as noise above "No agents running". Hidden while the Agents collection is empty,
+    /// visible as soon as a row exists — the "Agents" section title and the empty-state line both
+    /// stay either way (spec §8, Converters.cs HeaderRowVisibleConverter doc comment).
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Agents_grid_header_hidden_when_empty_and_visible_once_a_row_exists() {
+        var (headerVisibleEmpty, headerVisibleWithRow) = await AvaloniaSession.DispatchAsync(() => {
+            var service = new FakeDaemonClientService();
+            service.SnapshotsSubject.OnNext(Snap(connection: "connected"));
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+
+            var (actions, _) = NewActions(service);
+            var vm = new MainWindowViewModel(service, actions, CancellationToken.None);
+            var window = new MainWindow { DataContext = vm };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            Grid Header() => window.GetVisualDescendants().OfType<Grid>().First(g => g.Name == "AgentsGridHeader");
+
+            var emptyVisible = Header().IsVisible;
+
+            service.Agents.AddOrUpdate(new AgentStatusDto(
+                "a", "agent", "claude", "/repos/kcap-cli", "Running", null, null, null, DateTime.UtcNow, null));
+            Dispatcher.UIThread.RunJobs();
+            var withRowVisible = Header().IsVisible;
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+
+            return (emptyVisible, withRowVisible);
+        });
+
+        await Assert.That(headerVisibleEmpty).IsFalse();
+        await Assert.That(headerVisibleWithRow).IsTrue();
+    }
+
+    /// StartMessageText/ReasonText must not reserve dead space when there is nothing to say
+    /// (spec: "collapse when empty"): both start out empty (Connecting, no failed attempt yet),
+    /// then Reason appears on Unreachable and StartMessage appears once a start attempt fails.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task StartMessage_and_reason_text_collapse_when_empty_and_appear_once_set() {
+        var (reasonInitially, startMessageInitially, reasonWhileUnreachable, startMessageAfterFailure) =
+            await AvaloniaSession.DispatchAsync(async () => {
+                var service = new FakeDaemonClientService();
+                var (actions, _) = NewActions(service);
+                var vm = new MainWindowViewModel(service, actions, CancellationToken.None);
+                var window = new MainWindow { DataContext = vm };
+                window.Show();
+                Dispatcher.UIThread.RunJobs();
+
+                TextBlock Find(string name) =>
+                    window.GetVisualDescendants().OfType<TextBlock>().First(t => t.Name == name);
+
+                var reasonInit = Find("ReasonText").IsVisible;
+                var startMessageInit = Find("StartMessageText").IsVisible;
+
+                service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
+                Dispatcher.UIThread.RunJobs();
+                var reasonUnreachable = Find("ReasonText").IsVisible;
+
+                service.StartBehavior = _ => Task.FromResult(new StartDaemonResult(false, "boom: could not bind socket"));
+                await vm.StartDaemonCommand.Execute().ToTask();
+                Dispatcher.UIThread.RunJobs();
+                var startMessageAfter = Find("StartMessageText").IsVisible;
+
+                window.Close();
+                Dispatcher.UIThread.RunJobs();
+
+                return (reasonInit, startMessageInit, reasonUnreachable, startMessageAfter);
+            });
+
+        await Assert.That(reasonInitially).IsFalse();
+        await Assert.That(startMessageInitially).IsFalse();
+        await Assert.That(reasonWhileUnreachable).IsTrue();
+        await Assert.That(startMessageAfterFailure).IsTrue();
+    }
+
+    // ---- Toast overlay (spec §11: WindowNotificationManager replaces the inline banner) ----
+    //
+    // Proves the real production wiring end to end: MainWindow.Notifier assigned exactly as
+    // App.BuildAndShowMainWindow does, a WindowNotificationManager actually constructible and
+    // installable under the headless session, and the fired message rendered as visible text.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Toast_renders_the_notifier_message() {
+        var rendered = await AvaloniaSession.DispatchAsync(() => {
+            var service = new FakeDaemonClientService();
+            var (actions, notifier) = NewActions(service);
+            var vm = new MainWindowViewModel(service, actions, CancellationToken.None);
+            var window = new MainWindow { DataContext = vm, Notifier = notifier };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            notifier.Notify("Couldn't stop agent-a");
+            Dispatcher.UIThread.RunJobs();
+
+            var texts = string.Join('\n', window.GetVisualDescendants().OfType<TextBlock>().Select(t => t.Text ?? ""));
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+
+            return texts;
+        });
+
+        await Assert.That(rendered).Contains("Kurrent Capacitor");
+        await Assert.That(rendered).Contains("Couldn't stop agent-a");
     }
 }
