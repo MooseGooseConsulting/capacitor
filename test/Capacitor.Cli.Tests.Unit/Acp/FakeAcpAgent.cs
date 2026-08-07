@@ -210,6 +210,12 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
     /// a test can crash it there.</summary>
     public TaskCompletionSource? HoldInitializeResponse { get; set; }
 
+    /// <summary>When set, the <c>session/new</c> RESPONSE is held until the gate completes (the
+    /// request is still recorded immediately) — mirrors <see cref="HoldInitializeResponse"/> exactly.
+    /// Added for Task 13's per-stage ACP launch handshake cap: lets a test wedge or slow-but-complete
+    /// the "session_created" stage independently of "initialized"/"model_set".</summary>
+    public TaskCompletionSource? HoldSessionNewResponse { get; set; }
+
     /// <summary>Scripts the <c>session/update</c> notifications replayed by the NEXT (and every
     /// later) <c>session/load</c>, in order, before the response — models the coalesced history
     /// replay both capable vendors produce.</summary>
@@ -433,6 +439,9 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
                 break;
 
             case "session/new":
+                if (HoldSessionNewResponse is { } sessionNewGate)
+                    await sessionNewGate.Task.ConfigureAwait(false);
+
                 await WriteResponseAsync(id, _sessionNewResult, ct).ConfigureAwait(false);
                 break;
 
@@ -875,7 +884,10 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
         await WriteLineAsync(Encoding.UTF8.GetString(stream.ToArray()), ct).ConfigureAwait(false);
     }
 
-    async Task WriteRawFrameAsync(JsonElement frame, CancellationToken ct) =>
+    /// <summary>Sends a raw frame (e.g. an unsolicited <c>session/update</c> notification) directly,
+    /// bypassing every scripted dispatch path — <c>internal</c> (not <c>private</c>) so a test can
+    /// drive a notification with no accompanying turn/prompt at all.</summary>
+    internal async Task WriteRawFrameAsync(JsonElement frame, CancellationToken ct) =>
         await WriteLineAsync(frame.GetRawText(), ct).ConfigureAwait(false);
 
     async Task WriteLineAsync(string json, CancellationToken ct) {

@@ -211,7 +211,10 @@ internal sealed partial class LocalPermissionBridge(
     /// </summary>
     public string RegisterReviewerToken(
             IReadOnlyList<string> allowlistServers,
-            BorrowedReviewContextGeneration? reviewContext = null) {
+            BorrowedReviewContextGeneration? reviewContext = null,
+            // The launch's activity clock, so a tool-call hit on this token advances it. Optional and
+            // trailing so pre-existing call sites keep compiling; production always supplies one.
+            AgentActivityClock? activityClock = null) {
         if (_listener is null || _sharedToken is null)
             throw new InvalidOperationException("LocalPermissionBridge not started");
 
@@ -221,7 +224,7 @@ internal sealed partial class LocalPermissionBridge(
                 token = NewToken();   // CSPRNG collisions are negligible; never silently reuse one
 
             _listener.Prefixes.Add($"http://127.0.0.1:{_port}/{token}/");
-            _reviewerTokens[token] = new ReviewerGrant([.. allowlistServers], reviewContext);
+            _reviewerTokens[token] = new ReviewerGrant([.. allowlistServers], reviewContext, activityClock);
 
             return $"http://127.0.0.1:{_port}/{token}";
         }
@@ -431,6 +434,10 @@ internal sealed partial class LocalPermissionBridge(
             PermissionDecision decision;
 
             if (isReviewer) {
+                // Advance BEFORE the tool-name check and any allow/deny decision below: a malformed
+                // request from a live reviewer is still evidence the process is alive.
+                reviewerGrant!.ActivityClock?.Advance();
+
                 // Unattended participant: a well-formed tool name is required to classify.
                 if (string.IsNullOrWhiteSpace(toolName)) {
                     context.Response.StatusCode = 400;
@@ -572,7 +579,8 @@ internal sealed partial class LocalPermissionBridge(
 
     sealed record ReviewerGrant(
         string[] AllowlistServers,
-        BorrowedReviewContextGeneration? ReviewContext);
+        BorrowedReviewContextGeneration? ReviewContext,
+        AgentActivityClock? ActivityClock = null);
 
     static string BuildHookResponseJson(PermissionDecision decision, string vendor) =>
         vendor switch {

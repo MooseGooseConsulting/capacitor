@@ -37,6 +37,12 @@ internal record AgentInstance(
     public bool                 HasReceivedOutput { get; set; }
     public TerminalOutputBuffer OutputBuffer      { get; } = new();
 
+    /// <summary>This agent's monotonic activity clock. One instance per launch — a relaunch gets a
+    /// fresh one, never inheriting the predecessor's idle window. Defaults to a real-time instance so
+    /// existing test constructions keep compiling; a production launch builds it explicitly, before
+    /// this record exists, so the ACP runtime and the permission bridge share the same instance.</summary>
+    public AgentActivityClock ActivityClock { get; init; } = new(TimeProvider.System);
+
     /// <summary>Phase B (D2): the launch kind + (for a ReviewFlow launch) the flow identity,
     /// captured from <see cref="LaunchAgentCommand"/> at construction. Reported in
     /// <c>LiveAgents</c>/<c>DaemonStatusReport</c> so a restarted server can associate a surviving
@@ -44,6 +50,16 @@ internal record AgentInstance(
     public LaunchKind           Kind              { get; init; } = LaunchKind.Default;
     public string?              FlowRunId         { get; init; }
     public string?              FlowRole          { get; init; }
+
+    /// <summary>The server-sent per-run inactivity bound
+    /// (<see cref="LaunchAgentCommand.InactivityBoundSeconds"/>), captured verbatim at launch. Null
+    /// for a non-review-flow launch, a local spawn, and a launch from a server predating this field.
+    ///
+    /// <para><b>Nothing on the daemon enforces this</b> — it is round-scoped and this daemon is
+    /// round-agnostic. Stored only because it is a live wire field; removing it would be a wire
+    /// change. <see cref="AgentOrchestrator.FindReviewersToReap"/> deliberately never reads it — see
+    /// that method for the regression that rule prevents. Do not reintroduce a reap keyed on it.</para></summary>
+    public int?                 InactivityBoundSeconds { get; init; }
 
     /// <summary>Who asked for this launch (server-stamped requester user id). Null for old
     /// servers and local spawns — the supervision payload renders null as unknown.</summary>
@@ -626,21 +642,58 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// fixed time. Production uses the real UTC clock.</summary>
     internal Func<DateTime> ClockUtc { get; set; } = () => DateTime.UtcNow;
 
-    /// <summary>Phase B (D3): the ReviewFlow agents the heartbeat should reap now — past
-    /// <see cref="DaemonConfig.ReviewerMaxLifetime"/> (reason <c>reviewer_ttl_expired</c>) or
-    /// <see cref="DaemonConfig.ReviewerIdleTimeout"/> (reason <c>reviewer_idle_expired</c>). Only
-    /// Running ReviewFlow agents; a <see cref="TimeSpan.Zero"/> bound disables it; interactive agents
-    /// are never returned. Pure (no side effects) so the heartbeat and tests share one decision.</summary>
+    /// <summary>The ReviewFlow agents the heartbeat should reap now — the daemon's coarse backstop for
+    /// a dead or disconnected server. Only Running ReviewFlow agents; pure, so the heartbeat and tests
+    /// share one decision.
+    ///
+    /// <para><b>Decision table</b>, in this order. A <see cref="TimeSpan.Zero"/> config value disables
+    /// its own rule:
+    /// <list type="number">
+    /// <item><see cref="DaemonConfig.ReviewerMaxLifetime"/> (6h) vs <c>AgeMs</c> ⇒
+    ///   <c>reviewer_ttl_expired</c>. Absolute, checked first — it holds regardless of activity or a
+    ///   held turn.</item>
+    /// <item>a HELD TURN suppresses the idle rule (a long tool run is legitimate) UNLESS
+    ///   <c>IdleForMs</c> passes <see cref="DaemonConfig.ReviewerTurnWedgeCeiling"/> ⇒
+    ///   <c>turn_wedged</c>. Any mid-turn envelope calls <c>Advance()</c> and re-arms it, so only a
+    ///   genuinely frozen turn is wedge-reaped.</item>
+    /// <item><see cref="DaemonConfig.ReviewerIdleTimeout"/> (2h) vs <c>IdleForMs</c> ⇒
+    ///   <c>reviewer_idle_expired</c>.</item>
+    /// </list></para>
+    ///
+    /// <para><b>The server's <see cref="AgentInstance.InactivityBoundSeconds"/> must never appear in
+    /// that table.</b> It is ROUND-SCOPED — the server applies it only while a round is in flight, and
+    /// stops the participant itself. This method runs on the heartbeat regardless of round state, so
+    /// reading the bound here turns it into a LIFETIME idle rule and reaps a healthy reviewer BETWEEN
+    /// rounds while the driver spends twenty minutes fixing round 1's findings. This supersedes spec
+    /// decision 6 ("daemon and server enforce one number") for the daemon's idle rule only.</para>
+    ///
+    /// <para>Idle comes from <see cref="AgentActivityClock"/>, never <see cref="AgentInstance.LastOutputAt"/>
+    /// (PTY-only, so it sits frozen at launch for every ACP vendor, degenerating "2h idle" into a hard
+    /// 2h cap) and never a <see cref="DateTime"/> delta (a wall-clock jump would reap a healthy
+    /// reviewer).</para></summary>
     internal IReadOnlyList<(string Id, string Reason)> FindReviewersToReap() {
-        var now    = ClockUtc();
         var result = new List<(string, string)>();
 
         foreach (var a in _agents.Values) {
             if (a.Kind != LaunchKind.ReviewFlow || a.Status != "Running") continue;
 
-            if (_config.ReviewerMaxLifetime > TimeSpan.Zero && now - a.CreatedAt > _config.ReviewerMaxLifetime)
+            var clock = a.ActivityClock;
+
+            if (_config.ReviewerMaxLifetime > TimeSpan.Zero && clock.AgeMs > (ulong) _config.ReviewerMaxLifetime.TotalMilliseconds) {
                 result.Add((a.Id, "reviewer_ttl_expired"));
-            else if (_config.ReviewerIdleTimeout > TimeSpan.Zero && now - a.LastOutputAt > _config.ReviewerIdleTimeout)
+                continue;
+            }
+
+            if (clock.TurnInFlight) {
+                if (_config.ReviewerTurnWedgeCeiling > TimeSpan.Zero
+                 && clock.IdleForMs > (ulong) _config.ReviewerTurnWedgeCeiling.TotalMilliseconds) {
+                    result.Add((a.Id, "turn_wedged"));
+                }
+
+                continue; // a held turn suppresses the plain idle rule outright
+            }
+
+            if (_config.ReviewerIdleTimeout > TimeSpan.Zero && clock.IdleForMs > (ulong) _config.ReviewerIdleTimeout.TotalMilliseconds)
                 result.Add((a.Id, "reviewer_idle_expired"));
         }
 
@@ -989,6 +1042,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         catch (Exception ex) { _logger.LogDebug(ex, "DaemonStatusReport send failed — ignoring"); }
     }
 
+    /// <summary>The out-of-cycle report fired on a launch-stage transition, wired in
+    /// <see cref="CreateActivityClock"/>. Shares <see cref="SendDaemonStatusReportOnceAsync"/>'s
+    /// swallow-on-failure behavior — a failed send must never fail a launch. Returns the Task so a
+    /// test can await it; the clock callback fires it fire-and-forget.</summary>
+    internal Task SendStatusReportNowAsync() => SendDaemonStatusReportOnceAsync();
+
     async Task RunDaemonStatusReportLoopAsync(CancellationToken ct) {
         using var timer = new PeriodicTimer(TimeSpan.FromSeconds(60));
         while (await timer.WaitForNextTickAsync(ct)) {
@@ -1000,11 +1059,88 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     /// <summary>Phase B (D2): one <see cref="LiveAgentInfo"/> per currently-live (Starting or
     /// Running), non-private agent, carrying its kind + flow identity. Mirrors the
-    /// <see cref="ServerConnection.GetLiveAgentIds"/> filter (private-local agents excluded).</summary>
-    internal IReadOnlyList<LiveAgentInfo> BuildLiveAgents() =>
-        [.. _agents.Values
+    /// <see cref="ServerConnection.GetLiveAgentIds"/> filter (private-local agents excluded).
+    ///
+    /// <para>Also carries the agent's activity attestation (spec §0/§2).
+    /// <c>ActivitySeq</c>/<c>IdleForMs</c>/<c>TurnInFlight</c> go unconditionally; <c>LaunchStage</c>
+    /// ONLY while <c>Status == "Starting"</c> — the clock also clears its own stage, but this gate is
+    /// the contractual guarantee rather than an accident of when that runs.</para>
+    ///
+    /// <para>ALSO reports every in-flight launch not yet published (<see cref="TrackPendingLaunch"/>).
+    /// Without that arm the stage-evidence lane is INERT: the ACP handshake runs entirely inside
+    /// <c>runtimeFactory.StartAsync</c>, which returns before the <c>AgentInstance</c> exists, so a
+    /// stage-triggered report would describe an <c>_agents</c> map that never contained the agent
+    /// being staged.</para>
+    ///
+    /// <para>A pending entry is emitted only when <c>_agents</c> does not already hold its id, checked
+    /// AFTER the published entries are materialized. That ordering makes a racing publish cost at most
+    /// a one-cycle OMISSION (benign — no server consumer infers absence from an omission) rather than
+    /// a DUPLICATE id, which would double-count against the server's capacity tally.</para></summary>
+    internal IReadOnlyList<LiveAgentInfo> BuildLiveAgents() {
+        var live = _agents.Values
             .Where(a => a.Status is "Starting" or "Running" && !a.IsPrivate)
-            .Select(a => new LiveAgentInfo(a.Id, a.Kind.ToString(), a.CreatedAt, a.FlowRunId, a.FlowRole))];
+            .Select(a => new LiveAgentInfo(
+                a.Id, a.Kind.ToString(), a.CreatedAt, a.FlowRunId, a.FlowRole,
+                ActivitySeq:  a.ActivityClock.ActivitySeq,
+                IdleForMs:    a.ActivityClock.IdleForMs,
+                TurnInFlight: a.ActivityClock.TurnInFlight,
+                LaunchStage:  a.Status == "Starting" ? a.ActivityClock.LaunchStage : null))
+            .ToList();
+
+        foreach (var p in _pendingLaunches.Values) {
+            if (_agents.ContainsKey(p.Id)) continue; // published — the real entry above is authoritative
+
+            live.Add(new LiveAgentInfo(
+                p.Id, p.Kind.ToString(), p.CreatedAt, p.FlowRunId, p.FlowRole,
+                ActivitySeq:  p.ActivityClock.ActivitySeq,
+                IdleForMs:    p.ActivityClock.IdleForMs,
+                TurnInFlight: p.ActivityClock.TurnInFlight,
+                // A pending launch IS "Starting" by definition — there is no other status it can hold —
+                // so the Status gate above is satisfied unconditionally here.
+                LaunchStage:  p.ActivityClock.LaunchStage));
+        }
+
+        return live;
+    }
+
+    /// <summary>An in-flight launch: the runtime is starting (for an ACP vendor, the whole handshake)
+    /// but no <see cref="AgentInstance"/> exists yet. Carries the SAME <see cref="AgentActivityClock"/>
+    /// instance the eventual <c>AgentInstance</c> will own, so a stage stamped during the handshake is
+    /// readable through this record the instant it is stamped.</summary>
+    internal sealed record PendingLaunch(
+        string             Id,
+        LaunchKind         Kind,
+        DateTime           CreatedAt,
+        string?            FlowRunId,
+        string?            FlowRole,
+        AgentActivityClock ActivityClock);
+
+    readonly ConcurrentDictionary<string, PendingLaunch> _pendingLaunches = new(StringComparer.Ordinal);
+
+    /// <summary>Registers an in-flight launch so <see cref="BuildLiveAgents"/> can describe it during
+    /// the handshake, returning a scope that removes it again. <c>using</c>-scoped rather than a
+    /// hand-written call per exit — that is what makes no-leak structural across success, coded
+    /// failure, cleanup-and-return and a thrown handshake. Removal after <see cref="PublishAgent"/>
+    /// leaves no window: <see cref="BuildLiveAgents"/> suppresses a pending entry already in
+    /// <c>_agents</c>.</summary>
+    internal IDisposable TrackPendingLaunch(
+            string agentId, LaunchKind kind, string? flowRunId, string? flowRole, AgentActivityClock clock) {
+        _pendingLaunches[agentId] = new PendingLaunch(agentId, kind, DateTime.UtcNow, flowRunId, flowRole, clock);
+
+        return new PendingLaunchScope(this, agentId);
+    }
+
+    sealed class PendingLaunchScope(AgentOrchestrator owner, string agentId) : IDisposable {
+        public void Dispose() => owner._pendingLaunches.TryRemove(agentId, out _);
+    }
+
+    /// <summary>One activity clock per launch, wired so a genuine
+    /// <see cref="AgentActivityClock.SetLaunchStage"/> transition fires
+    /// <see cref="SendStatusReportNowAsync"/>. EVERY launch path must route through here — a path that
+    /// builds its own clock silently loses the stage-report wiring. Shared with
+    /// <see cref="SeedAgentForTest"/> so tests exercise the same wiring, never a test-only hookup.</summary>
+    AgentActivityClock CreateActivityClock() =>
+        new(TimeProvider.System) { OnLaunchStageChanged = () => _ = SendStatusReportNowAsync() };
 
     /// <summary>Phase B: test-only seam — insert a minimal <see cref="AgentInstance"/> (Noop
     /// PTY runtime, no real process/worktree) so unit tests can exercise <see cref="BuildLiveAgents"/>
@@ -1014,7 +1150,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             string? flowRunId = null, string? flowRole = null,
             DateTime? createdAt = null, DateTime? lastOutputAt = null, bool isPrivate = false,
             IPtyProcess? pty = null, string? startIdentity = null, string? requester = null,
-            string? model = "default") {
+            string? model = "default", int? inactivityBoundSeconds = null,
+            // Task 12 (unified reviewer reaping): a test that needs to control the agent's monotonic
+            // age/idle (rather than the wall-clock CreatedAt/LastOutputAt above, which the new
+            // FindReviewersToReap no longer reads) constructs its own AgentActivityClock over a
+            // FakeTimeProvider and passes it here — the SAME wiring CreateActivityClock() gives a
+            // real launch, just with a controllable time source.
+            AgentActivityClock? activityClock = null) {
         var agent = new AgentInstance(
             id, null, model, null, "/repo", "codex",
             new PtyHostedAgentRuntime("codex", pty ?? NoopPtyProcess.Instance),
@@ -1022,7 +1164,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             new CancellationTokenSource()) {
             Kind = kind, FlowRunId = flowRunId, FlowRole = flowRole, IsPrivate = isPrivate,
             CreatedAt = createdAt ?? DateTime.UtcNow, StartIdentity = startIdentity,
-            RequesterUserId = requester
+            RequesterUserId = requester,
+            InactivityBoundSeconds = inactivityBoundSeconds,
+            ActivityClock = activityClock ?? CreateActivityClock()
         };
         agent.Status = status;
         if (lastOutputAt is { } lo) agent.LastOutputAt = lo;
@@ -1289,6 +1433,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // method scope so the failure catch can revoke it when no AgentInstance was created to carry it.
         string? reviewerToken = null;
 
+        // Created here, ahead of the reviewer-token mint and the AgentInstance that will own it, so the
+        // SAME instance reaches the permission-bridge grant, the ACP runtime and the AgentInstance —
+        // one clock per launch, never three.
+        var activityClock = CreateActivityClock();
+
         try {
             if (EffectiveCount >= _config.MaxConcurrentAgents) {
                 await _server.LaunchFailedAsync(agentId, $"At max capacity ({_config.MaxConcurrentAgents} agents)");
@@ -1436,7 +1585,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                           "borrowed_snapshot_review_context_missing")
                     : null;
                 var reviewerUrl = _permissionBridge.RegisterReviewerToken(
-                    reviewerServers, reviewGeneration);
+                    reviewerServers, reviewGeneration, activityClock);
                 reviewerToken = reviewerUrl; // the URL doubles as the revoke handle
                 if (codexReviewer) {
                     daemonBridgeUrl = reviewerUrl;
@@ -1476,7 +1625,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 DaemonEpoch: _daemonEpoch,
                 IsBorrowedSnapshot: snapshotBorrow,
                 ReviewContextCapabilityUrl: reviewContextCapabilityUrl,
-                CodexPosture: cmd.CodexPosture
+                CodexPosture: cmd.CodexPosture,
+                // Handed to the factory so it can wire the clock onto the runtime BEFORE StartAsync —
+                // assigning it after that call returns silently defeats every handshake stage stamp.
+                ActivityClock: activityClock
             );
 
             HostedRuntimeStart start;
@@ -1485,6 +1637,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // (DetectSessionIdAsync) can filter the shared project/rollout dir to files
             // written by THIS agent's process, not the user's earlier sessions.
             var spawnedAtUtc = DateTime.UtcNow;
+
+            // Make this launch describable for the duration of the handshake below: the AgentInstance
+            // does not exist until StartAsync returns, so without this the out-of-cycle report each
+            // SetLaunchStage fires would omit the very agent it is reporting a stage for.
+            using var pendingLaunch = TrackPendingLaunch(
+                agentId, cmd.Kind, cmd.FlowRunId, cmd.FlowRole, activityClock);
 
             try {
                 start = await runtimeFactory.StartAsync(runtimeCtx, _shutdownCts.Token);
@@ -1518,6 +1676,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             mcpConfigPath = start.McpConfigPath;
             var runtime = start.Runtime;
+
+            // No clock assignment here, deliberately: the ACP factory already wired the SAME instance
+            // onto the runtime before the handshake ran. Assigning it post-hoc at this point would
+            // leave it null for the whole handshake and defeat every stage stamp.
 
             LogAgentSpawned(agentId, runtime.Pid, worktree.Path, runtimeFactory.Vendor);
 
@@ -1558,6 +1720,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             var registeredModel = start.Transcript is { } confirmed ? confirmed.ResolvedModel : effectiveModel;
 
             var agent = new AgentInstance(agentId, prompt, registeredModel, effort, repoPath, cmd.Vendor, runtime, worktree, cts) {
+                ActivityClock       = activityClock,
                 McpConfigPath       = mcpConfigPath,
                 CurrentCols         = HostedPtyCols,
                 CurrentRows         = HostedPtyRows,
@@ -1569,7 +1732,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 Kind                = cmd.Kind,       // Phase B (D2): flow identity + kind for LiveAgents/status report
                 FlowRunId           = cmd.FlowRunId,
                 FlowRole            = cmd.FlowRole,
-                RequesterUserId     = cmd.RequesterUserId
+                RequesterUserId     = cmd.RequesterUserId,
+                InactivityBoundSeconds = cmd.InactivityBoundSeconds
             };
             PublishAgent(agent);
 
@@ -1593,6 +1757,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 SetAgentStatus(agent, "Running");
                 agent.HasReceivedOutput = true;
                 if (!agent.IsPrivate) _ = _server.AgentStatusChangedAsync(agent.Id, "Running", agent.SessionId);
+
+                // LaunchStage is Starting-only; cleared at the exact instant this agent leaves it.
+                agent.ActivityClock.ClearLaunchStage();
             }
 
             // Bind + start live transcript forwarding for any runtime that exposes an ACP
@@ -1853,6 +2020,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             await foreach (var data in agent.Runtime.ReadOutputAsync(agent.ReadCts.Token)) {
                 agent.LastOutputAt      = DateTime.UtcNow;
                 agent.HasReceivedOutput = true;
+                // PTY output IS the activity signal for a PTY-hosted agent — no turn gate applies.
+                agent.ActivityClock.Advance();
 
                 if (agent.Status == "Starting") {
                     SetAgentStatus(agent, "Running");
@@ -3030,9 +3199,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             foreach (var (id, reason) in FindReviewersToReap()) {
                 if (_agents.TryGetValue(id, out var reviewer)) {
+                    // Logged off the SAME clock the decision was made from — CreatedAt/LastOutputAt
+                    // would misreport an ACP reviewer's idle time as frozen since launch.
                     _logger.LogInformation(
                         "Reaping review-flow reviewer {AgentId} ({Reason}); age {AgeHours:F1}h, idle {IdleHours:F1}h",
-                        id, reason, (ClockUtc() - reviewer.CreatedAt).TotalHours, (ClockUtc() - reviewer.LastOutputAt).TotalHours);
+                        id, reason,
+                        TimeSpan.FromMilliseconds(reviewer.ActivityClock.AgeMs).TotalHours,
+                        TimeSpan.FromMilliseconds(reviewer.ActivityClock.IdleForMs).TotalHours);
                     reviewer.PendingEndReason = reason;
                     _ = HandleStopAgent(id);
                 }

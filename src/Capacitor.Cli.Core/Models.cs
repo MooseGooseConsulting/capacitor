@@ -1326,7 +1326,19 @@ public readonly record struct LaunchAgentCommand(
         // fields above — old daemons ignore them, old servers never set them (null ⇒ unknown ⇒
         // the consent engine falls through rules to the configured default).
         string?           RequesterUserId       = null,
-        bool?             RequesterIsOwner      = null
+        bool?             RequesterIsOwner      = null,
+        // The review-flow inactivity bound in seconds (liveness-supervision spec §3). Received and
+        // stored ONLY so the daemon's wire contract matches the server's; the SERVER owns enforcement,
+        // per round, via its own participant activity monitor.
+        //
+        // The daemon must NEVER use this as a reap threshold. It is round-scoped, while the daemon's
+        // AgentOrchestrator.FindReviewersToReap is round-agnostic, so applying it there reaps healthy
+        // reviewers BETWEEN rounds. The daemon's actual rule is the coarse legacy backstop in that
+        // method (TTL / turn-wedge / idle), which never reads this field.
+        //
+        // Null for every non-review-flow launch and for a launch predating this field; an old daemon
+        // ignores it.
+        int?              InactivityBoundSeconds = null
     );
 
 /// <summary>Caller-selected Codex launch posture. Valid ONLY for interactive, daemon-owned-worktree
@@ -1430,13 +1442,28 @@ public enum LaunchKind {
 /// is the <see cref="LaunchKind"/> name; <see cref="FlowRunId"/>/<see cref="FlowRole"/> are set only
 /// for a ReviewFlow launch. Carried additively on <see cref="DaemonConnect.LiveAgents"/> and in
 /// <see cref="DaemonStatusReport"/> so the server can associate a surviving unassigned reviewer with
-/// its role instead of a blind grace period. All-optional trailing fields keep it wire-compatible.</summary>
+/// its role instead of a blind grace period. All-optional trailing fields keep it wire-compatible.
+///
+/// <para>Liveness-supervision spec §0/§2: <see cref="ActivitySeq"/>/<see cref="IdleForMs"/>/
+/// <see cref="TurnInFlight"/>/<see cref="LaunchStage"/> are this agent's daemon-local activity
+/// attestation, read from its <c>AgentActivityClock</c> (see <c>AgentOrchestrator.BuildLiveAgents</c>).
+/// Presence of ALL THREE steady-state fields (<see cref="ActivitySeq"/> + <see cref="IdleForMs"/> +
+/// <see cref="TurnInFlight"/>) is the server's capability signal for the WHOLE entry, latched as a
+/// group — any one missing (an old daemon) makes the server treat the entry as legacy, never
+/// half-interpreted. <see cref="LaunchStage"/> is deliberately NOT part of that group: it is set only
+/// while the agent is <c>Starting</c> and its absence once <c>Running</c> must never look like a lost
+/// capability. All four are trailing/nullable/default-null, so an old server ignores them and a
+/// pre-liveness daemon never sets them.</para></summary>
 public readonly record struct LiveAgentInfo(
         string         Id,
         string         Kind,
         DateTimeOffset CreatedAt,
-        string?        FlowRunId = null,
-        string?        FlowRole  = null
+        string?        FlowRunId    = null,
+        string?        FlowRole     = null,
+        ulong?         ActivitySeq  = null,
+        ulong?         IdleForMs    = null,
+        bool?          TurnInFlight = null,
+        string?        LaunchStage  = null
     );
 
 /// <summary>Phase B (D4 §6.4(2a)): an agent whose death could NOT be confirmed (record-write

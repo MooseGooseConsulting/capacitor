@@ -130,6 +130,45 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
         return tcs;
     }
 
+    /// <summary>Liveness-supervision spec §0/§1: the per-agent activity clock, assigned by
+    /// <see cref="AgentOrchestrator"/> right after this runtime is obtained — before any envelope or
+    /// turn activity can occur, and before the owning <c>AgentInstance</c> even exists. Null for every
+    /// construction that bypasses that launch path (unit tests, the resume-candidate constructor
+    /// paths that build a runtime directly) — every call site below is a no-op guard, never a throw,
+    /// so a test that doesn't care about liveness keeps passing unchanged.</summary>
+    internal AgentActivityClock? ActivityClock { get; set; }
+
+    /// <summary>
+    /// Liveness-supervision spec (Task 13): the fixed per-stage cap for the ACP launch handshake
+    /// (<c>initialize</c> → <c>session/new</c> → model selection). A deliberate FIXED wall-clock
+    /// bound, not an evidence-based one — the design's one considered exception to that thesis: each
+    /// stage is a single RPC with empirically sub-second-to-seconds latency, there is no
+    /// finer-grained progress signal inside one, and 90s is roughly an order of magnitude above
+    /// observed worst cases. Before this, <c>StartAsync</c> had NO launch-level timeout at all — a
+    /// wedged handshake hung forever, invisible to both the startup reaper (never reaches
+    /// <c>PublishAgent</c>) and the reviewer reaper (never reaches "Running").
+    /// </summary>
+    internal static readonly TimeSpan AcpLaunchStageTimeout = TimeSpan.FromSeconds(90);
+
+    /// <summary>
+    /// Thrown when a single handshake stage's <see cref="AcpLaunchStageTimeout"/> expires. Rethrown
+    /// VERBATIM by <see cref="StartAsync"/>'s outer catch (exactly like <see cref="AcpProtocolVersionException"/>)
+    /// so the coded <c>acp_launch_stage_timeout:{stage}</c> reason reaches the factory/orchestrator's
+    /// LaunchFailed path undecorated by the generic auth-hint wrapper — an operator (or the server's
+    /// failure classification) needs the exact stage name.
+    ///
+    /// <para>The message describes what was ATTEMPTED, not what is assumed to have happened:
+    /// termination is best-effort in <see cref="RunHandshakeStageAsync"/> and can fail, so claiming
+    /// the child "was terminated" would misdirect an incident responder away from an orphan that is
+    /// still running.</para>
+    /// </summary>
+    internal sealed class AcpLaunchStageTimeoutException(string stage, TimeSpan cap) : InvalidOperationException(
+        $"acp_launch_stage_timeout:{stage}: the ACP handshake did not reach '{stage}' within "
+      + $"{cap.TotalSeconds:0}s. Termination of the child process was requested (best-effort — a "
+      + "failure to terminate is logged, so the process may still be running).") {
+        public string Stage { get; } = stage;
+    }
+
     readonly ILogger       _logger;
     readonly TimeProvider  _timeProvider;
     readonly string        _agentId;
@@ -671,6 +710,14 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
         _installed.LoopTask = RunIncarnationLoopAsync(_installed);
         _turnWorkerTask     = RunTurnWorkerAsync(_cts.Token);
 
+        // Liveness-supervision spec §0/§1 (Task 13): the child process already exists by the time
+        // this method runs — the factory spawns it and constructs this runtime before ever calling
+        // StartAsync — so "spawned" is stamped immediately, with no cap of its own: there is nothing
+        // left to bound (the OS spawn already completed synchronously) and no timeout on it could
+        // ever have anything to kill. Each of the three REAL awaited stages below gets its own
+        // independent RunHandshakeStageAsync cap.
+        ActivityClock?.SetLaunchStage("spawned");
+
         JsonElement sessionNewResult;
 
         try {
@@ -689,7 +736,9 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
                         Elicitation: new ElicitationCapabilities(Form: new ElicitationFormCapabilities()))),
                 CapacitorJsonContext.Default.InitializeParams);
 
-            var initializeResultElement = await connection.RequestAsync("initialize", initializeParams, ct).ConfigureAwait(false);
+            var initializeResultElement = await RunHandshakeStageAsync(
+                    "initialized", stageCt => connection.RequestAsync("initialize", initializeParams, stageCt), ct)
+                .ConfigureAwait(false);
 
             // Defensive: a malformed initialize response (wrong-typed protocolVersion, etc.) must not
             // surface as a raw JsonException. We distinguish a parse failure from a real version
@@ -724,7 +773,9 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
                 new SessionNewParams(Cwd: cwd, McpServers: mcpServers?.ToArray() ?? NoMcpServers),
                 CapacitorJsonContext.Default.SessionNewParams);
 
-            sessionNewResult = await connection.RequestAsync("session/new", sessionNewParams, ct).ConfigureAwait(false);
+            sessionNewResult = await RunHandshakeStageAsync(
+                    "session_created", stageCt => connection.RequestAsync("session/new", sessionNewParams, stageCt), ct)
+                .ConfigureAwait(false);
 
             if (!sessionNewResult.TryGetProperty("sessionId", out var sessionIdElement) || sessionIdElement.GetString() is not { Length: > 0 } sessionId)
                 throw new InvalidOperationException("ACP session/new response did not contain a sessionId.");
@@ -736,6 +787,11 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
         } catch (AcpProtocolVersionException) {
             // Already actionable and NOT an auth issue — rethrow verbatim, without the auth hint.
             // Failure already recorded above, at the point the version mismatch was detected.
+            throw;
+        } catch (AcpLaunchStageTimeoutException) {
+            // Already actionable and NOT an auth issue — rethrow verbatim so the coded
+            // acp_launch_stage_timeout:{stage} reason reaches the caller undecorated, exactly like
+            // AcpProtocolVersionException above.
             throw;
         } catch (Exception ex) when (ex is not OperationCanceledException) {
             AcpMetrics.RecordFailure("handshake");
@@ -755,8 +811,14 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
         // Select the requested model (if any) BEFORE the first prompt fires. Awaited, but never
         // fatal for a resolution failure — see IAcpModelSelector's cancellation-contract remarks
         // for why a canceled ct is the one exception to that (it propagates, aborting StartAsync).
-        _resolvedModel = await _modelSelector
-            .TrySelectAsync(connection, _sessionId!, sessionNewResult, requestedModel, _logger, ct)
+        // Liveness-supervision spec (Task 13): also capped and stage-stamped like the two RPCs
+        // above — a selector with no model to apply returns near-instantly (TrySelectAsync's
+        // no-request-or-no-match paths never touch the wire), so this stage only ever actually
+        // WAITS when a model was requested and the vendor's selector RPC hangs.
+        _resolvedModel = await RunHandshakeStageAsync(
+                "model_set",
+                stageCt => _modelSelector.TrySelectAsync(connection, _sessionId!, sessionNewResult, requestedModel, _logger, stageCt),
+                ct)
             .ConfigureAwait(false);
 
         // Handshake is now fully complete (initialize + session/new + best-effort model selection) —
@@ -773,6 +835,46 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
             _ = EnqueueTurn(initialPrompt, acknowledgeWrite: false);
             ArmFirstOutputWatchdog();
         }
+    }
+
+    /// <summary>
+    /// Wraps one ACP handshake step in its own <see cref="AcpLaunchStageTimeout"/> (liveness-
+    /// supervision spec §5). A FRESH <see cref="CancellationTokenSource"/> per call is what makes each
+    /// stage's budget independent, and it runs off <see cref="_timeProvider"/> — monotonic, so a
+    /// wall-clock jump can never fail a healthy handshake. On success, stamps
+    /// <see cref="AgentActivityClock.SetLaunchStage"/>, the evidence the out-of-cycle status report
+    /// extends the server's registration wait on.
+    ///
+    /// <para>The timeout logs the stage and agent id BEFORE attempting the kill — the process (and any
+    /// further stderr) is about to be gone. Termination is BEST-EFFORT and a failure only logs, so the
+    /// thrown message must not claim the child died; see
+    /// <see cref="AcpLaunchStageTimeoutException"/>.</para>
+    /// </summary>
+    async Task<T> RunHandshakeStageAsync<T>(string stage, Func<CancellationToken, Task<T>> operation, CancellationToken ct) {
+        using var stageTimeout = new CancellationTokenSource(AcpLaunchStageTimeout, _timeProvider);
+        using var linked       = CancellationTokenSource.CreateLinkedTokenSource(ct, stageTimeout.Token);
+
+        T result;
+        try {
+            result = await operation(linked.Token).ConfigureAwait(false);
+        } catch (OperationCanceledException) when (stageTimeout.IsCancellationRequested && !ct.IsCancellationRequested) {
+            AcpMetrics.RecordFailure("handshake");
+            LogLaunchStageTimeout(_agentId, stage, AcpLaunchStageTimeout.TotalSeconds);
+
+            try {
+                await _installed.Process.TerminateAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+            } catch (Exception ex) {
+                // Warning, not Debug: the exception message says termination was only REQUESTED, so
+                // this line is the only record that an orphaned child may still be running.
+                _logger.LogWarning(ex, "ACP: failed to reap a wedged handshake at stage '{Stage}' — the child process may still be running.", stage);
+            }
+
+            throw new AcpLaunchStageTimeoutException(stage, AcpLaunchStageTimeout);
+        }
+
+        ActivityClock?.SetLaunchStage(stage);
+
+        return result;
     }
 
     /// <summary>
@@ -949,6 +1051,11 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
                 connection          = _installed.Connection;
             }
 
+            // Liveness-supervision spec §0/§1: the turn gate is genuinely held from here — a parked
+            // (not-yet-entered) turn above never reaches this line, so TurnInFlight never flips true
+            // for a turn that isn't really in flight yet.
+            ActivityClock?.SetTurnInFlight(true);
+
             try {
                 await SendPromptAsync(connection, turn, ct).ConfigureAwait(false);
             } catch (Exception ex) when (ex is not OperationCanceledException) {
@@ -973,6 +1080,11 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
                 // and reap a healthy reviewer whose zero-update turn finished near the deadline.
                 Interlocked.Exchange(ref _sawFirstUpdate, 1);
                 _firstTurnSettled.TrySetResult();
+
+                // Liveness-supervision spec §0/§1: the turn ends here regardless of how it ended
+                // (stopReason, fault, or cancellation) — this finally always runs for a turn that
+                // reached the entered state above, so the true/false pair is exactly bracketed.
+                ActivityClock?.SetTurnInFlight(false);
 
                 lock (_reconnectLock) {
                     if (_inFlight is { } f && ReferenceEquals(f.Turn, turn))
@@ -1425,6 +1537,21 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     /// write and a drop-and-evict write under this FullMode — it cannot distinguish the two.
     /// </summary>
     void EmitEnvelope(AcpEventEnvelope envelope) {
+        // Liveness-supervision spec §1: advance BEFORE the channel write below, never after — a
+        // reader blocked on Envelopes.ReadAsync can wake and run the instant TryWrite makes the item
+        // visible, on another thread, with no ordering relationship to whatever this thread does
+        // next. Sequencing Advance() first (same-thread, so it is guaranteed complete before the
+        // write that unblocks the reader) makes "the envelope was observed" a sound proof that the
+        // clock already moved; the reverse order is a genuine race a fast reader can win, observing
+        // the envelope before the seq bump (caught by ActivityClockTurnAndEnvelopeWiringTests under
+        // load — see that test's remarks). Every emitted envelope (assistant text, tool calls, plans,
+        // session-info/usage metadata) is activity, independent of whether a turn is currently
+        // admitted — session_info_update/usage_update reach here with no turn in flight at all (see
+        // AggregateUpdate's standalone-emit case). Advance even on the dropped-because-completed path
+        // below: the content was genuinely produced, and by the time the channel is completed nothing
+        // downstream is reading idle state for this agent anyway.
+        ActivityClock?.Advance();
+
         lock (_aggregationLock) {
             if (_transcript.Reader.Count >= _transcriptCapacity) {
                 var dropped = Interlocked.Increment(ref _droppedTranscriptEnvelopes);
@@ -2276,6 +2403,9 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
 
     [LoggerMessage(Level = LogLevel.Information, Message = "ACP hosted agent session ended: agentId={AgentId} acpSessionId={AcpSessionId}")]
     partial void LogSessionEnded(string agentId, string acpSessionId);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "ACP launch handshake wedged at stage '{Stage}': agentId={AgentId} did not advance within {CapSeconds}s — terminating the child.")]
+    partial void LogLaunchStageTimeout(string agentId, string stage, double capSeconds);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "ACP reconnect started: agentId={AgentId} vendor={Vendor} crashedIncarnation={Incarnation}")]
     partial void LogReconnectStarted(string agentId, string vendor, long incarnation);

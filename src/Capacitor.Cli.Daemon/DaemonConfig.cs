@@ -31,6 +31,21 @@ public class DaemonConfig {
     public TimeSpan ReviewerIdleTimeout { get; set; } = TimeSpan.FromHours(2);
 
     /// <summary>
+    /// The daemon-local ceiling on a held ACP turn with a frozen activity seq: once <c>TurnInFlight</c>
+    /// has stayed true with no further <c>Advance()</c> for longer than this, the reviewer is reaped as
+    /// <c>turn_wedged</c>. Applies to EVERY review-flow reviewer, alongside
+    /// <see cref="ReviewerMaxLifetime"/>/<see cref="ReviewerIdleTimeout"/> — the server-sent inactivity
+    /// bound gates nothing here (see <c>AgentOrchestrator.FindReviewersToReap</c>).
+    ///
+    /// <para>Deliberately NOT sent by the server (spec decision 6): its equivalent
+    /// <c>Flows:TurnWedgeCeilingSeconds</c> is independently defaulted on the same 60m (the
+    /// <c>kcap watch</c> long-tool envelope) rather than plumbed onto the wire — this is a local safety
+    /// net against an evidence-free held turn. <see cref="TimeSpan.Zero"/> disables it. Overridden at
+    /// startup from env <c>KCAP_REVIEWER_TURN_WEDGE_CEILING</c> (seconds).</para>
+    /// </summary>
+    public TimeSpan ReviewerTurnWedgeCeiling { get; set; } = TimeSpan.FromMinutes(60);
+
+    /// <summary>
     /// Phase B (D4): root directory under which this daemon writes its per-agent PID records
     /// (<c>{StateDir}/{name}/agents/{agentId}.json</c>). Null → the shared daemon state dir
     /// (<c>DaemonLockPaths.Directory</c>); tests point it at a temp dir. The per-name subdir keeps a

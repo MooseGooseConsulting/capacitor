@@ -41,9 +41,13 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
         // real binary. Tests pin a value so the OPERATOR-FLAG half of the gate is assertable on a host with
         // no gemini installed — otherwise a disabled-daemon test passes for the wrong reason (unknown
         // version) and would keep passing if advertisement stopped honouring the flag.
-        Func<string, string?>? resolveVendorVersion = null
+        Func<string, string?>? resolveVendorVersion = null,
+        // Test seam ONLY for the per-stage launch-handshake cap. Production passes null → the
+        // TimeProvider.System every other daemon-local timing decision uses.
+        TimeProvider? timeProvider = null
     ) : IHostedAgentRuntimeFactory {
     readonly Func<string, string?>? _resolveVendorVersion = resolveVendorVersion;
+    readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
 
     readonly Func<RuntimeStartContext, (Stream Input, Stream Output, IAcpProcess Process)> _connectionSource =
         connectionSource ?? (ctx => StartRealProcess(descriptor, config, ctx, loggerFactory));
@@ -185,6 +189,9 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
             runtimeLogger,
             agentId: ctx.AgentId,
             requestInteraction: connection.RequestAcpInteractionAsync,
+            // Drives the handshake's per-stage caps (RunHandshakeStageAsync), so a test's
+            // FakeTimeProvider controls them without a real 90-second wait.
+            timeProvider: _timeProvider,
             debugFrames: config.DebugFrames,
             vendor: descriptor.Vendor,
             modelSelector: descriptor.ModelSelector,
@@ -219,6 +226,10 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
                 ? UnattendedToolAdmission.AdmittedFor(reviewMcp, id)
                 : null
         );
+
+        // MUST precede StartAsync below: the handshake's SetLaunchStage stamps are no-ops against a
+        // null clock, so a later assignment silently defeats every stage stamp for the whole launch.
+        runtime.ActivityClock = ctx.ActivityClock;
 
         // Review flow: the injected result channel + allowlist. Otherwise unchanged (null today).
         var mcpServers = ctx.IsReviewFlow
