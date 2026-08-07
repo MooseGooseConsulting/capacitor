@@ -154,6 +154,9 @@ public static partial class DaemonRunner {
         if (Environment.GetEnvironmentVariable("KCAP_OPENCODE_PATH") is { Length: > 0 } envOpenCodePath)
             config.OpenCodePath = envOpenCodePath;
 
+        if (Environment.GetEnvironmentVariable("KCAP_OPENCODE_MODEL") is { Length: > 0 } envOpenCodeModel)
+            config.OpenCodeModel = envOpenCodeModel;
+
         if (Environment.GetEnvironmentVariable("KCAP_GEMINI_PATH") is { Length: > 0 } envGeminiPath)
             config.GeminiPath = envGeminiPath;
 
@@ -172,6 +175,9 @@ public static partial class DaemonRunner {
 
         config.KiroUnattendedReviewerEnabled =
             ParseConsentFlag(Environment.GetEnvironmentVariable("KCAP_KIRO_UNATTENDED_REVIEWER"));
+
+        config.OpenCodeUnattendedReviewerEnabled =
+            ParseConsentFlag(Environment.GetEnvironmentVariable("KCAP_OPENCODE_UNATTENDED_REVIEWER"));
 
         config.DebugFrames = ParseDebugFramesFlag(Environment.GetEnvironmentVariable("KCAP_ACP_DEBUG_FRAMES"));
 
@@ -240,6 +246,10 @@ public static partial class DaemonRunner {
             config.StateDir ?? DaemonLockPaths.Directory, DaemonLockPaths.Sanitize(config.Name));
         SeedReviewerFloors(coverageStateDir, config);
 
+        SeedReviewerAffirmation(
+            coverageStateDir, AcpVendorDescriptors.OpenCode.Vendor,
+            config.OpenCodeUnattendedReviewerEnabled, config.OpenCodePath);
+
         // Recovers reviewer homes left by a SIGKILLed predecessor. Runs unconditionally: a daemon
         // whose operator has since disabled the reviewer still owns whatever its last incarnation
         // left behind, and those directories hold review context.
@@ -248,6 +258,11 @@ public static partial class DaemonRunner {
         // emit. The host's logging is not built yet at this point, so this writes to stderr like the
         // seeding block above.
         KiroReviewerHome.SweepStale(
+            coverageStateDir, config.DaemonEpoch ?? "unpinned", new ConsoleErrorLogger());
+
+        // Same contract for OpenCode's isolated config dir: unconditional, because a daemon whose
+        // operator has since disabled the reviewer still owns what its last incarnation left behind.
+        OpenCodeReviewerConfigDir.SweepStale(
             coverageStateDir, config.DaemonEpoch ?? "unpinned", new ConsoleErrorLogger());
 
         // The Antigravity reviewer disposes its own home on the normal path (the runtime's onDisposed
@@ -384,6 +399,14 @@ public static partial class DaemonRunner {
         builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp =>
             new AcpHostedAgentRuntimeFactory(
                 AcpVendorDescriptors.Gemini,
+                sp.GetRequiredService<DaemonConfig>(),
+                sp.GetRequiredService<ILoggerFactory>(),
+                sp.GetRequiredService<ServerConnection>()
+            )
+        );
+        builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp =>
+            new AcpHostedAgentRuntimeFactory(
+                AcpVendorDescriptors.OpenCode,
                 sp.GetRequiredService<DaemonConfig>(),
                 sp.GetRequiredService<ILoggerFactory>(),
                 sp.GetRequiredService<ServerConnection>()
@@ -967,6 +990,7 @@ public static partial class DaemonRunner {
     internal const string CodexLauncherPolicyVersion = "codex-unattended-v1";
     internal const string CopilotLauncherPolicyVersion = "copilot-unattended-v1";
     internal const string AntigravityLauncherPolicyVersion = "antigravity-unattended-v1";
+    internal const string OpenCodeLauncherPolicyVersion = "opencode-unattended-v1";
 
     /// <summary>The one vendor token this daemon knows agy by. Never <c>agy</c> — that is a binary
     /// name, and the server routes on the vendor.</summary>
@@ -990,6 +1014,13 @@ public static partial class DaemonRunner {
                 // Named rather than left to the generic arm, which advertises CliVersion: null — there
                 // is a real configured path here to probe, and the floor is stated in that version.
                 AntigravityVendor => (config.AntigravityPath, AntigravityLauncherPolicyVersion),
+                // Named for the same reason as Antigravity above, and found the same way: a live dev
+                // daemon logged "Unattended vendor 'opencode': CLI version unknown" while the gate had
+                // just admitted it on a resolved version, because the gate probes
+                // descriptor.ResolveBinaryPath and this map did not know the vendor. Two answers about
+                // one build, and the WRONG one is what reaches the server and the operator's log — the
+                // first place anyone looks when a reviewer misbehaves.
+                "opencode" => (config.OpenCodePath, OpenCodeLauncherPolicyVersion),
                 _         => ("", $"{vendor}-unattended-v1")
             };
             // Trust-by-default: a vendor's borrowed-review capability is a property of its FACTORY,
