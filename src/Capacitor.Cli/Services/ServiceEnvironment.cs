@@ -15,25 +15,33 @@ static class ServiceEnvironment {
         ["PATH", "KCAP_CONFIG_DIR", "KCAP_PROFILE", "KCAP_URL", "KCAP_CLAUDE_PATH", "KCAP_CODEX_PATH"];
 
     /// <summary>
-    /// Operator consent for the gated unattended reviewers. Carried on every platform: these are
-    /// booleans, not secret-capable, so <see cref="GoogleSecretCapableKeys"/>'s exclusion does not apply.
+    /// The unattended reviewers' opt-OUT switches. Carried on every platform: these are booleans, not
+    /// secret-capable, so <see cref="GoogleSecretCapableKeys"/>'s exclusion does not apply.
     ///
     /// <para>Required because the daemon reads them from its own environment and nowhere else — no
-    /// profile or config-file binding — so without this a supervised install silently dropped them and
-    /// the reviewer could not be turned on at all.</para>
+    /// profile or config-file binding — so without this a supervised install silently drops them.</para>
     ///
-    /// <para>Capture carries an EXISTING opt-in; it cannot create one. It does freeze it, which is what
-    /// <see cref="CarriedConsentFlags"/> reports.</para>
+    /// <para><b>These became opt-OUTs, which inverted what a miss here costs.</b> While they were opt-ins,
+    /// dropping one meant a reviewer that could not be turned ON: annoying, and safe. Now it means a
+    /// reviewer that cannot be turned OFF — the operator's only lever, unreachable, on the supported
+    /// install path. That is the single compensating control the ungating rests on (see
+    /// <c>DaemonRunner.ParseConsentFlag</c>), so this array is load-bearing for that argument rather
+    /// than a convenience.</para>
     ///
-    /// <para><b>DERIVED from the affirmable-reviewer registry, not listed again here.</b> Every gated
-    /// reviewer has both a consent flag and a build affirmation, so these were two hand-maintained lists
-    /// of the same set with nothing making them agree — and the failure mode is silent in the worst
-    /// direction: a vendor present in one and missing here means a supervised install drops its consent
-    /// flag, and the reviewer simply cannot be enabled, with the refusal text pointing at a variable the
-    /// unit never received. Deriving removes the drift class instead of testing for it.</para>
+    /// <para><b>DERIVED from <see cref="Core.GatedReviewers"/>, not listed again here</b> — the SAME rows
+    /// the daemon's own apply loop iterates to build its config. This was three hand-maintained lists of
+    /// one set (here, the daemon, and the affirm verb) with nothing making them agree; now there is one
+    /// registry and the drift class is gone rather than tested for. Post-inversion that is what
+    /// guarantees a newly-added reviewer arrives disableable: a row that reaches the daemon reaches the
+    /// service unit by construction, and one the daemon has no accessor for fails the boot loudly
+    /// instead of shipping an opt-out that does nothing.</para>
+    ///
+    /// <para><b>Capture FREEZES the value at install time</b> (what <see cref="CarriedConsentFlags"/>
+    /// reports). A supervised daemon inherits nothing later, so an opt-out an operator exports after
+    /// installing the service has no effect until the service is reinstalled.</para>
     /// </summary>
     internal static readonly string[] ReviewerConsentKeys =
-        [.. Commands.DaemonReviewerCommand.AffirmableReviewer.All.Select(r => r.EnableEnvVar)];
+        [.. Core.GatedReviewers.All.Select(r => r.EnableEnvVar)];
 
     /// <summary>
     /// Gemini's project/backend selection, carried on every platform because none of it is

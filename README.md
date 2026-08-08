@@ -737,28 +737,72 @@ kcap daemon consent log -n 50                                    # tail consent-
 
 `show`/`set-default`/`allow`/`deny`/`remove` mutate the policy over the daemon's local socket and require the target daemon to be running; `log` reads `consent-decisions.jsonl` straight off disk, so it works even with the daemon stopped. All six take `--name <n>` like the rest of `kcap daemon`.
 
-> **Two different gates, deliberately.** `daemon consent` authorises an individual launch and defaults to
-> *allow*; the Gemini reviewer flag below is a **capability** gate that defaults to *off* and asks a
-> different question — whether this daemon may run that vendor unattended **at all**. A per-launch deny is
-> not a substitute: the reviewer's containment rests on a behaviour of the installed vendor build, so the
-> safe default has to be off rather than on-until-denied.
+> **`daemon consent` is the gate that authorises an individual launch**, and it defaults to *allow*. The
+> per-vendor reviewer switches below are a different thing — whether this daemon may run a given vendor
+> unattended **at all** — and they now default to *enabled* too. See the note directly below for why they
+> used to be opt-in and no longer are.
 
-#### Gemini as an unattended review-flow reviewer — off by default, and why
+#### Unattended reviewers are enabled by default (they used to be opt-in)
 
-A **hosted** Gemini agent needs nothing beyond the project setting above. Using Gemini as an **unattended
-review-flow reviewer** is a separate, deliberately opt-in decision, because of what an unattended review
-grants:
+Every reviewer vendor your daemon can host is available to a review flow out of the box. Four of them
+— Gemini, Kiro, OpenCode and Antigravity — used to require an explicit opt-in. That was removed, because
+the opt-in did not do the job it appeared to do:
+
+- **The reviewer vendor is chosen by the caller.** Claude, Codex, Cursor and Copilot have never been gated,
+  and each runs with a *full* tool surface — shell and file writes included. So on any daemon that also
+  advertises one of those, the gate did not widen the class of capability a requester could reach: one it
+  blocked simply asked for an ungated vendor with more capability, not less. (Not quite "stopped nobody" —
+  a Gemini reviewer burns *your* Gemini credentials and obeys Gemini's own permission model, which is not a
+  subset of "Claude was available anyway".)
+  > The exception, since the claim is not universal: on a daemon where you installed **only** a gated
+  > vendor's CLI — for hosted work, say — and no ungated one, these variables were the only thing keeping
+  > that binary from also serving unattended reviews. If that is your setup and you want it back, set the
+  > variable to `0`. `kcap daemon consent` is the better control, because it cannot be sidestepped by
+  > naming a different vendor.
+- **It was attached to the wrong end of the risk scale.** Two of the four gated vendors (Kiro, OpenCode) run
+  *read-only* reviewers. The strictest policy was on the most contained configuration.
+- **It taxed the honest path.** A supervised daemon inherits nothing from your shell, so turning a reviewer
+  on meant editing a service unit and restarting — to use a feature you had explicitly requested.
+
+What remains is the part that was doing real work: a per-vendor **version floor**. Several of these
+reviewers' containment depends on behaviour of the installed vendor build — and for OpenCode it is
+environment-based, which fails *silently* if a future build stops honouring it. Your daemon records a
+minimum version automatically at startup and refuses anything older. Use `kcap daemon reviewer affirm
+--vendor <name>` to move that floor past a build you have found to be bad. It is remediation, not
+permission, and it never blocks a first launch.
+
+**To disable a vendor**, set its variable to `0` (or `false`/`no`/`off`) in the **daemon's** environment:
 
 ```bash
-export KCAP_GEMINI_UNATTENDED_REVIEWER=1     # this DAEMON's environment — not a server setting
+export KCAP_GEMINI_UNATTENDED_REVIEWER=0        # this DAEMON's environment — not a server setting
+export KCAP_KIRO_UNATTENDED_REVIEWER=0
+export KCAP_OPENCODE_UNATTENDED_REVIEWER=0
+export KCAP_ANTIGRAVITY_UNATTENDED_REVIEWER=0
 ```
 
-Only an explicit `1`/`true`/`yes`/`on` enables it; anything else, a typo included, leaves it off. Enabling a
-reviewer is a consent decision, so a misspelling must not read as consent.
+Unset means enabled. A value the daemon cannot read as true or false is treated as **disabled**, and
+warned about at startup — because the only reason to set one of these at all is to turn a reviewer off,
+so an unreadable value is a failed "off" rather than an ambiguous input. Surrounding quotes are tolerated
+(`"0"` works), since a mis-quoted service-unit entry is the usual way that happens.
 
-> Earlier docs showed a `GeminiUnattendedReviewerEnabled` key in `~/.config/kcap/config.json`. Nothing read
-> it — the flag was reachable only from a test constructor, so the Gemini unattended reviewer could not
-> actually be turned on. The environment variable above is the working form.
+**On a service-installed daemon, set it before you install.** `kcap daemon service install` copies these
+four variables into the service unit — on every platform — but a supervised daemon inherits nothing from
+your shell afterwards, so its environment is frozen at install time. Exporting an opt-out later has no
+effect until you reinstall the service:
+
+```bash
+export KCAP_GEMINI_UNATTENDED_REVIEWER=0
+kcap daemon service install        # re-run so the unit picks the value up
+```
+
+Be aware that disabling one vendor does not stop unattended review on that daemon: a requester can still
+name an ungated vendor. If you want no unattended reviews at all, `kcap daemon consent` is the gate that
+actually does that — note it **defaults to allow**, so it only helps once you have configured it.
+
+#### What an unattended Gemini review grants
+
+A **hosted** Gemini agent needs nothing beyond the project setting above. A Gemini **reviewer** is worth
+understanding before you leave it on, because its posture is the broadest of the set:
 
 **Read this before setting it.** An unattended reviewer runs in a daemon-owned worktree with this daemon's
 own `HOME`, so repository content that steers the model into using its tools gets **code execution with your
@@ -774,18 +818,20 @@ daemon user's full authority**. Concretely, and not bounded to the review:
 - **verdict** — steered content can simply ask the model to report `clean`. A review result is not
   authenticated review output.
 
-This is a property of unattended review generally, not of Gemini specifically — enabling Gemini widens which
-vendors can do it rather than introducing it. The one path that does *not* grant this is a sandboxed borrowed
+This is a property of unattended review generally, not of Gemini specifically — Gemini widens which vendors
+can do it rather than introducing it, and Claude, Codex, Cursor and Copilot have never been gated at all. The one path that does *not* grant this is a sandboxed borrowed
 review, which Gemini cannot use yet.
 
-**Enabling this flag is your consent to the above**, which is why it is daemon-local (the person requesting a
-review is not necessarily you) and defaults off.
+**This is on by default, so read the above as describing what your daemon already does** once `gemini`
+resolves. The switch is daemon-local — the person requesting a review is not necessarily you — and it is
+now an opt-OUT: `KCAP_GEMINI_UNATTENDED_REVIEWER=0` to turn it off. If your daemon is service-managed, set
+it and re-run `kcap daemon service install`, since a supervised daemon's environment is frozen at install.
 
 Two further things it does *not* do:
 
 - it does not bypass the **minimum version**. The reviewer's only containment is Gemini's exact-name MCP
   allowlist, which is a behaviour of the installed build, so the daemon records a minimum `gemini` version
-  the first time you enable the reviewer. That recorded version is a **minimum, not an exact match**: any
+  on the first startup that finds the binary. That recorded version is a **minimum, not an exact match**: any
   build at or above it runs, so **a Gemini upgrade needs no action from you**; an older one is refused, with
   a coded error naming both versions. Run `kcap daemon reviewer affirm --vendor gemini` to move the minimum
   to whatever is installed now — which is how you exclude a build you have found to be broken, and, if you
@@ -800,11 +846,9 @@ Two further things it does *not* do:
 
 #### Unattended Kiro reviews
 
-```bash
-export KCAP_KIRO_UNATTENDED_REVIEWER=1       # this DAEMON's environment — not a server setting
-```
+Enabled by default; `KCAP_KIRO_UNATTENDED_REVIEWER=0` in the daemon's environment disables it.
 
-**Everything in the Gemini warning above applies**, with one difference in each direction.
+**Everything in the Gemini section above applies**, with one difference in each direction.
 
 *Tighter:* a Kiro reviewer runs with a **scoped** tool set — `fs_read`, `thinking`, and the tools of the MCP
 servers the launch itself injects. `fs_write` and `execute_bash` are not trusted, and a permission request that
@@ -825,7 +869,7 @@ A review launch also runs with a daemon-owned, empty `KIRO_HOME`, so your global
 interactive Kiro sessions are unaffected, and the file is never modified.
 
 **Minimum version.** That suppression depends on the installed build honouring `KIRO_HOME`, so the daemon
-records a minimum `kiro-cli` version the first time you enable the reviewer. It is a **minimum, not an exact
+records a minimum `kiro-cli` version on the first startup that finds the binary. It is a **minimum, not an exact
 match**: any build at or above it runs, so **a `kiro-cli` upgrade needs no action from you**; a build older
 than the recorded minimum is refused.
 
@@ -844,9 +888,7 @@ cannot be created owner-only on Windows.
 
 #### Unattended Antigravity reviews
 
-```bash
-export KCAP_ANTIGRAVITY_UNATTENDED_REVIEWER=1   # this DAEMON's environment — not a server setting
-```
+Enabled by default; `KCAP_ANTIGRAVITY_UNATTENDED_REVIEWER=0` in the daemon's environment disables it.
 
 The prerequisite is the Antigravity **CLI** — the `agy` binary on `PATH` (or `KCAP_ANTIGRAVITY_PATH`
 pointing at it). The Antigravity **IDE** alone is not enough: it ships no `agy`, and a daemon with only the
@@ -893,11 +935,13 @@ action from you** — which matters more here than for the other reviewers, sinc
 (observed going 1.1.8 → 1.1.10 mid-session). A build older than the recorded minimum, or one whose
 `agy --version` cannot be read, is withheld with a coded reason naming both versions.
 
-Because this vendor's minimum is recorded when `agy` first resolves rather than when you enable the
-reviewer, there is one window worth knowing about: install `agy`, run a daemon with the reviewer *off*,
-then upgrade `agy` and only afterwards turn the reviewer on — and the recorded minimum is still the older
+This vendor's minimum is recorded whenever `agy` first resolves, even on a daemon whose reviewer you have
+explicitly turned off — its floor also gates *hosted* Antigravity agents, which are never gated by the
+reviewer switch. That leaves one window worth knowing about, now that reviewers are on by default it needs
+a deliberate opt-out to reach: install `agy`, run a daemon with `KCAP_ANTIGRAVITY_UNATTENDED_REVIEWER=0`,
+then upgrade `agy` and only afterwards unset that variable — and the recorded minimum is still the older
 build you started with, so a later *downgrade* back to it would be admitted. Run the command below once
-after enabling the reviewer if you want the minimum to be the build you actually reviewed with.
+after re-enabling if you want the minimum to be the build you actually reviewed with.
 
 ```bash
 kcap daemon reviewer affirm --vendor antigravity
@@ -949,14 +993,15 @@ daemon started, restart it or run `kcap daemon reviewer affirm --vendor antigrav
 
 #### If your daemon runs as a service
 
-All three consent flags above are read from the **daemon's own environment**, and a supervised daemon (`kcap daemon
-service install` — launchd, systemd, or a Windows scheduled task) inherits nothing from the shell you
-installed it from. Exporting a flag in your shell therefore does nothing for a service-installed daemon until
-the unit itself carries it, so export it *first* and then reinstall:
+The reviewer switches above are read from the **daemon's own environment**, and a supervised daemon (`kcap
+daemon service install` — launchd, systemd, or a Windows scheduled task) inherits nothing from the shell you
+installed it from. Since the switches now default to *enabled*, this only matters when you want to **disable**
+one: exporting it in your shell does nothing for a service-installed daemon until the unit itself carries it,
+so export it *first* and then reinstall:
 
 ```bash
-export KCAP_GEMINI_UNATTENDED_REVIEWER=1
-kcap daemon service install --name "$(whoami)"    # captures the flag into the unit
+export KCAP_GEMINI_UNATTENDED_REVIEWER=0
+kcap daemon service install --name "$(whoami)"    # captures the setting into the unit
 ```
 
 The Antigravity ADC variables (`GOOGLE_CLOUD_PROJECT`, `AGY_ADC_AUTH`, `GOOGLE_APPLICATION_CREDENTIALS`)
@@ -964,9 +1009,9 @@ are captured by the same install, so a daemon installed *before* this shipped mu
 interactive shell to pick them up. `KCAP_ANTIGRAVITY_PATH` is **not** captured — like the other vendor path
 overrides, set it where the unit can see it if you need a non-default value.
 
-Install prints a `Consent:` line naming each reviewer flag it captured. That freeze is the point to notice:
-the unit outlives the shell, so the reviewer stays enabled for that service until you reinstall without the
-variable set — unsetting it in your shell later changes nothing.
+Install prints a `Consent:` line naming each reviewer variable it captured. That freeze is the point to
+notice: the unit outlives the shell, so a reviewer you disabled stays disabled for that service until you
+reinstall without the variable set — unsetting it in your shell later changes nothing.
 
 If a reviewer is still not offered, the daemon says why in its own log at startup — one line per vendor that
 is installed and unattended-capable but withheld, carrying the same text the launch path would have thrown
@@ -1217,7 +1262,7 @@ KCAP_CURSOR_PATH=/opt/cursor/bin/cursor-agent kcap daemon
 KCAP_CURSOR_MODEL=claude-opus-4-8 kcap daemon
 ```
 
-`KCAP_COPILOT_PATH` overrides the `copilot` binary the daemon spawns for **GitHub Copilot hosted agents** (`copilot --acp --stdio`), mirroring `KCAP_CURSOR_PATH` — the daemon hosts Claude, Codex, Cursor, Copilot, Kiro, Gemini, OpenCode and Antigravity. `KCAP_GEMINI_PATH` overrides the `gemini` binary the same way (`gemini --experimental-acp`), and applies to both hosted Gemini agents and the opt-in [unattended Gemini reviewer](#gemini-as-an-unattended-review-flow-reviewer--off-by-default-and-why) — whose build-affirmation check reads whichever binary it names. `KCAP_OPENCODE_PATH` overrides the `opencode` binary the daemon spawns for **OpenCode hosted agents** (`opencode acp`) — no longer reserved; see [Hosted OpenCode agents](#hosted-opencode-agents) below.
+`KCAP_COPILOT_PATH` overrides the `copilot` binary the daemon spawns for **GitHub Copilot hosted agents** (`copilot --acp --stdio`), mirroring `KCAP_CURSOR_PATH` — the daemon hosts Claude, Codex, Cursor, Copilot, Kiro, Gemini, OpenCode and Antigravity. `KCAP_GEMINI_PATH` overrides the `gemini` binary the same way (`gemini --experimental-acp`), and applies to both hosted Gemini agents and the [unattended Gemini reviewer](#unattended-reviewers-are-enabled-by-default-they-used-to-be-opt-in) (enabled by default) — whose build-affirmation check reads whichever binary it names. `KCAP_OPENCODE_PATH` overrides the `opencode` binary the daemon spawns for **OpenCode hosted agents** (`opencode acp`) — no longer reserved; see [Hosted OpenCode agents](#hosted-opencode-agents) below.
 
 ```bash
 KCAP_COPILOT_PATH=/opt/copilot/bin/copilot kcap daemon
@@ -1279,26 +1324,24 @@ Two things are worth knowing before you pick OpenCode:
   daemon is already recording, so the run would show up twice. Suppressing external plugins in the
   hosted child is what keeps a daemon-hosted session to exactly one recording. Sessions you start
   yourself are untouched: the plugin keeps its whole job there.
-- **Unattended review is off by default** — see below.
+- **Unattended review works out of the box** — see below.
 
-#### OpenCode as an unattended review-flow reviewer — off by default, and why
+#### OpenCode as an unattended review-flow reviewer
 
-`start_review_flow(vendor="opencode")` works only on a daemon whose operator has explicitly enabled
-it:
+`start_review_flow(vendor="opencode")` works on any daemon with `opencode` installed. To turn it off,
+set `KCAP_OPENCODE_UNATTENDED_REVIEWER=0` in the daemon's environment.
 
-```bash
-KCAP_OPENCODE_UNATTENDED_REVIEWER=1 kcap daemon
-```
+The reviewer's tool surface is deliberately narrow — the narrowest of any reviewer kcap offers. It gets
+`read`, `grep`, `glob` and `list` plus the one MCP channel it reports results through — **no shell, no
+write, no edit, no network** — enforced by OpenCode's own permission table rather than by asking the
+model nicely.
 
-The reviewer's tool surface is deliberately narrow. It gets `read`, `grep`, `glob` and `list` plus
-the one MCP channel it reports results through — **no shell, no write, no edit, no network** — and
-that is enforced by OpenCode's own permission table rather than by asking the model nicely.
-
-What you are consenting to is the part that narrow surface does *not* cover: **those read tools are
-not path-scoped.** They are whole-filesystem read primitives running as the daemon user, so a review
-can read any file that user can read — its own credentials included — and a reviewer's findings text
-goes back to whoever requested the review. Enable it only on a daemon whose operator and review
-requesters are in one trust domain.
+Worth knowing about the part that narrow surface does *not* cover: **those read tools are not
+path-scoped.** They are whole-filesystem read primitives running as the daemon user, so a review can read
+any file that user can read — credentials included — and a reviewer's findings text goes back to whoever
+requested the review. That is true of *every* reviewer, including Claude, Codex, Cursor and Copilot, which
+can additionally write files and run shell commands. So the decision worth making is whether to allow
+unattended reviews on this daemon at all (`kcap daemon consent`), not which vendor serves them.
 
 Two further things the launch does, which are worth knowing because they change what the reviewer
 sees:
@@ -1310,10 +1353,11 @@ sees:
 - **Your global MCP servers are absent** (an empty per-launch `OPENCODE_CONFIG_DIR`). Otherwise a
   reviewer would inherit `kcap-flows` and could start review flows of its own.
 
-Enabling it does **not** bypass the build check. The containment above is behaviour of the installed
-`opencode` build, so the daemon records a **minimum** version and refuses anything older. Enabling
-seeds that minimum from whatever is installed, so a later upgrade needs no action from you; to move
-the floor to the currently-installed build (after a bad release, say), run:
+Being on by default does **not** bypass the build check. The containment above is behaviour of the
+installed `opencode` build, so the daemon records a **minimum** version and refuses anything older.
+That minimum is seeded on the first startup that finds the binary, from whatever is installed then, so
+a later upgrade needs no action from you; to move the floor to the currently-installed build (after a
+bad release, say), run:
 
 ```bash
 kcap daemon reviewer affirm --vendor opencode
