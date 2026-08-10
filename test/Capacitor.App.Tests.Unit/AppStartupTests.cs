@@ -32,7 +32,7 @@ public class AppStartupTests {
         var isVisible = await AvaloniaSession.DispatchAsync(() => {
             var service = new FakeDaemonClientService();
             var (actions, notifier) = NewActions(service);
-            var window = AppUnderTest.BuildAndShowMainWindow(service, actions, notifier, CancellationToken.None);
+            var window = AppUnderTest.BuildAndShowMainWindow(service, actions, notifier, new FakeTicker(), CancellationToken.None, TestActivity.New());
             Dispatcher.UIThread.RunJobs(); // flush the deferred Loaded post (diagnostic parity with the smoke test)
 
             var visible = window.IsVisible;
@@ -259,10 +259,12 @@ public class AppStartupTests {
         public void Dispose() => onDispose();
     }
 
-    /// Ordering pin for spec §9's "quit never strands a menu-bar icon": the UI-thread-owned
-    /// disposables run, in the order given (tray icon first), BEFORE the service dispose /
-    /// markConfirmed / TryShutdown pass. Driven through a recording list rather than the real
-    /// App fields, which no test can populate (StartAsync's composition needs a real daemon).
+    /// Ordering pin for spec §9's "quit never strands a menu-bar icon" and spec §5's consent
+    /// shutdown order: the UI-thread-owned disposables run, in the order given (tray icon first,
+    /// then the prompt coordinator BEFORE the consent service it resolves against), all BEFORE the
+    /// service dispose / markConfirmed / TryShutdown pass. Driven through a recording list rather
+    /// than the real App fields, which no test can populate (StartAsync's composition needs a real
+    /// daemon).
     [Test]
     public async Task DisposeUiThenConfirmShutdownAsync_disposes_ui_services_before_the_confirm_pass() {
         var (desktop, fake) = FakeClassicDesktopLifetime.Create();
@@ -271,13 +273,16 @@ public class AppStartupTests {
         await AppUnderTest.DisposeUiThenConfirmShutdownAsync(
             [new RecordingDisposable(() => order.Add("tray")),
              new RecordingDisposable(() => order.Add("trayVm")),
+             new RecordingDisposable(() => order.Add("promptCoordinator")),
+             new RecordingDisposable(() => order.Add("consent")),
              new RecordingDisposable(() => order.Add("pause"))],
             disposeAsync: () => { order.Add("service"); return ValueTask.CompletedTask; },
             markConfirmed: () => order.Add("confirm"),
             desktop,
             exitCode: 0);
 
-        await Assert.That(order).IsEquivalentTo(["tray", "trayVm", "pause", "service", "confirm"], CollectionOrdering.Matching);
+        await Assert.That(order).IsEquivalentTo(
+            ["tray", "trayVm", "promptCoordinator", "consent", "pause", "service", "confirm"], CollectionOrdering.Matching);
         await Assert.That(fake.ShutdownCalls).IsEquivalentTo([0], CollectionOrdering.Matching);
     }
 
@@ -294,13 +299,15 @@ public class AppStartupTests {
         await AppUnderTest.DisposeUiThenConfirmShutdownAsync(
             [new RecordingDisposable(() => throw new InvalidOperationException("tray-boom")),
              null,
+             new RecordingDisposable(() => order.Add("promptCoordinator")),
+             new RecordingDisposable(() => order.Add("consent")),
              new RecordingDisposable(() => order.Add("pause"))],
             disposeAsync: null,
             markConfirmed: () => order.Add("confirm"),
             desktop,
             exitCode: 1);
 
-        await Assert.That(order).IsEquivalentTo(["pause", "confirm"], CollectionOrdering.Matching);
+        await Assert.That(order).IsEquivalentTo(["promptCoordinator", "consent", "pause", "confirm"], CollectionOrdering.Matching);
         await Assert.That(fake.ShutdownCalls).IsEquivalentTo([1], CollectionOrdering.Matching);
     }
 
@@ -513,7 +520,7 @@ public class AppStartupTests {
                 var (desktop, fake) = FakeClassicDesktopLifetime.Create();
                 var daemon = new FakeDaemonClientService();
                 var (actions, _) = NewActions(daemon);
-                var trayVm = new TrayViewModel(daemon, new FakePauseController(), actions);
+                var trayVm = new TrayViewModel(daemon, new FakePauseController(), actions, new FakeConsentService());
                 var app = Application.Current!;
                 var tray = new TrayIconManager(app, trayVm);
 

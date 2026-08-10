@@ -18,7 +18,8 @@ namespace Capacitor.Cli.Daemon.Services;
 /// it first; expiry surfaces as TryResolve returning false. Never persisted — a daemon restart
 /// clears pending prompts (the server retries or fails the launch with the coded timeout denial).
 ///
-/// All cleanup removals (the OCE-catch claim attempt and the outer finally) are INSTANCE-scoped
+/// EVERY removal — PromptAsync's timeout claim, its OCE-catch claim attempt, its outer finally,
+/// and TryResolve's own claim (echo-matched or legacy) — is INSTANCE-scoped
 /// via the ConcurrentDictionary KeyValuePair-conditional overload, keyed on the exact `Pending`
 /// object PromptAsync added — never a plain key-based remove. This closes an ABA race: if a new
 /// prompt B reuses the same RequestId (agent-id retry, legacy/sequenced lane overlap) and TryAdds
@@ -139,8 +140,20 @@ internal sealed class LaunchConsentBroker : ILaunchConsentPrompter {
         }
     }
 
-    public bool TryResolve(string requestId, bool allow) =>
-        _pending.TryRemove(requestId, out var p) && p.Tcs.TrySetResult(allow);
+    public bool TryResolve(string requestId, bool allow) => TryResolve(requestId, allow, null);
+
+    /// Non-null echo: resolve succeeds only for the pending entry whose PromptId matches
+    /// exactly, and match+removal is ONE atomic claim — the KeyValuePair-conditional remove is
+    /// the same ABA primitive the timeout/cleanup paths use (class doc). A lost claim (the
+    /// matched instance replaced between lookup and removal) returns false and NEVER retries
+    /// against the successor. Null echo: legacy resolve-by-id (v1 frame callers).
+    public bool TryResolve(string requestId, bool allow, string? promptIdEcho) {
+        if (!_pending.TryGetValue(requestId, out var p)) return false;
+        if (promptIdEcho is not null &&
+            !string.Equals(promptIdEcho, p.Request.PromptId, StringComparison.Ordinal)) return false;
+        if (!_pending.TryRemove(new KeyValuePair<string, Pending>(requestId, p))) return false;
+        return p.Tcs.TrySetResult(allow);
+    }
 
     public IReadOnlyList<LaunchConsentPromptRequest> PendingSnapshot() =>
         _pending.Values.Select(p => p.Request).ToList();

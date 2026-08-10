@@ -24,8 +24,20 @@ public partial class App : Application {
     // first, so a quit never strands a dead icon in the menu bar (spec §9).
     MainWindowCoordinator? _coordinator;
     PauseController? _pause;
+    ConsentService? _consent;
+    ConsentPromptCoordinator? _promptCoordinator;
+    // Disposed with the other UI services below: it holds a constructor-scoped subscription to
+    // the shared ticker, which is RefCount'd — an undisposed subscriber keeps the Interval (and
+    // this object) running past teardown. Held as a field so it survives StartAsync's own stack
+    // frame: the prompt window factory and BuildAndShowMainWindow both close over the SAME
+    // instance.
+    ActivityViewModel? _activity;
     TrayViewModel? _trayVm;
     TrayIconManager? _tray;
+    // No disposal needed — RefCount tears its Interval down with its last subscriber, and every
+    // subscriber above IS disposed. Held so the consent prompt and the activity feed share the
+    // same 1 Hz heartbeat.
+    UiTicker? _ticker;
     bool _shutdownStarted;
     bool _shutdownConfirmed;
     // 0 = normal shutdown. Set to 1 on a startup failure so the DEFERRED shutdown path (Cmd+Q /
@@ -66,13 +78,35 @@ public partial class App : Application {
             // toast/stderr channel (spec §11).
             var ops = new LocalControlOps(service.DaemonName);
             var notifier = new AppNotifier();
+            var ticker = new UiTicker();
+            _ticker = ticker;
             _pause = new PauseController(ops, notifier.Notify, _shutdown.Token);
             // ConfirmForceStopAsync reads _coordinator at INVOCATION time (a captured field, not
             // a captured value) — safe even though _coordinator is still null right here, because
             // nothing can trigger a protected-kind stop before ShowMainWindow below assigns it.
             var actions = new AgentActionService(ops, notifier, new ShellUrlOpener(), service.Snapshots, _shutdown.Token, ConfirmForceStopAsync);
 
-            _coordinator = new MainWindowCoordinator(() => BuildAndShowMainWindow(service, actions, notifier, _shutdown.Token));
+            // Constructed once here, like the ticker and consent service (spec §7): the prompt
+            // window factory below and MainWindowViewModel both need the SAME instance — the
+            // former to nudge it on every conclusive ack, the latter to render it.
+            var activity = new ActivityViewModel(
+                () => ConsentDecisionLogReader.ReadTail(service.DaemonName, 200),
+                () => ActivityStatKey(service.DaemonName), ticker);
+            _activity = activity;
+
+            // The prompt window is built per raise, never here: the coordinator owns its lifetime
+            // and each window gets its own ViewModel over the one shared service (spec §6).
+            var consent = new ConsentService(
+                service, ops, ticker, ct => ConsentSubscription.RunAsync(service.DaemonName, ct),
+                TimeProvider.System, _shutdown.Token);
+            _consent = consent;
+            _promptCoordinator = new ConsentPromptCoordinator(consent, () => new ConsentPromptWindow {
+                DataContext = new ConsentPromptViewModel(
+                    consent, notifier, ticker, TimeProvider.System, _shutdown.Token, activity.RequestRefresh),
+                Notifier = notifier,
+            });
+
+            _coordinator = new MainWindowCoordinator(() => BuildAndShowMainWindow(service, actions, notifier, ticker, _shutdown.Token, activity));
             // A shutdown that started before this continuation resumed already ran its first
             // pass against a null coordinator, so a window built now must never be
             // close-protected (BeginShutdownPass's rule 1 is the general defense; this is the
@@ -84,7 +118,8 @@ public partial class App : Application {
             // LAST, deliberately (spec §9): anything above throwing lands in the catch with no
             // tray icon ever created, leaving the error window as the only surface.
             _trayVm = new TrayViewModel(
-                service, _pause, actions, openMainWindow: _coordinator.ShowMainWindow, quit: () => desktop.TryShutdown());
+                service, _pause, actions, consent, openMainWindow: _coordinator.ShowMainWindow,
+                quit: () => desktop.TryShutdown(), openReviewPrompts: _promptCoordinator.ShowPromptWindow);
             _tray = new TrayIconManager(this, _trayVm);
         } catch (Exception ex) {
             // BEFORE any await: a shutdown request can arrive while cleanup below is still
@@ -95,13 +130,16 @@ public partial class App : Application {
             // must not intercept anything from here on — every close on this path is a real one.
             if (_coordinator is not null) _coordinator.QuitInProgress = true;
             Console.Error.WriteLine($"kcap app failed to start: {ex}");
-            await HandleStartupFailureAsync(desktop, ex, _service, _shutdown, [_tray, _trayVm, _pause]);
+            await HandleStartupFailureAsync(desktop, ex, _service, _shutdown, [_tray, _trayVm, _promptCoordinator, _consent, _activity, _pause]);
             // all already disposed above — never let a later OnShutdownRequested (e.g. Cmd+Q
             // while the error window is up) dispose any of them a second time
             _service = null;
             _tray = null;
             _trayVm = null;
+            _promptCoordinator = null;
+            _consent = null;
             _pause = null;
+            _activity = null;
         }
     }
 
@@ -195,14 +233,41 @@ public partial class App : Application {
     // already-visible window is a no-op, so this stays correct even if a future edit changes the
     // timing such that ShowMainWindow() DOES still see a non-null MainWindow.
     internal static MainWindow BuildAndShowMainWindow(
-            IDaemonClientService service, AgentActionService actions, IAppNotifier notifier,
-            CancellationToken shutdownToken) {
+            IDaemonClientService service, AgentActionService actions, IAppNotifier notifier, ITicker ticker,
+            CancellationToken shutdownToken, ActivityViewModel activity) {
         // Notifier is set on the WINDOW (spec §11 toast overlay), not the ViewModel — the toast
         // is a View-level concern (WindowNotificationManager lives on MainWindow) independent of
         // the VM's WhenActivated-scoped projections.
-        var window = new MainWindow { DataContext = new MainWindowViewModel(service, actions, shutdownToken), Notifier = notifier };
+        var window = new MainWindow {
+            DataContext = new MainWindowViewModel(service, actions, ticker, shutdownToken, activity), Notifier = notifier,
+        };
         window.Show();
         return window;
+    }
+
+    internal static string ActivityStatKey(string daemonName) {
+        var path = ConsentDecisionLogReader.PathFor(daemonName);
+        return ActivityStatKey(path + ".1", path);
+    }
+
+    // Combines both log files' (LastWriteTimeUtc, Length) into one comparison key for
+    // ActivityViewModel's stat poll (spec §7). Each file gets its OWN try/catch: `.1` is absent
+    // on every fresh install until the first 1MB rotation, and a single shared catch around both
+    // files would collapse the WHOLE joined key to the "absent" constant whenever `.1` throws —
+    // appends to the live file would then never change the key, and the Activity tab would go
+    // stale until the tab is reselected. FileInfo.Length throws FileNotFoundException on a
+    // missing file (unlike File.GetLastWriteTimeUtc, which returns a sentinel instead) — that
+    // throw is what carries a clean per-file absence into that file's own "absent" branch. Takes
+    // both paths directly (rather than a daemon name) so a test can point it at a temp directory
+    // without redirecting any real daemon-dir resolution.
+    internal static string ActivityStatKey(string p1Path, string livePath) => $"{StatOf(p1Path)}|{StatOf(livePath)}";
+
+    static string StatOf(string path) {
+        try {
+            return $"{File.GetLastWriteTimeUtc(path).Ticks}:{new FileInfo(path).Length}";
+        } catch {
+            return "absent";
+        }
     }
 
     // Composed here (not inside AgentActionService, spec decision 5): the service only awaits the
@@ -314,8 +379,12 @@ public partial class App : Application {
 
     async Task DisposeAndShutdownAsync() {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop) {
+            // Prompt coordinator BEFORE the consent service (spec §5): the window and its
+            // ViewModel are gone before the service they resolve against, so no click can reach a
+            // disposed one. A resolve already in flight was cancelled by _shutdown at the top of
+            // OnShutdownRequested and settles on the ViewModel's silent-abort path.
             await DisposeUiThenConfirmShutdownAsync(
-                [_tray, _trayVm, _pause],
+                [_tray, _trayVm, _promptCoordinator, _consent, _activity, _pause],
                 _service is null ? null : _service.DisposeAsync, () => _shutdownConfirmed = true, desktop, _exitCode);
         } else {
             if (_service is not null) await _service.DisposeAsync();
