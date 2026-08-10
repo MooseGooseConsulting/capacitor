@@ -6,6 +6,7 @@ using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.Telemetry;
 using ReviewCommand = Capacitor.Cli.Commands.ReviewCommand;
 using WatchCommand = Capacitor.Cli.Commands.WatchCommand;
 
@@ -76,6 +77,47 @@ ProcessUrlPolicy.Current = CrashReporter.IsFailOpenCommand(command)
     : UrlFailurePolicy.FailFast;
 
 var baseUrl = await AppConfig.ResolveServerUrl(args, gitTimeoutMs: isHook ? 1000 : 5000);
+
+// Telemetry: initialised once the server URL is known (it decides the `organization` group) and
+// torn down from ProcessExit, which observes the exit code returned by top-level Main. Every
+// call swallows, so nothing here can fail a command.
+//
+// Deliberately ahead of the update-notice try/finally below: this is process setup, and the
+// ProcessExit handler outlives that block anyway.
+var commandStart = System.Diagnostics.Stopwatch.GetTimestamp();
+
+// TokenStore.LoadAsync() is the LOCAL read (src/Capacitor.Cli.Core/Auth/TokenStore.cs:211) —
+// deliberately not GetValidTokensAsync(), which can refresh over the network. `logged_in` is a
+// cheap fact about disk, never a reason to make a request on the command path.
+//
+// Gated on IsReportable: denylisted commands (chiefly `hook`, thousands of invocations/day on
+// the agent's critical path) never send `logged_in` — CliTelemetry.Initialize below disables
+// itself for them regardless — so the disk read has no consumer and is worth skipping outright.
+var loggedIn = false;
+if (CommandEvents.IsReportable(command)) {
+    try { loggedIn = await TokenStore.LoadAsync() is not null; } catch { }
+}
+
+// `kcap config set telemetry off` must never activate telemetry for the very invocation that
+// opts out: without this, Initialize below resolves Enabled from the not-yet-updated persisted
+// flag, mints a device id, shows the first-run notice, and queues cli_first_run — all before
+// ConfigCommand ever runs. Pre-apply the "off" to disk here so Initialize sees it already
+// persisted. Value recognition only (no throw on garbage — an invalid value is reported
+// normally once ConfigCommand actually dispatches); KCAP_TELEMETRY=1 still overrides a persisted
+// "off" exactly as it does everywhere else, since Resolve checks the env var first regardless of
+// what's on disk. ConfigCommand.TryApplyTelemetry re-applies the same (idempotent) change and
+// covers that override case with its own DiscardAndDisable.
+if (args.Length >= 4 && command == "config" && args[1] == "set" && args[2] == "telemetry"
+ && ConfigCommand.TryParseTelemetryToggle(args[3]) == false) {
+    TelemetryState.SetEnabled(false);
+}
+
+CliTelemetry.Initialize(command, baseUrl, loggedIn);
+
+AppDomain.CurrentDomain.ProcessExit += (_, _) => {
+    CliTelemetry.RecordCommand(command, args, Environment.ExitCode, CommandTiming.ElapsedMs(commandStart));
+    CliTelemetry.FlushAndClose().GetAwaiter().GetResult();
+};
 
 // Everything from here to the end of command dispatch — including the --help,
 // per-command-help, and no-server-configured early exits below — runs inside this

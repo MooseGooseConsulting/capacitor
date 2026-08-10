@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.Telemetry;
 using ProfileConfigJsonContextIndented = Capacitor.Cli.Core.Config.ProfileConfigJsonContextIndented;
 
 namespace Capacitor.Cli.Commands;
@@ -32,10 +33,26 @@ public static class ConfigCommand {
         await Console.Out.WriteLineAsync();
         await Console.Out.WriteLineAsync($"  Path: {AppConfig.GetConfigPath()}");
 
+        // Telemetry is machine-scoped (see TryApplyTelemetry), so it isn't part of the profile
+        // JSON above. Reporting the Reason alongside the state is what lets a user with an
+        // inherited DO_NOT_TRACK tell that apart from their own `config set telemetry off`.
+        var decision = TelemetrySettings.Resolve(TelemetryState.PersistedEnabled());
+        await Console.Out.WriteLineAsync($"  Telemetry: {(decision.Enabled ? "on" : "off")} (source: {decision.Reason})");
+
         return 0;
     }
 
     static async Task<int> Set(string key, string value, bool skipProbe) {
+        // Telemetry consent is a property of the machine, not of whichever profile happens to be
+        // active — switching profiles must never silently re-enable reporting. So it is
+        // special-cased ahead of the profile load, the same way server_url is normalized below.
+        if (TryApplyTelemetry(key, value)) {
+            await Console.Out.WriteLineAsync(
+                $"Set telemetry = {(TelemetryState.PersistedEnabled() is true ? "on" : "off")} (machine-wide)");
+
+            return 0;
+        }
+
         if (key == "server_url") {
             var result = await ServerUrlNormalizer.NormalizeAsync(
                 value, skipProbe, CancellationToken.None);
@@ -89,6 +106,49 @@ public static class ConfigCommand {
 
         return 0;
     }
+
+    /// <summary>
+    /// Handles the machine-scoped <c>telemetry</c> key. Unlike every other config key, telemetry
+    /// consent is deliberately NOT stored in the active <see cref="Profile"/>: it is a decision
+    /// about the machine being measured, not about whichever workspace happens to be selected, and
+    /// having it flip when a person switches profiles would be surprising at best and a dark
+    /// pattern at worst. So it is intercepted here, ahead of <see cref="ApplySet"/> and the profile
+    /// load, the same way <c>server_url</c> is intercepted in <see cref="Set"/> for normalisation.
+    /// Returns false for any other key so <see cref="Set"/> falls through to the profile path
+    /// unchanged, and <see cref="ApplySet"/> itself never learns the key exists.
+    /// </summary>
+    public static bool TryApplyTelemetry(string key, string value) {
+        if (key != "telemetry") return false;
+
+        var enabled = TryParseTelemetryToggle(value)
+            ?? throw new ArgumentException($"Invalid value for telemetry: '{value}'. Must be on or off.");
+
+        TelemetryState.SetEnabled(enabled);
+
+        // Belt-and-braces, not the primary defence: Program.cs's pre-Initialize check (see
+        // Program.cs, right before CliTelemetry.Initialize) already stops telemetry from ever
+        // activating for a plain `config set telemetry off`, so there is normally nothing left to
+        // discard by the time this runs. But KCAP_TELEMETRY=1 legitimately overrides a persisted
+        // "off" (finding: env outranks config), so Initialize can still have come up live despite
+        // the value being applied here — tear it down in that case too.
+        if (!enabled) CliTelemetry.DiscardAndDisable();
+
+        return true;
+    }
+
+    /// <summary>
+    /// Pure recognizer for the "telemetry" value vocabulary. Shared by <see cref="TryApplyTelemetry"/>
+    /// (which throws on an unrecognized value — invalid input is this command's problem to report)
+    /// and Program.cs's pre-<c>CliTelemetry.Initialize</c> short-circuit (which must NOT throw: an
+    /// invalid value there is reported normally once the command actually dispatches). Returns
+    /// null for anything unrecognized.
+    /// </summary>
+    internal static bool? TryParseTelemetryToggle(string value) =>
+        value.Trim().ToLowerInvariant() switch {
+            "on" or "true" or "1" or "yes"  => true,
+            "off" or "false" or "0" or "no" => false,
+            _                                => null,
+        };
 
     /// <summary>
     /// Applies a single <c>key = value</c> update to a <see cref="Profile"/>. Pure function, exposed for testing.
@@ -146,6 +206,7 @@ public static class ConfigCommand {
         Console.Error.WriteLine("  use_provider_api_key        Keep ANTHROPIC_API_KEY/OPENAI_API_KEY in headless agent spawns (true/false)");
         Console.Error.WriteLine("  excluded_repos              Excluded repos, comma-separated (owner/repo,owner/repo)");
         Console.Error.WriteLine("  flows.reviewer_vendor       Preferred review-flow reviewer vendor (used only when the definition names none)");
+        Console.Error.WriteLine("  telemetry                   Anonymous CLI usage reporting, machine-wide (on/off)");
         Console.Error.WriteLine();
         Console.Error.WriteLine("Flags:");
         Console.Error.WriteLine("  --no-probe                  Skip the reachability check when setting server_url");

@@ -13,6 +13,7 @@ using Capacitor.Cli.Core.Kiro;
 using Capacitor.Cli.Core.Mcp;
 using Capacitor.Cli.Core.OpenCode;
 using Capacitor.Cli.Core.Pi;
+using Capacitor.Cli.Core.Telemetry;
 using Spectre.Console;
 using Spectre.Console.Rendering;
 using Profile = Capacitor.Cli.Core.Config.Profile;
@@ -57,6 +58,11 @@ public static class SetupCommand {
         var legacyPluginScope = GetArg(args, "--plugin-scope"); // "user" | "project" | "skip" | null
         var skipClaude       = skipClaudeFlag || legacyPluginScope == "skip";
         var legacyProjectScope = legacyPluginScope == "project";
+
+        SetupFunnel.Started(
+            hasExistingProfile: (await AppConfig.LoadProfileConfig()).Profiles.Count > 0,
+            serverUrlProvided:  serverUrlArg is not null,
+            noPrompt:           noPrompt);
 
         // Resolve repo root once and reuse for both the project-scope install path and the
         // non-repo tip at the end. --plugin-scope project writes hooks at <repo>/.claude/...,
@@ -529,6 +535,18 @@ public static class SetupCommand {
 
         WriteNextSteps(ShouldOfferGuidedTour(detectedSummary is not null, claudeSettingsPath, stepPaths));
 
+        // Same fields as Result.AnyHooksInstalled, counted instead of OR'd: CodingAgentsStep
+        // doesn't surface a count directly, so this sums the per-vendor hook-install outcomes
+        // already tracked locally in installResult — vendor names themselves are never sent
+        // (see SetupFunnel.Succeeded).
+        var agentsConfigured = new[] {
+            installResult.ClaudeInstalled, installResult.CodexHooksInstalled, installResult.CursorHooksInstalled,
+            installResult.CopilotHooksInstalled, installResult.GeminiHooksInstalled, installResult.KiroHooksInstalled,
+            installResult.PiExtensionInstalled, installResult.OpenCodeExtensionInstalled, installResult.AntigravityHooksInstalled,
+        }.Count(installed => installed);
+
+        SetupFunnel.Succeeded(agentsConfigured);
+
         return 0;
     }
 
@@ -806,6 +824,14 @@ public static class SetupCommand {
         }
 
         var provider = OAuthLoginFlow.ChooseDiscoveryProvider(args, isInteractive: !HeadlessEnvironment.IsHeadless());
+        // WorkOS discovery always authenticates via a loopback browser (see
+        // WorkOSDiscovery.RunWithLiveAuthAsync's orglessLogin) — headless never switches it to a
+        // device flow the way GitHub App's AcquireGitHubTokenAsync does, so the label must not
+        // vary with headlessness for this provider.
+        var signinMode = provider == AuthProvider.WorkOS
+            ? "browser"
+            : HeadlessEnvironment.IsHeadless() ? "device" : "browser";
+        SetupFunnel.SigninOpened(signinMode, provider);
 
         if (provider == AuthProvider.WorkOS) {
             // Offer inline tenant creation only in an interactive session; headless
@@ -814,6 +840,9 @@ public static class SetupCommand {
                 ? null
                 : new SpectreTenantProvisioner(new TenantProvisioningClient(new HttpClient()), ProvisioningEndpoint.Url);
 
+            // Sign-in events fire inside WorkOSDiscovery.RunAsync itself, right after live auth
+            // succeeds/fails and before tenant enumeration begins — see the comment there for why
+            // anchoring on this call's return (ExitCode) would be wrong.
             var workosDiscovery = await WorkOSDiscovery.RunWithLiveAuthAsync(
                 AuthProxyEndpoint.Url, proxyConfig, proxyClient, new SpectreTenantPicker(), provisioner);
 
@@ -850,10 +879,20 @@ public static class SetupCommand {
 
         var ghToken = await OAuthLoginFlow.AcquireGitHubTokenAsync(
             proxyConfig.GitHubClientId, proxyConfig.GitHubCodeExchangeUrl, forceDevice);
-        if (ghToken is null) return null;
+        if (ghToken is null) {
+            SetupFunnel.SigninFailed("github_token_denied");
+            return null;
+        }
+        SetupFunnel.SigninCompleted(AuthProvider.GitHubApp);
 
         var discovery = new TenantDiscovery(proxyClient, new SpectreTenantPicker());
         var outcome   = await discovery.RunAsync(AuthProxyEndpoint.Url, ghToken);
+
+        // Keyed on the discriminator, not outcome.Tenants.Length == 0: a proxy-unreachable,
+        // token-rejected, or upstream-error outcome ALSO returns zero tenants, and those are
+        // discovery-service failures, not "authenticated but has no tenant" — the funnel's
+        // denominator would otherwise be inflated with outages that never reached signup.
+        if (outcome.NoTenantsFound) SetupFunnel.TenantNone(AuthProvider.GitHubApp);
 
         if (outcome.ErrorMessage is not null) {
             AnsiConsole.MarkupLine($"  [red]✗[/] {Markup.Escape(outcome.ErrorMessage)}");

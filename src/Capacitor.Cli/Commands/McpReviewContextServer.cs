@@ -29,6 +29,15 @@ static class McpReviewContextServer {
             return 2;
         }
 
+        // Deliberately uninstrumented, unlike its eight siblings: this sidecar's whole contract
+        // (see the class comment) is that it reaches nothing but its one capability URL and
+        // writes nothing to KCAP_CONFIG_DIR. Telemetry needs both — a persisted device id on
+        // disk and an outbound POST to the analytics endpoint — so wiring it here previously
+        // broke borrowed-review's sandboxed-egress and no-config-authority guarantees at once.
+        // Enforced by McpReviewContextServerIntegrationTests
+        // .Daemon_context_mode_starts_without_backend_and_performs_one_exact_get — don't add it
+        // back without re-reading why that test asserts an empty config dir.
+
         using var handler = new HttpClientHandler { AllowAutoRedirect = false, UseProxy = false };
         using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(10) };
         var tools = BuildToolsList();
