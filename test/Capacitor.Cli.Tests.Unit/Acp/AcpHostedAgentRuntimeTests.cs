@@ -31,6 +31,7 @@ public class AcpHostedAgentRuntimeTests {
         public bool HasExited      { get; private set; }
         public int? ExitCode       { get; private set; }
         public int  TerminateCalls { get; private set; }
+        public int  DisposeCalls   { get; private set; }
 
         /// <summary>Simulates the child process exiting on its own (no Terminate call).</summary>
         public void SignalExited(int exitCode = 0) {
@@ -54,7 +55,11 @@ public class AcpHostedAgentRuntimeTests {
             return Task.CompletedTask;
         }
 
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        public ValueTask DisposeAsync() {
+            DisposeCalls++;
+
+            return ValueTask.CompletedTask;
+        }
     }
 
     sealed class Harness : IAsyncDisposable {
@@ -549,5 +554,285 @@ public class AcpHostedAgentRuntimeTests {
 
         // Release the fake's held response so the harness can tear down cleanly.
         h.Fake.HoldSetConfigOptionResponse.TrySetResult();
+    }
+
+    // ── TerminationVerdict fused to the reap claim ─────────────────────────────────
+    // TryStartReap/TakeReap/FirstTurnSettledForTest are exercised directly (internal) rather than
+    // through HandleMcpSurfaceViolation/HandleUnexpectedUnattendedInteraction, so these tests can
+    // control claim/window timing deterministically instead of racing real ACP connection I/O.
+
+    /// <summary>A starter's synchronous prefix can throw (production: _cts.Cancel() racing a
+    /// disposed _cts). No verdict must survive that — and the claim must reopen for the next
+    /// caller, which then wins both the claim and the verdict.</summary>
+    [Test]
+    public async Task Verdict_published_only_on_successful_claim() {
+        await using var h = new Harness();
+
+        await Assert.That(() => h.Runtime.TryStartReap(
+                "first-reason", () => throw new InvalidOperationException("cancel failed")))
+            .Throws<InvalidOperationException>();
+
+        await Assert.That(h.Runtime.Verdict).IsNull();
+
+        var claimed = h.Runtime.TryStartReap("second-reason", () => Task.CompletedTask);
+
+        await Assert.That(claimed).IsTrue();
+        await Assert.That(h.Runtime.Verdict).IsNotNull();
+        await Assert.That(h.Runtime.Verdict!.Reason).IsEqualTo("second-reason");
+    }
+
+    /// <summary>ReadVerdict is a load-bearing PRODUCTION read (the finalizer decides LaunchFailed off
+    /// it), and its test-signal hook fires before the lock — a throwing hook must never make it throw
+    /// or skip the read. Asserts a faulting hook is swallowed and the current verdict still returns.</summary>
+    [Test]
+    public async Task ReadVerdict_swallows_a_throwing_test_hook_and_still_returns_the_verdict() {
+        await using var h = new Harness();
+
+        h.Runtime.TryStartReap("kiro_reviewer_mcp_surface_unexpected: violation", () => Task.CompletedTask);
+        h.Runtime.BeforeReadVerdictLockForTest = () => throw new InvalidOperationException("hook-fault");
+
+        var verdict = h.Runtime.ReadVerdict(); // must not throw despite the faulting hook
+
+        await Assert.That(verdict).IsNotNull();
+        await Assert.That(verdict!.Reason).Contains("kiro_reviewer_mcp_surface_unexpected");
+    }
+
+    /// <summary>The window bit must be read BEFORE the starter runs. Here the starter itself
+    /// settles the marker synchronously (standing in for production's _cts.Cancel() eventually
+    /// settling it via ProcessAdmittedTurnAsync's finally) — a snapshot taken anywhere other than
+    /// strictly before the starter runs would observe "settled" and misclassify.</summary>
+    [Test]
+    public async Task Window_bit_snapshotted_before_cancel() {
+        await using var h = new Harness();
+        h.StartFakeAgentLoop();
+
+        // Hold the prompt response so the first turn is genuinely still in flight when the reap is
+        // claimed below — nothing has settled the marker yet.
+        h.Fake.HoldPromptResponses = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        await h.Runtime.StartAsync("/abs/worktree", "review this", h.Cts.Token).WaitAsync(HangGuard);
+
+        var deadline = DateTime.UtcNow + HangGuard;
+        while (!h.Fake.ReceivedCalls.Any(c => c.Method == "session/prompt") && DateTime.UtcNow < deadline)
+            await Task.Delay(10);
+        await Assert.That(h.Fake.ReceivedCalls.Any(c => c.Method == "session/prompt")).IsTrue();
+        await Assert.That(h.Runtime.FirstTurnSettledForTest.Task.IsCompleted).IsFalse();
+
+        var claimed = h.Runtime.TryStartReap("reap-reason", () => {
+            h.Runtime.FirstTurnSettledForTest.TrySetResult();
+            return Task.CompletedTask;
+        });
+
+        await Assert.That(claimed).IsTrue();
+        await Assert.That(h.Runtime.Verdict!.ReapedInsideLaunchWindow).IsTrue();
+
+        h.Fake.HoldPromptResponses.TrySetResult();
+    }
+
+    /// <summary>Barrier contention: the winner is held inside its synchronous starter, so the claim
+    /// + window snapshot + verdict publish are all still inside _reapLock. A concurrent TakeReap()
+    /// (disposal's seam) and a concurrent second TryStartReap() call (the loser) must both block on
+    /// that same lock — TakeReap can never observe a claim with no published verdict/task, and the
+    /// loser can neither publish nor overwrite once it does get in.</summary>
+    [Test]
+    public async Task Concurrent_loser_cannot_publish_or_overwrite() {
+        await using var h = new Harness();
+
+        var winnerEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseWinner = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var winnerTask = Task.Run(() => h.Runtime.TryStartReap("winner-reason", () => {
+            winnerEntered.TrySetResult();
+            releaseWinner.Task.GetAwaiter().GetResult(); // synchronous block INSIDE _reapLock
+            return Task.CompletedTask;
+        }));
+
+        await winnerEntered.Task.WaitAsync(HangGuard);
+
+        // Explicit type argument: Task.Run would otherwise resolve TakeReap's Task? return via the
+        // Func<Task> "unwrap" overload (treating it as the work to await) instead of Func<Task?>
+        // (treating it as the RESULT), silently changing what takeTask represents.
+        var takeTask  = Task.Run<Task?>(() => h.Runtime.TakeReap());
+        var loserTask = Task.Run(() => h.Runtime.TryStartReap("loser-reason", () => Task.CompletedTask));
+
+        // Neither concurrent caller can have progressed past the lock yet.
+        await Task.Delay(200);
+        await Assert.That(takeTask.IsCompleted).IsFalse();
+        await Assert.That(loserTask.IsCompleted).IsFalse();
+
+        releaseWinner.TrySetResult();
+
+        await Assert.That(await winnerTask.WaitAsync(HangGuard)).IsTrue();
+        await Assert.That(await loserTask.WaitAsync(HangGuard)).IsFalse();
+
+        // A plain bool, not the Task value itself: TUnit's Assert.That special-cases a Task-typed
+        // value as something to further await, which collides with checking whether the reference
+        // came back null.
+        Task? takenReap = await takeTask.WaitAsync(HangGuard);
+        await Assert.That(takenReap is not null).IsTrue();
+
+        await Assert.That(h.Runtime.Verdict).IsNotNull();
+        await Assert.That(h.Runtime.Verdict!.Reason).IsEqualTo("winner-reason");
+    }
+
+    /// <summary>Finding 2: DisposeAsync latches _disposed BEFORE its early cancellation phase, and
+    /// only reaches the reap wait + connection/process disposal much later. If a cancellation callback
+    /// on _cts throws (cancellation callbacks can throw), the early phase must NOT abort teardown —
+    /// the child/streams would leak with retry impossible (the latch is set). This registers a
+    /// throwing callback so _cts.CancelAsync() faults, then asserts the child is STILL disposed and
+    /// the coded verdict still surfaces.</summary>
+    [Test]
+    public async Task DisposeAsync_early_cancellation_fault_still_disposes_child_and_keeps_verdict() {
+        await using var h = new Harness();
+
+        // Faults DisposeAsync's early phase at `await _cts.CancelAsync()`. The no-op reap starter below
+        // does NOT cancel _cts, so this callback fires only during DisposeAsync.
+        h.Runtime.RuntimeShutdownTokenForTest.Register(() => throw new InvalidOperationException("early-cancel-fault"));
+
+        h.Runtime.TryStartReap("kiro_reviewer_mcp_surface_unexpected: violation", () => Task.CompletedTask);
+        await Assert.That(h.Runtime.ReadVerdict()).IsNotNull(); // precondition: a verdict exists to preserve
+
+        // Pre-fix: the early fault aborts DisposeAsync before the guaranteed teardown, so the child is
+        // never disposed (DisposeCalls == 0). Post-fix the early phase is contained and teardown runs.
+        try { await h.Runtime.DisposeAsync(); } catch { /* pre-fix: the early fault propagates */ }
+
+        await Assert.That(h.Process.DisposeCalls).IsGreaterThan(0);  // child disposed despite the fault
+        await Assert.That(h.Runtime.ReadVerdict()).IsNotNull();      // coded verdict still surfaces
+    }
+
+    /// <summary>Finding 2 (round 3): the EARLY owner-cancel (`_ownerCts.Cancel()`) can throw too, and
+    /// it ran BEFORE the incarnation was captured under the lock and BEFORE the terminal/gate signals.
+    /// If a reconnect commits a SUCCESSOR incarnation in the window before the lock, a throwing owner
+    /// cancel left the STALE predecessor selected (successor leaked) and skipped the signals that
+    /// unpark parked waiters. Commits a successor right before the lock, faults the owner cancel, and
+    /// asserts the LIVE successor is disposed (not the predecessor) and the terminal signal fired.</summary>
+    [Test]
+    public async Task DisposeAsync_owner_cancel_fault_disposes_the_successor_and_fires_terminal_signal() {
+        await using var h = new Harness();
+
+        // A throwing owner CTS — the EARLY cancellation callback, distinct from the _cts.CancelAsync()
+        // the previous test faults.
+        var ownerCts = new CancellationTokenSource();
+        ownerCts.Token.Register(() => throw new InvalidOperationException("owner-cancel-fault"));
+        h.Runtime.SetOwnerCtsForTest(ownerCts);
+
+        h.Runtime.TryStartReap("kiro_reviewer_mcp_surface_unexpected: violation", () => Task.CompletedTask);
+
+        // Commit a reconnect SUCCESSOR right before DisposeAsync takes _reconnectLock — the window the
+        // round-2 code read `installed` before, so a stale-incarnation dispose would leak this one.
+        var successorProcess = new FakeAcpProcess();
+        h.Runtime.BeforeReconnectLockOnDisposeForTest =
+            () => h.Runtime.CommitSuccessorIncarnationForTest(successorProcess);
+
+        try { await h.Runtime.DisposeAsync(); } catch { /* pre-fix: the owner-cancel fault propagates */ }
+
+        await Assert.That(successorProcess.DisposeCalls).IsGreaterThan(0);        // the LIVE successor disposed
+        await Assert.That(h.Process.DisposeCalls).IsEqualTo(0);                   // the stale predecessor NOT disposed
+        await Assert.That(h.Runtime.RuntimeTerminalForTest.IsCompleted).IsTrue(); // terminal signal fired despite the fault
+    }
+
+    /// <summary>Bug 1: DisposeAsync's contained early phase must still SIGNAL the turn worker to exit
+    /// (cancel _cts AND complete _pendingTurns — the two things RunTurnWorkerAsync exits on) even when
+    /// `ownerCts.Cancel()` throws. Otherwise the worker parks forever on _pendingTurns.WaitToReadAsync
+    /// while teardown disposes its connection/process out from under it. Establishes a parked worker,
+    /// faults the owner cancel, and asserts the worker completed (not parked).</summary>
+    [Test]
+    public async Task DisposeAsync_owner_cancel_fault_still_unblocks_the_turn_worker() {
+        await using var h = new Harness();
+        h.StartFakeAgentLoop();
+
+        // No initial prompt → the single turn worker parks on _pendingTurns, still running.
+        await h.Runtime.StartAsync("/abs/worktree", initialPrompt: null, h.Cts.Token).WaitAsync(HangGuard);
+        await Assert.That(h.Runtime.TurnWorkerTaskForTest.IsCompleted).IsFalse(); // precondition: parked
+
+        var ownerCts = new CancellationTokenSource();
+        ownerCts.Token.Register(() => throw new InvalidOperationException("owner-cancel-fault"));
+        h.Runtime.SetOwnerCtsForTest(ownerCts);
+
+        try { await h.Runtime.DisposeAsync(); } catch { /* the fault is contained either way */ }
+
+        // Pre-fix: the owner-cancel throw skips _cts.CancelAsync() + both channel completions, so the
+        // worker stays parked (IsCompleted == false). Post-fix each cancel is independently guarded, so
+        // the worker is signaled and DisposeAsync's bounded wait sees it exit.
+        await Assert.That(h.Runtime.TurnWorkerTaskForTest.IsCompleted).IsTrue();
+    }
+
+    /// <summary>Reviewer launches always carry a prompt, but the window still needs a defined close
+    /// for a launch that doesn't — otherwise no turn ever runs, ProcessAdmittedTurnAsync's finally
+    /// never fires, and the marker (so the window) would stay open forever.</summary>
+    [Test]
+    public async Task Empty_initial_prompt_closes_window_at_handoff() {
+        await using var h = new Harness();
+        h.StartFakeAgentLoop();
+
+        await h.Runtime.StartAsync("/abs/worktree", "", h.Cts.Token).WaitAsync(HangGuard);
+
+        var claimed = h.Runtime.TryStartReap("reason", () => Task.CompletedTask);
+
+        await Assert.That(claimed).IsTrue();
+        await Assert.That(h.Runtime.Verdict!.ReapedInsideLaunchWindow).IsFalse();
+    }
+
+    /// <summary>Reap reasons can embed agent-controlled text (e.g. a JSON-RPC method from an inbound
+    /// frame), which may contain non-BMP characters — a raw UTF-16 code-unit slice at the cap can
+    /// land between a surrogate pair's two halves, leaving a lone surrogate in the forwarded string
+    /// (design spec §3.1). Nine filler chars put "😀" (U+1F600, a high+low surrogate pair) exactly
+    /// astride the cut: its high half at index maxLength-1, low half at index maxLength — precisely
+    /// the boundary a naive <c>oneLine[..maxLength]</c> would slice through.</summary>
+    [Test]
+    public async Task Sanitize_never_splits_surrogate_at_boundary() {
+        const int maxLength = 10;
+        var oneLine = new string('a', maxLength - 1) + char.ConvertFromUtf32(0x1F600) + "-well-past-the-cap";
+
+        // Precondition: the pair really does straddle the cut this test means to exercise.
+        await Assert.That(char.IsHighSurrogate(oneLine[maxLength - 1])).IsTrue();
+        await Assert.That(char.IsLowSurrogate(oneLine[maxLength])).IsTrue();
+
+        var result = AcpHostedAgentRuntime.SanitizeForForward(oneLine, maxLength);
+
+        await Assert.That(result.All(c => !char.IsHighSurrogate(c) && !char.IsLowSurrogate(c))).IsTrue();
+        await Assert.That(result.Length).IsLessThanOrEqualTo(maxLength + 1); // +1 for the "…" suffix
+        await Assert.That(result).EndsWith("…");
+    }
+
+    /// <summary>Line breaks collapse to spaces (<c>ReplaceLineEndings</c>) before the cap is ever
+    /// applied, so a coded reason's prefix — e.g. the <c>unattended_interaction_forbidden:{method}</c>
+    /// shape writers use (design spec §3.1) — survives at the front and no raw line-break character
+    /// remains anywhere in the result.</summary>
+    [Test]
+    public async Task Sanitize_collapses_multiline_input_and_keeps_the_code_prefix() {
+        const string prefix = "unattended_interaction_forbidden:tools/call";
+        var input = $"{prefix}\nsecond line\r\nthird line";
+
+        var result = AcpHostedAgentRuntime.SanitizeForForward(input);
+
+        await Assert.That(result).StartsWith(prefix);
+        await Assert.That(result).DoesNotContain("\n");
+        await Assert.That(result).DoesNotContain("\r");
+    }
+
+    /// <summary>Truncation only ever trims the TAIL, so an oversized single-line reason keeps its
+    /// leading coded prefix intact — the reason a caller can rely on the prefix for classification
+    /// even when the full message got capped.</summary>
+    [Test]
+    public async Task Sanitize_of_an_oversized_reason_keeps_the_leading_coded_prefix() {
+        const string prefix = "unattended_interaction_forbidden:tools/call";
+        var input = prefix + new string('x', 600); // well past the 500-char default cap
+
+        var result = AcpHostedAgentRuntime.SanitizeForForward(input);
+
+        await Assert.That(result).StartsWith(prefix);
+        await Assert.That(result).EndsWith("…");
+        await Assert.That(result.Length).IsLessThanOrEqualTo(501); // default maxLength(500) + "…"
+    }
+
+    /// <summary>The back-off reads <c>oneLine[maxLength - 1]</c> — guards against a non-positive cap
+    /// underflowing that index instead of just falling through to the pre-fix (already-safe)
+    /// substring behavior.</summary>
+    [Test]
+    public async Task Sanitize_with_a_non_positive_cap_does_not_throw() {
+        var result = AcpHostedAgentRuntime.SanitizeForForward("anything at all", maxLength: 0);
+
+        await Assert.That(result).IsEqualTo("…");
     }
 }

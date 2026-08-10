@@ -139,6 +139,17 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
         }
     }
 
+    readonly TaskCompletionSource _initializeReceived = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// <summary>Completes the instant the fake RECORDS an <c>initialize</c> call — an awaitable,
+    /// deterministic replacement for a wall-clock poll of <see cref="ReceivedCalls"/>. A reap test
+    /// awaits this to prove the runtime actually reached (and the fake observed) the initialize stage
+    /// before it triggers the reap, so "reap DURING initialize" is a recorded fact rather than a timing
+    /// hope. On a POSIX host the runtime always sends initialize during a review launch, so this always
+    /// fires; a runtime that never sent it would hang the await, which is the regression the awaiting
+    /// tests still catch.</summary>
+    public Task InitializeReceived => _initializeReceived.Task;
+
     public FakeAcpAgent() {
         _agentReadsFromConnection = _toAgent.Reader.AsStream();
         _agentWritesToConnection  = _toClient.Writer.AsStream();
@@ -598,6 +609,11 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
     void Record(string method, JsonElement? @params) {
         lock (_receivedCallsLock)
             _receivedCalls.Add((method, @params));
+
+        // Fire the initialize signal so a test can await it being provably RECORDED instead of polling
+        // ReceivedCalls on a wall-clock bound. TrySetResult is idempotent — a second initialize (never
+        // sent in these fixtures) is harmless.
+        if (method == "initialize") _initializeReceived.TrySetResult();
     }
 
     // ---- probe-confirmed canned response shapes (docs/acp-probe-findings.md) ----
