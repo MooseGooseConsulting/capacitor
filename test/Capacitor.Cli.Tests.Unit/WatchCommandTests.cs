@@ -847,6 +847,63 @@ public class UpdateClaudePendingToolCallsTests {
     }
 }
 
+// Codex counterpart of ClaudeToolTrackingSourceTests: both trackers must read the drain's RAW
+// lines, because RedactLine's oversize placeholder carries no call_id and no recognised type (#528).
+public class CodexToolTrackingSourceTests {
+    // The tracker reads RAW lines, which are unbounded — so unlike when it read the 64 KiB-bounded
+    // redacted list, it must not run for vendors whose transcripts it can never match. Both roles
+    // for codex: a collab child needs it too, for ShouldPostSubagentStop.
+    [Test]
+    [Arguments("codex",  true)]
+    [Arguments("claude", false)]
+    [Arguments("cursor", false)]
+    [Arguments("gemini", false)]
+    public async Task TracksCodexToolCalls_only_for_codex(string vendor, bool expected) =>
+        await Assert.That(WatchCommand.TracksCodexToolCalls(vendor)).IsEqualTo(expected);
+
+    const string FunctionCall =
+        """{"type":"response_item","payload":{"type":"function_call","call_id":"call_big","name":"shell","arguments":"{}"}}""";
+
+    static string OversizedFunctionCallOutput() =>
+        "{\"type\":\"response_item\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"call_big\",\"output\":\""
+      + new string('x', SecretRedactor.MaxRedactableLineChars + 1024)
+      + "\"}}";
+
+    // A stranded call_id pins toolInFlight true, and for Codex the idle timeout is the only
+    // per-conversation session-end path — so the session stays Active forever.
+    [Test]
+    public async Task RedactedLines_StrandTheCallId_ButRawLinesClearIt() {
+        var viaRedacted = new HashSet<string>(StringComparer.Ordinal);
+        WatchCommand.UpdateCodexPendingToolCalls(viaRedacted, SecretRedactor.RedactLine(FunctionCall));
+        WatchCommand.UpdateCodexPendingToolCalls(viaRedacted, SecretRedactor.RedactLine(OversizedFunctionCallOutput()));
+
+        await Assert.That(viaRedacted.Contains("call_big")).IsTrue();
+
+        var viaRaw = new HashSet<string>(StringComparer.Ordinal);
+        WatchCommand.UpdateCodexPendingToolCalls(viaRaw, FunctionCall);
+        WatchCommand.UpdateCodexPendingToolCalls(viaRaw, OversizedFunctionCallOutput());
+
+        await Assert.That(viaRaw.Count).IsEqualTo(0);
+    }
+
+    // Other direction on the same placeholder: an unrecognised response_item leaves a re-engaged
+    // child looking finished, so it is reported stopped while still working.
+    [Test]
+    public async Task RedactedResponseItem_FailsToReopenTheTurn_ButTheRawOneDoes() {
+        var viaRedacted = new CodexSubagentTurnTracker();
+        viaRedacted.Observe("""{"type":"event_msg","payload":{"type":"task_complete"}}""");
+        viaRedacted.Observe(SecretRedactor.RedactLine(OversizedFunctionCallOutput()));
+
+        await Assert.That(viaRedacted.TurnCompleted).IsTrue();
+
+        var viaRaw = new CodexSubagentTurnTracker();
+        viaRaw.Observe("""{"type":"event_msg","payload":{"type":"task_complete"}}""");
+        viaRaw.Observe(OversizedFunctionCallOutput());
+
+        await Assert.That(viaRaw.TurnCompleted).IsFalse();
+    }
+}
+
 public class ClaudeToolTrackingSourceTests {
     const string ToolUse =
         """{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_big","name":"Bash","input":{"command":"build"}}]}}""";
