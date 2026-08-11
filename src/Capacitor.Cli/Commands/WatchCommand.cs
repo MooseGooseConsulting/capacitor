@@ -464,16 +464,10 @@ static partial class WatchCommand {
 
         // Idle grace between a Codex collab child's task_complete and its live
         // subagent-stop POST (codex child watchers only — see the loop's stop check). The
-        // agent type is read lazily from the child rollout's own header, once. The seed
-        // rebuilds turn/pending state from the acknowledged prefix, which a restarted
-        // watcher's watermark-resumed drain would otherwise never re-deliver.
+        // agent type is read lazily from the child rollout's own header, once.
         var     codexSubagentStopGrace   = CodexSubagentTurnTracker.ResolveStopGrace(Environment.GetEnvironmentVariable("KCAP_CODEX_SUBAGENT_IDLE_MINUTES"));
         string? codexChildAgentType      = null;
         var     codexStopNextAttemptAt   = DateTimeOffset.MinValue;
-
-        if (vendor == "codex" && agentId is not null) {
-            SeedCodexSubagentTurnState(state, transcriptPath);
-        }
 
         if (skipTitle) {
             state.TitleGenerated = true;
@@ -643,11 +637,19 @@ static partial class WatchCommand {
             cts.Cancel();
         }
 
-        // Resumed past a tool that opened before the cursor: rebuild the in-flight set so the idle
-        // ceiling doesn't mistake a running subagent for an idle one. Only reachable on a resume.
-        if (TracksClaudeToolCalls(vendor, isSessionWatcher: agentId is null) && state.LinesProcessed > 0) {
-            await BackfillClaudePendingToolCallsAsync(
-                state.PendingClaudeToolCalls, transcriptPath, state.LinesProcessed, cts.Token);
+        // Resumed past a tool that opened before the cursor: rebuild the in-flight set so idle-end
+        // doesn't mistake a running agent for an idle one. Only reachable on a resume — at line 0
+        // the drain delivers the whole file and folds it itself.
+        if (state.LinesProcessed > 0) {
+            if (TracksClaudeToolCalls(vendor, isSessionWatcher: agentId is null)) {
+                await BackfillClaudePendingToolCallsAsync(
+                    state.PendingClaudeToolCalls, transcriptPath, state.LinesProcessed, cts.Token);
+            }
+
+            if (TracksCodexToolCalls(vendor)) {
+                await BackfillCodexWatcherStateAsync(
+                    state, transcriptPath, isChildWatcher: agentId is not null, state.LinesProcessed, cts.Token);
+            }
         }
 
         // Gemini fires no subagent hooks, so the parent watcher discovers nested subagent
@@ -1156,30 +1158,34 @@ static partial class WatchCommand {
     }
 
     /// <summary>
-    /// Startup restart-recovery for a Codex collab CHILD watcher's live-stop state:
-    /// a restarted watcher resumes from the server watermark
-    /// (<c>WatcherConnect</c>), so the drain never re-delivers already-acknowledged lines —
-    /// including the <c>task_complete</c> that should drive the live stop. Without this
-    /// seed, a child watcher dying between that ack and the grace-delayed stop POST left
-    /// the card spinning until the parent-end teardown. Folds the rollout's full on-disk
-    /// prefix through both the turn tracker and the pending-call set; the first drain
-    /// re-observing the unacknowledged suffix is harmless — both folds converge on the
-    /// same last-state. Best-effort: an unreadable rollout just leaves fresh-start state
-    /// (the pre-seed behavior), with the parent-end teardown as backstop.
+    /// Codex's counterpart to <see cref="BackfillClaudePendingToolCallsAsync"/>, same window and
+    /// fail-soft properties. Both roles need the pending set — a <c>function_call</c> that opened
+    /// before the cursor writes nothing until its output lands, so a session watcher would read
+    /// <c>toolInFlight</c> false and idle-end a live session. Turn state is child-only: nothing
+    /// else re-delivers the acknowledged <c>task_complete</c> that arms the live stop.
     /// </summary>
-    internal static void SeedCodexSubagentTurnState(WatchState state, string transcriptPath) {
-        try {
-            using var fs     = new FileStream(transcriptPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-            using var reader = new StreamReader(fs);
+    internal static async Task BackfillCodexWatcherStateAsync(
+            WatchState state, string transcriptPath, bool isChildWatcher, int upToLine, CancellationToken ct) {
+        if (ct.IsCancellationRequested) return;
 
-            while (reader.ReadLine() is { } line) {
-                if (string.IsNullOrWhiteSpace(line)) continue;
+        var firstParsedLine = Math.Max(0, upToLine - ToolBackfillWindowLines);
+
+        try {
+            await using var stream = new FileStream(transcriptPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var       reader = new StreamReader(stream);
+
+            for (var lineNumber = 0; lineNumber < upToLine; lineNumber++) {
+                if (await reader.ReadLineAsync(ct) is not { } line) break;
+                if (lineNumber < firstParsedLine) continue;
 
                 UpdateCodexPendingToolCalls(state.PendingCodexToolCalls, line);
-                state.CodexSubagentTurn.Observe(line);
+
+                if (isChildWatcher) state.CodexSubagentTurn.Observe(line);
             }
-        } catch {
-            // Missing/locked rollout — seed is best-effort, see doc comment.
+        } catch (OperationCanceledException) {
+            // Shutdown racing startup — expected, and not worth a log line.
+        } catch (Exception ex) {
+            Log($"Codex watcher-state backfill skipped: {ex.Message}");
         }
     }
 
@@ -1449,19 +1455,20 @@ static partial class WatchCommand {
         vendor == "claude" && !isSessionWatcher;
 
     /// <summary>
-    /// How far back from the resume cursor <see cref="BackfillClaudePendingToolCallsAsync"/> parses.
-    /// An unfinished tool sits at the tail by construction — nothing is appended between its
-    /// <c>tool_use</c> and the matching <c>tool_result</c> — so older lines are settled and parsing
-    /// them only costs startup latency. Bounding also stops a stale unmatched <c>tool_use</c> from
-    /// an interrupted turn stranding an id and suppressing the ceiling forever.
+    /// How far back from the resume cursor the tool-call backfills parse. An unfinished tool sits
+    /// at the tail by construction — nothing is appended between the call and its result — so older
+    /// lines are settled and parsing them only costs startup latency. Bounding also stops a stale
+    /// unmatched call from an interrupted turn stranding an id and suppressing idle-end forever.
+    /// Shared by the Claude and Codex backfills: same rationale, and nothing about the number is
+    /// vendor-specific.
     /// </summary>
-    internal const int ClaudeToolBackfillWindowLines = 512;
+    internal const int ToolBackfillWindowLines = 512;
 
     /// <summary>
     /// Rebuilds the in-flight set from the transcript lines before a resume cursor. A watcher that
     /// reconnects mid-tool starts draining at the server's line position and never sees the
     /// <c>tool_use</c> that opened before it, so the set would come up empty and the ceiling would
-    /// treat a live subagent as idle. Parses only the last <see cref="ClaudeToolBackfillWindowLines"/>
+    /// treat a live subagent as idle. Parses only the last <see cref="ToolBackfillWindowLines"/>
     /// lines before <paramref name="upToLine"/>; everything from the cursor on arrives through the
     /// normal drain. Opened <c>FileShare.ReadWrite</c>: the agent is still writing this file.
     /// Failure is a no-op, never fatal — losing the backstop beats failing a watcher's startup.
@@ -1470,7 +1477,7 @@ static partial class WatchCommand {
             HashSet<string> pending, string transcriptPath, int upToLine, CancellationToken ct) {
         if (ct.IsCancellationRequested) return;
 
-        var firstParsedLine = Math.Max(0, upToLine - ClaudeToolBackfillWindowLines);
+        var firstParsedLine = Math.Max(0, upToLine - ToolBackfillWindowLines);
 
         try {
             await using var stream = new FileStream(transcriptPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
@@ -1912,7 +1919,7 @@ static partial class WatchCommand {
             // (task_complete vs renewed activity) so the polling loop can post a live
             // subagent-stop once the child is done + idle. Raw lines here too, in the other
             // direction: a redacted response_item reads as no activity, so a re-engaged child
-            // would be reported stopped while working. Matches SeedCodexSubagentTurnState.
+            // would be reported stopped while working. Matches BackfillCodexWatcherStateAsync.
             if (vendor == "codex" && agentId is not null) {
                 foreach (var line in drainRead.Lines) {
                     state.CodexSubagentTurn.Observe(line);
