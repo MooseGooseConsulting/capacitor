@@ -439,7 +439,7 @@ public class EvalServiceTests {
                                 {"score":4,"verdict":"pass","finding":".","retain_fact":"User skips tests for small fixes."}
                                 """;
 
-        await Assert.That(EvalService.ExtractRetainFact(response)).IsEqualTo("User skips tests for small fixes.");
+        await Assert.That(EvalService.ExtractRetainFact(response)?.Fact).IsEqualTo("User skips tests for small fixes.");
     }
 
     [Test]
@@ -450,7 +450,74 @@ public class EvalServiceTests {
                                 ```
                                 """;
 
-        await Assert.That(EvalService.ExtractRetainFact(response)).IsEqualTo("Agent writes tests first.");
+        await Assert.That(EvalService.ExtractRetainFact(response)?.Fact).IsEqualTo("Agent writes tests first.");
+    }
+
+    [Test]
+    public async Task ExtractRetainFact_string_shape_has_no_applicability() {
+        const string response = """{"retain_fact":"A plain string fact."}""";
+        var rf = EvalService.ExtractRetainFact(response);
+        await Assert.That(rf?.Fact).IsEqualTo("A plain string fact.");
+        await Assert.That(rf!.Value.AppliesToVendors).IsNull();
+        await Assert.That(rf!.Value.AppliesToSessionKinds).IsNull();
+    }
+
+    [Test]
+    public async Task ExtractRetainFact_object_shape_reads_fact_and_both_axes() {
+        const string response = """
+                                {"retain_fact":{"fact":"Codex apply_patch rejects fuzzy hunks.","applies_to_vendors":["codex"],"applies_to_session_kinds":["flow_participant"]}}
+                                """;
+        var rf = EvalService.ExtractRetainFact(response);
+        await Assert.That(rf?.Fact).IsEqualTo("Codex apply_patch rejects fuzzy hunks.");
+        await Assert.That(rf!.Value.AppliesToVendors).IsEquivalentTo(["codex"]);
+        await Assert.That(rf!.Value.AppliesToSessionKinds).IsEquivalentTo(["flow_participant"]);
+    }
+
+    [Test]
+    public async Task ExtractRetainFact_object_shape_one_axis_only() {
+        const string response = """{"retain_fact":{"fact":"F","applies_to_vendors":["claude","codex"]}}""";
+        var rf = EvalService.ExtractRetainFact(response);
+        await Assert.That(rf?.Fact).IsEqualTo("F");
+        await Assert.That(rf!.Value.AppliesToVendors).IsEquivalentTo(["claude", "codex"]);
+        await Assert.That(rf!.Value.AppliesToSessionKinds).IsNull(); // omitted axis = null
+    }
+
+    [Test]
+    public async Task ExtractRetainFact_object_empty_array_axis_becomes_null() {
+        const string response = """{"retain_fact":{"fact":"F","applies_to_vendors":[]}}""";
+        var rf = EvalService.ExtractRetainFact(response);
+        await Assert.That(rf?.Fact).IsEqualTo("F");
+        await Assert.That(rf!.Value.AppliesToVendors).IsNull(); // empty = no restriction
+    }
+
+    [Test]
+    public async Task ExtractRetainFact_object_malformed_axis_drops_that_axis_keeps_fact() {
+        const string response = """{"retain_fact":{"fact":"F","applies_to_vendors":[1,2],"applies_to_session_kinds":["interactive"]}}""";
+        var rf = EvalService.ExtractRetainFact(response);
+        await Assert.That(rf?.Fact).IsEqualTo("F");
+        await Assert.That(rf!.Value.AppliesToVendors).IsNull(); // non-string element → whole axis dropped
+        await Assert.That(rf!.Value.AppliesToSessionKinds).IsEquivalentTo(["interactive"]); // other axis survives
+    }
+
+    [Test]
+    public async Task ExtractRetainFact_object_without_fact_is_null() {
+        const string response = """{"retain_fact":{"applies_to_vendors":["codex"]}}""";
+        await Assert.That(EvalService.ExtractRetainFact(response)).IsNull();
+    }
+
+    [Test]
+    public async Task ExtractRetainFact_trims_applicability_values() {
+        const string response = """{"retain_fact":{"fact":"F","applies_to_vendors":["  codex  "]}}""";
+        var rf = EvalService.ExtractRetainFact(response);
+        await Assert.That(rf!.Value.AppliesToVendors).IsEquivalentTo(["codex"]); // trimmed to match server filter
+    }
+
+    [Test]
+    public async Task ExtractRetainFact_caps_oversized_applicability_array() {
+        var many = string.Join(",", Enumerable.Range(0, 40).Select(i => "\"v" + i + "\""));
+        var response = "{\"retain_fact\":{\"fact\":\"F\",\"applies_to_vendors\":[" + many + "]}}";
+        var rf = EvalService.ExtractRetainFact(response);
+        await Assert.That(rf!.Value.AppliesToVendors!.Length).IsEqualTo(16); // capped
     }
 
     [Test]
@@ -502,6 +569,16 @@ public class EvalServiceTests {
     [Test]
     public async Task ExtractRetainFact_returns_null_when_response_is_malformed() {
         await Assert.That(EvalService.ExtractRetainFact("not json")).IsNull();
+    }
+
+    [Test]
+    [Arguments("\"just a bare string\"")]
+    [Arguments("[1,2,3]")]
+    [Arguments("42")]
+    [Arguments("true")]
+    public async Task ExtractRetainFact_valid_json_non_object_root_is_null_not_throw(string response) {
+        // TryGetProperty throws on a non-object root; the parser must guard and return null, not throw.
+        await Assert.That(EvalService.ExtractRetainFact(response)).IsNull();
     }
 
     // ── ParseRetrospective / BuildRetrospectivePrompt ──────────────────────
