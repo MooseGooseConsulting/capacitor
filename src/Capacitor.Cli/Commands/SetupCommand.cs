@@ -338,8 +338,8 @@ public static class SetupCommand {
             InstallAntigravityHooks:  PluginCommand.InstallAntigravityHooks,
             EnableCodexNetworkAccess: () => CodexConfigToml.EnableNetworkAccess(codexAllowDomains),
             RegisterCodexMcp:         () => CodexConfigToml.RegisterKcapMcpServers(),
-            // every non-Claude JSON harness registers the ForCursor subset — kcap-workitems
-            // is a Claude Code plugin-only tool (its session-id default rides the Claude hook env).
+            // every non-Claude JSON harness registers the ForCursor subset — the full set,
+            // kcap-workitems included (see KcapMcpServers.ForCursor).
             RegisterCursorMcp:        () => HarnessMcpProjections.Cursor.Register(CursorPaths.UserMcpJson()),
             RegisterCopilotMcp:       () => HarnessMcpProjections.Copilot.Register(CopilotPaths.McpConfigJson()),
             InstallCopilotInstructions: () => AgentInstructionsWriter.Write(
