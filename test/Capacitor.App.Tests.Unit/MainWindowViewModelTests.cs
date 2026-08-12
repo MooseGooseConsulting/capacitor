@@ -1,3 +1,4 @@
+using System.Reactive.Subjects;
 using System.Reactive.Threading.Tasks;
 using Avalonia.Media;
 using Capacitor.App.Services;
@@ -268,6 +269,56 @@ public class MainWindowViewModelTests {
 
             service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
             await Assert.That(vm.StartMessage).IsNull();
+        });
+    }
+
+    // spec §6: ILifecycleSurface.Status one-liners ride the same StartMessage lane.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Lifecycle_status_sets_and_is_cleared_like_a_start_failure() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var service = new FakeDaemonClientService();
+            var (actions, _) = NewActions(service);
+            var lifecycleStatus = new Subject<string?>();
+            var vm = new MainWindowViewModel(
+                service, actions, new FakeTicker(), CancellationToken.None, TestActivity.New(),
+                lifecycleStatus: lifecycleStatus);
+            using var activation = vm.Activator.Activate();
+
+            lifecycleStatus.OnNext("daemon started, app not yet attached — retrying");
+            await Assert.That(vm.StartMessage).IsEqualTo("daemon started, app not yet attached — retrying");
+
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+            await Assert.That(vm.StartMessage).IsNull(); // same Connected-transition clear RunStartAsync's own message gets
+        });
+    }
+
+    // spec §4.4: StartDaemonCommand is repointed to the service-aware
+    // DaemonLifecycleController.StartActionAsync when the composition root supplies one — the
+    // plain detached StartDaemonAsync is a fallback for callers with no live controller, not the
+    // production path.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task StartDaemonCommand_invokes_the_supplied_startAction_instead_of_StartDaemonAsync() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var service = new FakeDaemonClientService();
+            var (actions, _) = NewActions(service);
+            var calls = 0;
+            CancellationToken? seen = null;
+            Task StartAction(CancellationToken ct) {
+                calls++;
+                seen = ct;
+                return Task.CompletedTask;
+            }
+            using var cts = new CancellationTokenSource();
+            var vm = new MainWindowViewModel(service, actions, new FakeTicker(), cts.Token, TestActivity.New(), StartAction);
+
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
+            await vm.StartDaemonCommand.Execute().ToTask();
+
+            await Assert.That(calls).IsEqualTo(1);
+            await Assert.That(seen).IsEqualTo(cts.Token);
+            await Assert.That(service.StartDaemonCallCount).IsEqualTo(0);
         });
     }
 

@@ -1,3 +1,4 @@
+using System.Reactive.Subjects;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
@@ -8,16 +9,31 @@ using Avalonia.Threading;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.App.Views;
+using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.LocalIpc;
 
 namespace Capacitor.App;
 
 public partial class App : Application {
+    // spec §3.6: app shutdown WAITS (does not cancel) for an in-flight lifecycle mutation, but
+    // only up to this cap — an internally-triggered mutation (startup matrix, skew, txn-requery)
+    // has no other shutdown-token wiring, so an uncapped wait could hang shutdown forever.
+    static readonly TimeSpan QuiesceShutdownCap = TimeSpan.FromSeconds(60);
+
     // Linked to the app's shutdown sequence below; the token StartDaemonCommand's WAIT is
     // built against (Task 4 carry-note: never CancellationToken.None — an unbounded wait would
     // survive app exit).
     readonly CancellationTokenSource _shutdown = new();
     DaemonClientService? _service; // concrete type: IAsyncDisposable is not on the interface
+    // spec: subscribed and Start()'d BEFORE _service.Start() begins pumping (subscribe-before-
+    // pump — DaemonLifecycleController.Start's own doc comment). Disposed before _service in every
+    // teardown path below: it's the dependent (subscribes to _service's streams), so it goes first.
+    DaemonLifecycleController? _lifecycle;
+    // spec: no disposal needed — it holds no subscription of its own, only a one-shot
+    // await chain against BuildLifecycleController's cliPath/probe/store/surface and _shutdown.Token,
+    // so cancelling _shutdown (every teardown path below already does) is what stops it.
+    ShimOfferCoordinator? _shimOffer;
     // Assigned by StartAsync's success path only; every one is still null on a startup failure
     // (and cleared again by the catch, which disposes whatever had been built). Teardown —
     // shutdown and startup-failure alike — disposes them in reverse creation order, tray icon
@@ -70,14 +86,37 @@ public partial class App : Application {
     async Task StartAsync(IClassicDesktopStyleApplicationLifetime desktop) {
         try {
             var service = await DaemonClientService.CreateDefaultAsync();
-            service.Start();
-            _service = service;
 
             // One LocalControlOps and one AppNotifier for the whole app: the tray menu and the
             // window rows share a single stop/open-in-web code path (spec §7) and a single
-            // toast/stderr channel (spec §11).
+            // toast/stderr channel (spec §11). notifier is built here (not after service.Start()
+            // below) because PauseController/AgentActionService, constructed further down, need it.
             var ops = new LocalControlOps(service.DaemonName);
             var notifier = new AppNotifier();
+
+            // spec: BehaviorSubjects, not plain Subjects — MainWindowViewModel and
+            // TrayViewModel don't exist yet at this point in StartAsync (built further down), so a
+            // BehaviorSubject replays its latest value to whichever one subscribes later, meaning a
+            // Status/Attention call this early (the startup-phase reconciliation, e.g.) is never
+            // silently dropped for having no subscriber yet.
+            var lifecycleStatus    = new BehaviorSubject<string?>(null);
+            var lifecycleAttention = new BehaviorSubject<string?>(null);
+
+            // spec subscribe-before-pump: the controller's attach subscription must be live
+            // BEFORE service.Start() begins pumping, or the startup phase could miss the very
+            // first terminal outcome it hinges on (DaemonLifecycleController.Start's own comment).
+            var (lifecycle, shimOffer) = BuildLifecycleController(service, lifecycleStatus.OnNext, lifecycleAttention.OnNext);
+            lifecycle.Start();
+            _lifecycle = lifecycle;
+            // Task 24: unlike lifecycle's Start(), subscribe-before-run doesn't matter here —
+            // Offerable is a BehaviorSubject, so TrayViewModel (built further below) still sees
+            // the current value the moment it subscribes.
+            shimOffer.Start();
+            _shimOffer = shimOffer;
+
+            service.Start();
+            _service = service;
+
             var ticker = new UiTicker();
             _ticker = ticker;
             _pause = new PauseController(ops, notifier.Notify, _shutdown.Token);
@@ -106,7 +145,8 @@ public partial class App : Application {
                 Notifier = notifier,
             });
 
-            _coordinator = new MainWindowCoordinator(() => BuildAndShowMainWindow(service, actions, notifier, ticker, _shutdown.Token, activity));
+            _coordinator = new MainWindowCoordinator(
+                () => BuildAndShowMainWindow(service, actions, notifier, ticker, _shutdown.Token, activity, lifecycle.StartActionAsync, lifecycleStatus));
             // A shutdown that started before this continuation resumed already ran its first
             // pass against a null coordinator, so a window built now must never be
             // close-protected (BeginShutdownPass's rule 1 is the general defense; this is the
@@ -119,7 +159,9 @@ public partial class App : Application {
             // tray icon ever created, leaving the error window as the only surface.
             _trayVm = new TrayViewModel(
                 service, _pause, actions, consent, openMainWindow: _coordinator.ShowMainWindow,
-                quit: () => desktop.TryShutdown(), openReviewPrompts: _promptCoordinator.ShowPromptWindow);
+                quit: () => desktop.TryShutdown(), openReviewPrompts: _promptCoordinator.ShowPromptWindow,
+                lifecycleAttention: lifecycleAttention, shimOfferable: shimOffer.Offerable,
+                installShim: shimOffer.RunManualInstallAsync);
             _tray = new TrayIconManager(this, _trayVm);
         } catch (Exception ex) {
             // BEFORE any await: a shutdown request can arrive while cleanup below is still
@@ -130,10 +172,13 @@ public partial class App : Application {
             // must not intercept anything from here on — every close on this path is a real one.
             if (_coordinator is not null) _coordinator.QuitInProgress = true;
             Console.Error.WriteLine($"kcap app failed to start: {ex}");
-            await HandleStartupFailureAsync(desktop, ex, _service, _shutdown, [_tray, _trayVm, _promptCoordinator, _consent, _activity, _pause]);
+            await HandleStartupFailureAsync(
+                desktop, ex, _service, _shutdown, [_tray, _trayVm, _promptCoordinator, _consent, _activity, _pause], _lifecycle);
             // all already disposed above — never let a later OnShutdownRequested (e.g. Cmd+Q
             // while the error window is up) dispose any of them a second time
             _service = null;
+            _lifecycle = null;
+            _shimOffer = null; // no disposal of its own (see field comment) — just drop the reference
             _tray = null;
             _trayVm = null;
             _promptCoordinator = null;
@@ -153,7 +198,19 @@ public partial class App : Application {
     // entirely, so nothing else would ever run this cleanup.
     internal static async Task HandleStartupFailureAsync(
             IClassicDesktopStyleApplicationLifetime desktop, Exception ex, DaemonClientService? service,
-            CancellationTokenSource shutdown, IReadOnlyList<IDisposable?> uiDisposables) {
+            CancellationTokenSource shutdown, IReadOnlyList<IDisposable?> uiDisposables,
+            DaemonLifecycleController? lifecycle = null) {
+        // The dependent goes first (it subscribes to service's streams) — same ordering rule as
+        // the normal shutdown path below. Its own DisposeAsync cancels its independent lifetime
+        // token and waits out any mutation it started; that wait is unbounded here on purpose — a
+        // startup failure has no live UI to defer against, so there is nothing to keep responsive.
+        if (lifecycle is not null) {
+            try {
+                await lifecycle.DisposeAsync();
+            } catch (Exception disposeEx) {
+                Console.Error.WriteLine($"kcap app failed to dispose the daemon lifecycle controller during startup-failure cleanup: {disposeEx}");
+            }
+        }
         if (service is not null) {
             shutdown.Cancel();
             try {
@@ -234,15 +291,90 @@ public partial class App : Application {
     // timing such that ShowMainWindow() DOES still see a non-null MainWindow.
     internal static MainWindow BuildAndShowMainWindow(
             IDaemonClientService service, AgentActionService actions, IAppNotifier notifier, ITicker ticker,
-            CancellationToken shutdownToken, ActivityViewModel activity) {
+            CancellationToken shutdownToken, ActivityViewModel activity, Func<CancellationToken, Task>? startAction = null,
+            IObservable<string?>? lifecycleStatus = null) {
         // Notifier is set on the WINDOW (spec §11 toast overlay), not the ViewModel — the toast
         // is a View-level concern (WindowNotificationManager lives on MainWindow) independent of
         // the VM's WhenActivated-scoped projections.
         var window = new MainWindow {
-            DataContext = new MainWindowViewModel(service, actions, ticker, shutdownToken, activity), Notifier = notifier,
+            DataContext = new MainWindowViewModel(service, actions, ticker, shutdownToken, activity, startAction, lifecycleStatus),
+            Notifier = notifier,
         };
         window.Show();
         return window;
+    }
+
+    // spec composition: wires the daemon-service CLI facade (decision 1: everything through the
+    // CLI), the login-shell PATH probe, and the persisted decline-memory store. A broken
+    // KCAP_APP_CLI_PATH override (CliResolver.ResolvePath returning null) is treated as "no CLI"
+    // here — unlike CreateDefaultAsync's own lenient `daemon start -d` fallback above, the
+    // lifecycle features must never silently point at the wrong binary.
+    //
+    // Task 24: also builds ShimOfferCoordinator here (not a separate method) — it shares
+    // cliPath/probe/store/surface with the lifecycle controller rather than re-resolving them.
+    (DaemonLifecycleController Lifecycle, ShimOfferCoordinator ShimOffer) BuildLifecycleController(
+            DaemonClientService service, Action<string> setLifecycleStatus, Action<string> setLifecycleAttention) {
+        var cliPath = CliResolver.ResolvePath(Environment.GetEnvironmentVariable, File.Exists);
+        var runner  = new DaemonClientService.ProcessRunner();
+        var profile = AppConfig.ResolvedProfile; // already resolved by CreateDefaultAsync above
+        var probe   = new LoginShellProbe(runner, Environment.GetEnvironmentVariable);
+        // Shared with the probe above (not re-resolved) — decision 7's PATH overlay on `install`
+        // must reflect the SAME probe outcome that the controller's preconditions/PathDegraded see.
+        var cli     = new KcapCli(runner, cliPath, service.DaemonName, profile?.ProfileName ?? "default", probe.TerminalPathAsync);
+        var store   = new AppStateStore(PathHelpers.ConfigPath("app-state.json"));
+        var surface = new LifecycleSurface(setLifecycleStatus, setLifecycleAttention, ConfirmLifecyclePromptAsync);
+
+        var lifecycle = new DaemonLifecycleController(
+            service, cli, probe, store, surface, () => Task.FromResult(ValidProfileName(profile)), TimeProvider.System);
+
+        // The shim links to the RESOLVED ABSOLUTE path only — CliResolver's bare "kcap" fallback
+        // (no override set, or the not-yet-landed bundle-relative arm) means there is
+        // nothing to link, so the offer and the menu item both stay off for the whole run.
+        var shimTarget = cliPath is not null && Path.IsPathRooted(cliPath) ? cliPath : null;
+        var shimOffer = new ShimOfferCoordinator(
+            lifecycle.PhaseClosed, probe, new PathShimInstaller(runner, probe), store, surface, shimTarget, _shutdown.Token);
+
+        return (lifecycle, shimOffer);
+    }
+
+    static string? ValidProfileName(ResolvedProfile? profile) =>
+        !string.IsNullOrWhiteSpace(profile?.ServerUrl) && Uri.TryCreate(profile.ServerUrl, UriKind.Absolute, out _)
+            ? profile.ProfileName
+            : null;
+
+    Task<bool> ConfirmLifecyclePromptAsync(LifecyclePrompt prompt, CancellationToken ct) =>
+        Dispatcher.UIThread.InvokeAsync(() => ShowLifecyclePromptDialogAsync(prompt, ct));
+
+    Task<bool> ShowLifecyclePromptDialogAsync(LifecyclePrompt prompt, CancellationToken ct) {
+        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var dialog = new LifecyclePromptWindow { DataContext = new LifecyclePromptViewModel(prompt, tcs) };
+        // Closing via the titlebar/Esc without Accept/Decline also resolves false —
+        // BuildConfirmForceStopWindow's same rule below. TrySetResult is idempotent, so this is a
+        // no-op once AcceptCommand/DeclineCommand already resolved it.
+        dialog.Closed += (_, _) => tcs.TrySetResult(false);
+        WireDialogCancellation(dialog, tcs, ct);
+
+        if (_coordinator?.Window is { IsVisible: true } owner) {
+            dialog.Show(owner);
+        } else {
+            dialog.Show();
+            dialog.Activate();
+        }
+
+        return tcs.Task;
+    }
+
+    // ConfirmAndTakeoverAsync holds the operation gate across the whole ConfirmAsync await — a
+    // dialog left open through a lifetime-cancel (app shutdown or DisposeAsync) must not leave the
+    // gate (and therefore QuiescedAsync) blocked on a human who may never come back. Cancellation
+    // can arrive on any thread, so the close is posted rather than called inline; the registration
+    // is disposed once the dialog resolves on its own so it doesn't outlive the window. Extracted
+    // (internal, static) so a test can drive it directly against a real headless window.
+    internal static void WireDialogCancellation(Window dialog, TaskCompletionSource<bool> tcs, CancellationToken ct) {
+        var registration = ct.Register(() =>
+            Dispatcher.UIThread.Post(() => { if (!tcs.Task.IsCompleted) dialog.Close(); }));
+        tcs.Task.ContinueWith(_ => registration.Dispose(), CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
     }
 
     internal static string ActivityStatKey(string daemonName) {
@@ -378,6 +510,12 @@ public partial class App : Application {
     }
 
     async Task DisposeAndShutdownAsync() {
+        // spec §3.6: mutations are never abandoned — give a lifecycle-controller-triggered
+        // mutation (startup matrix, skew, txn-requery; none of these carry _shutdown.Token) a
+        // bounded chance to finish naturally, WHILE the UI is still up, before anything below
+        // starts tearing it down.
+        if (_lifecycle is not null) await AwaitQuiescedAsync(_lifecycle.QuiescedAsync, QuiesceShutdownCap).ConfigureAwait(false);
+
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop) {
             // Prompt coordinator BEFORE the consent service (spec §5): the window and its
             // ViewModel are gone before the service they resolve against, so no click can reach a
@@ -385,11 +523,34 @@ public partial class App : Application {
             // OnShutdownRequested and settles on the ViewModel's silent-abort path.
             await DisposeUiThenConfirmShutdownAsync(
                 [_tray, _trayVm, _promptCoordinator, _consent, _activity, _pause],
-                _service is null ? null : _service.DisposeAsync, () => _shutdownConfirmed = true, desktop, _exitCode);
+                DisposeLifecycleAndServiceAsync, () => _shutdownConfirmed = true, desktop, _exitCode);
         } else {
-            if (_service is not null) await _service.DisposeAsync();
+            await DisposeLifecycleAndServiceAsync();
             _shutdownConfirmed = true;
         }
+    }
+
+    // The dependent (_lifecycle, subscribed to _service's streams) goes first — same rule as
+    // BuildLifecycleController's construction-order comment, in reverse. A throw disposing it must
+    // never skip _service's own disposal, so it gets its own guard rather than sharing the outer
+    // DisposeAndConfirmShutdownAsync's single try/catch.
+    async ValueTask DisposeLifecycleAndServiceAsync() {
+        if (_lifecycle is not null) {
+            try {
+                await _lifecycle.DisposeAsync().ConfigureAwait(false);
+            } catch (Exception ex) {
+                Console.Error.WriteLine($"kcap app failed to dispose the daemon lifecycle controller during shutdown: {ex}");
+            }
+        }
+        if (_service is not null) await _service.DisposeAsync().ConfigureAwait(false);
+    }
+
+    // §3.6's cap: QuiescedAsync itself is unbounded (it just waits for the gate), so this is what
+    // keeps a stuck internal mutation from hanging shutdown forever — DisposeAsync's own eventual
+    // lifetime-cancel is still the backstop if the cap is reached. Static + delegate-shaped so a
+    // test can drive it without a live controller.
+    internal static async Task AwaitQuiescedAsync(Func<Task> quiescedAsync, TimeSpan cap) {
+        await Task.WhenAny(quiescedAsync(), Task.Delay(cap)).ConfigureAwait(false);
     }
 
     // Split out of DisposeAndShutdownAsync so a test can pin the ordering with a recording list.

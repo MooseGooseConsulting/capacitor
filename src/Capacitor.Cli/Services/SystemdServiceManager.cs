@@ -25,6 +25,17 @@ sealed class SystemdServiceManager(UnitFileWriter? writeUnit = null) : IServiceM
         return new ServiceStatus(SystemdUnit.StatusFrom(active, enabledExit), bin);
     }
 
+    public ServiceQuery Query(string serviceId) {
+        var path = SystemdUnit.UnitPath(serviceId);
+        var unitPresent = File.Exists(path);
+        var (_, active, _)      = ServiceProcess.Run("systemctl", SystemdUnit.IsActiveArgs(serviceId));
+        var (enabledExit, _, _) = ServiceProcess.Run("systemctl", SystemdUnit.IsEnabledArgs(serviceId));
+        var bin = unitPresent ? SystemdUnit.BinaryFromUnit(File.ReadAllText(path)) : null;
+        var state = SystemdUnit.StatusFrom(active, enabledExit);
+        var probe = state != ServiceState.NotInstalled ? LabelProbe.Loaded : LabelProbe.Absent;
+        return new ServiceQuery(probe, unitPresent, state, bin, null);
+    }
+
     /// <summary>The unit-writing half of <see cref="Install"/>, split out so it is testable without
     /// invoking systemctl.</summary>
     internal void WriteUnitFiles(ServiceSpec spec) {
@@ -39,13 +50,27 @@ sealed class SystemdServiceManager(UnitFileWriter? writeUnit = null) : IServiceM
         if (startNow) ServiceProcess.Check("systemctl", SystemdUnit.RestartArgs(spec.ServiceId));
     }
 
-    public void Uninstall(string serviceId) {
+    /// <summary>No distinct verify path for systemd yet — delegate mechanically to <see cref="Install"/>.</summary>
+    public void WriteAndBootstrap(ServiceSpec spec) => Install(spec, startNow: true);
+
+    public bool Uninstall(string serviceId, out string? error) {
         ServiceProcess.Run("systemctl", SystemdUnit.DisableNowArgs(serviceId));
         var path = SystemdUnit.UnitPath(serviceId);
         if (File.Exists(path)) File.Delete(path);
         ServiceProcess.Run("systemctl", SystemdUnit.DaemonReloadArgs());
+        error = null;
+        return true;
     }
 
-    public void Start(string serviceId) => ServiceProcess.Check("systemctl", SystemdUnit.StartArgs(serviceId));
-    public void Stop(string serviceId)  => ServiceProcess.Check("systemctl", SystemdUnit.StopArgs(serviceId));
+    public bool Start(string serviceId, out string? error) {
+        ServiceProcess.Check("systemctl", SystemdUnit.StartArgs(serviceId));
+        error = null;
+        return true;
+    }
+
+    public bool Stop(string serviceId, out string? error) {
+        ServiceProcess.Check("systemctl", SystemdUnit.StopArgs(serviceId));
+        error = null;
+        return true;
+    }
 }

@@ -50,12 +50,14 @@ public class DaemonClientServiceTests {
     sealed class FakeProcessRunner : IProcessRunner {
         public string? SeenFileName;
         public string[]? SeenArgs;
-        public Func<CancellationToken, Task<(int ExitCode, string Stderr)>>? Behavior;
+        public RunOptions? SeenOptions;
+        public Func<CancellationToken, Task<ProcessResult>>? Behavior;
 
-        public Task<(int ExitCode, string Stderr)> RunAsync(string fileName, string[] args, CancellationToken ct) {
+        public Task<ProcessResult> RunAsync(string fileName, string[] args, RunOptions options, CancellationToken ct) {
             SeenFileName = fileName;
             SeenArgs     = args;
-            return (Behavior ?? (_ => Task.FromResult((0, ""))))(ct);
+            SeenOptions  = options;
+            return (Behavior ?? (_ => Task.FromResult(new ProcessResult(0, "", "", false))))(ct);
         }
     }
 
@@ -129,6 +131,22 @@ public class DaemonClientServiceTests {
         await Assert.That(seen[1]).IsEqualTo(new AttachStatus(AttachState.Connected, null, capsA));
         await Assert.That(seen[2]).IsEqualTo(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
         await Assert.That(seen[3]).IsEqualTo(new AttachStatus(AttachState.Connecting, null, null));
+    }
+
+    [Test] // spec decision 6: hello DaemonVersion propagates Unreachable → AttachStatus
+    public async Task Unreachable_daemon_version_propagates_into_attach_status() {
+        var script = new Script();
+        await using var svc = new DaemonClientService("daemon-a", script.Run, new FakeProcessRunner(), "kcap");
+        svc.Start();
+
+        var seen = new List<AttachStatus>();
+        using var sub = svc.Status.Subscribe(seen.Add);
+        await WaitUntilAsync(() => seen.Count >= 1, what: "initial Connecting status");
+
+        script.Feed(new LocalControlEvent.Unreachable("daemon_incompatible", "1.0"));
+        await WaitUntilAsync(() => seen.Count >= 2, what: "Unreachable status after Unreachable event");
+
+        await Assert.That(seen[1]).IsEqualTo(new AttachStatus(AttachState.Unreachable, "daemon_incompatible", null, "1.0"));
     }
 
     [Test]
@@ -313,7 +331,7 @@ public class DaemonClientServiceTests {
     [Test]
     public async Task StartDaemon_success_argv_and_restart_kick() {
         var script = new Script();
-        var runner = new FakeProcessRunner { Behavior = _ => Task.FromResult((0, "")) };
+        var runner = new FakeProcessRunner { Behavior = _ => Task.FromResult(new ProcessResult(0, "", "", false)) };
         await using var svc = new DaemonClientService("daemon-a", script.Run, runner, "/opt/kcap");
         svc.Start();
         await WaitUntilAsync(() => script.LiveEnumerations >= 1, what: "enumeration to start");
@@ -349,7 +367,7 @@ public class DaemonClientServiceTests {
         }
 
         var nonZeroWithStderr = new FakeProcessRunner {
-            Behavior = _ => Task.FromResult((1, "boom: could not bind socket"))
+            Behavior = _ => Task.FromResult(new ProcessResult(1, "", "boom: could not bind socket", false))
         };
         await using (var svc2 = new DaemonClientService("daemon-b", script.Run, nonZeroWithStderr, "kcap")) {
             var r2 = await svc2.StartDaemonAsync(CancellationToken.None);
@@ -358,7 +376,7 @@ public class DaemonClientServiceTests {
         }
 
         var nonZeroEmptyStderr = new FakeProcessRunner {
-            Behavior = _ => Task.FromResult((1, ""))
+            Behavior = _ => Task.FromResult(new ProcessResult(1, "", "", false))
         };
         await using (var svc3 = new DaemonClientService("daemon-c", script.Run, nonZeroEmptyStderr, "kcap")) {
             var r3 = await svc3.StartDaemonAsync(CancellationToken.None);

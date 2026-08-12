@@ -145,9 +145,23 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// token linked to the app lifetime — never CancellationToken.None (Task 4 carry-note: an
     /// unbounded wait would survive app exit).
     /// </param>
+    /// <param name="startAction">
+    /// spec §4.4: the service-aware Start action (DaemonLifecycleController.StartActionAsync).
+    /// Null falls back to the plain detached `StartDaemonAsync` RunStartAsync always used —
+    /// preserved so a caller without a live controller (most existing tests) keeps today's
+    /// behavior verbatim.
+    /// </param>
+    /// <param name="lifecycleStatus">
+    /// spec §6: ILifecycleSurface.Status one-liners (e.g. "daemon started, app not yet
+    /// attached — retrying", a coded transaction failure) ride the SAME start-message lane
+    /// RunStartAsync already uses — one place near the Start button for "why isn't this working",
+    /// cleared by the identical Connected-transition rule below. Null (most existing tests, and
+    /// any caller without a live lifecycle controller) means this lane never receives anything.
+    /// </param>
     public MainWindowViewModel(
             IDaemonClientService service, AgentActionService actions, ITicker ticker,
-            CancellationToken shutdownToken, ActivityViewModel activity, TimeProvider? time = null) {
+            CancellationToken shutdownToken, ActivityViewModel activity, Func<CancellationToken, Task>? startAction = null,
+            IObservable<string?>? lifecycleStatus = null, TimeProvider? time = null) {
         _service = service;
         _time = time ?? TimeProvider.System;
         Agents = new ReadOnlyObservableCollection<AgentRowViewModel>(_agentsSource);
@@ -172,7 +186,8 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             .Select(s => s.State != AttachState.Connected)
             .ObserveOn(RxSchedulers.MainThreadScheduler);
 
-        StartDaemonCommand = ReactiveCommand.CreateFromTask(() => RunStartAsync(shutdownToken), canStart);
+        var start = startAction ?? RunStartAsync;
+        StartDaemonCommand = ReactiveCommand.CreateFromTask(() => start(shutdownToken), canStart);
         RetryCommand        = ReactiveCommand.CreateFromTask(service.RestartLoopAsync, canRetry);
 
         // Independent subscriptions to the SAME canStart/canRetry state predicates the commands
@@ -245,6 +260,11 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
 
             status.Where(s => s.State == AttachState.Connected)
                 .Subscribe(_ => StartMessage = null)
+                .DisposeWith(disposables);
+
+            lifecycleStatus?.ObserveOn(RxSchedulers.MainThreadScheduler)
+                .Where(msg => msg is not null)
+                .Subscribe(msg => StartMessage = msg)
                 .DisposeWith(disposables);
 
             _gridEnabled = connected

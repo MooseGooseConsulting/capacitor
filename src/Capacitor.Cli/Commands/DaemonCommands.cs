@@ -81,7 +81,7 @@ public static class DaemonCommands {
         }
 
         try {
-            if (ReadPidFile(name) is { } existing && IsOurDaemon(existing.Pid, existing.StartToken)) {
+            if (DaemonPidProbe.ReadPidFile(name) is { } existing && DaemonPidProbe.IsOurDaemon(existing.Pid, existing.StartToken)) {
                 await Console.Error.WriteLineAsync(
                     $"Daemon '{name}' already running (PID {existing.Pid}). "
                   + $"Use `kcap daemon stop --name {name}` first."
@@ -157,7 +157,7 @@ public static class DaemonCommands {
 
         using var _ = startLock;
 
-        if (ReadPidFile(name) is { } existing && IsOurDaemon(existing.Pid, existing.StartToken)) {
+        if (DaemonPidProbe.ReadPidFile(name) is { } existing && DaemonPidProbe.IsOurDaemon(existing.Pid, existing.StartToken)) {
             Console.Error.WriteLine(
                 $"Daemon '{name}' already running (PID {existing.Pid}). "
               + $"Use `kcap daemon stop --name {name}` first."
@@ -319,7 +319,7 @@ public static class DaemonCommands {
             return 0;
         }
 
-        if (ReadPidFile(name) is not { } entry) {
+        if (DaemonPidProbe.ReadPidFile(name) is not { } entry) {
             // ReadPidFile returns null for BOTH an absent file and a present-but-
             // unparseable one (empty/partial — e.g. a mid-write SIGKILL; it no
             // longer unlinks the latter).
@@ -347,7 +347,12 @@ public static class DaemonCommands {
         }
 
         try {
-            if (!IsOurDaemon(entry.Pid, entry.StartToken)) {
+            // entry is bound ONCE above and reused for both the ownership classification and (on
+            // the live branch) the actual kill target. Re-reading the PID file here — e.g. via a
+            // second DaemonPidProbe.ValidatedPid(name) call — would let a concurrent `daemon start`
+            // that wins the race between the two reads hand us a freshly-written, genuinely-live PID
+            // to kill that this call never validated from the same snapshot.
+            if (!DaemonPidProbe.IsOurDaemon(entry.Pid, entry.StartToken)) {
                 // A dead/foreign PID. Clean up under the flock so we don't unlink a
                 // PID a concurrent start wrote after our read (TOCTOU).
                 if (TryCleanupMarkersUnderLock(name))
@@ -558,9 +563,9 @@ public static class DaemonCommands {
         }
 
         foreach (var name in names) {
-            if (ReadPidFile(name) is not { } entry) {
+            if (DaemonPidProbe.ReadPidFile(name) is not { } entry) {
                 await Console.Out.WriteLineAsync($"Daemon '{name}': not running");
-            } else if (IsOurDaemon(entry.Pid, entry.StartToken)) {
+            } else if (DaemonPidProbe.IsOurDaemon(entry.Pid, entry.StartToken)) {
                 await Console.Out.WriteLineAsync($"Daemon '{name}': running (PID {entry.Pid})");
 
                 // Version of the *running* daemon (from the marker it wrote at
@@ -666,8 +671,8 @@ public static class DaemonCommands {
             switch (probe) {
                 case null when hasLock: {
                     heldCount++;
-                    var pidEntry = ReadPidFile(name);
-                    var alive    = pidEntry is { } e && IsOurDaemon(e.Pid, e.StartToken);
+                    var pidEntry = DaemonPidProbe.ReadPidFile(name);
+                    var alive    = pidEntry is { } e && DaemonPidProbe.IsOurDaemon(e.Pid, e.StartToken);
                     var pidStr   = pidEntry is { } e2 ? e2.Pid.ToString() : "?";
 
                     var aliveStr = alive
@@ -742,69 +747,9 @@ public static class DaemonCommands {
     }
 
     // ── shared helpers ──────────────────────────────────────────────────────
-
-    record struct PidEntry(int Pid, string? StartToken);
-
-    static PidEntry? ReadPidFile(string daemonName) {
-        var pidPath = DaemonLockPaths.PidPath(daemonName);
-
-        if (!File.Exists(pidPath)) return null;
-
-        var lines = File.ReadAllText(pidPath)
-            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-
-        if (lines.Length == 0 || !int.TryParse(lines[0], out var pid)) {
-            // report "no usable PID" but do NOT delete the file. The
-            // daemon writes it with File.WriteAllText (truncate+write) under the
-            // flock, so a SIGKILL/native abort mid-write can leave a present but
-            // empty/partial/unparseable file — which is itself a hard-death
-            // breadcrumb that DaemonLock.InspectPriorHolder reports as
-            // (unclean, null). Since callers here (status, the pre-spawn guards)
-            // read this before the successor daemon runs, unlinking a corrupt
-            // file would erase that breadcrumb. Cleanup of corrupt/stale files is
-            // left to the explicit paths (`daemon stop`, `daemon doctor --clean`).
-            return null;
-        }
-
-        var startToken = lines.Length > 1 ? lines[1] : null;
-
-        return new PidEntry(pid, startToken);
-    }
-
-    /// <summary>
-    /// Verify that a PID belongs to our daemon. The strong check is start-token
-    /// equality — PIDs get recycled, but a recycled process won't share the
-    /// same kernel start instant (<see cref="ProcessStartToken"/>). A
-    /// same-scheme token mismatch is conclusive (a different incarnation), so we
-    /// return false rather than fall back to the weaker name check, which can't
-    /// tell two of our own daemons apart.
-    ///
-    /// The name fallback applies only when the token can't be compared at all:
-    /// no token recorded, the live token is unreadable, or the recorded token is
-    /// a legacy/foreign scheme — notably a PID file that stored bare
-    /// <c>Process.StartTime</c> ticks. Falling back there keeps a still-running
-    /// old daemon manageable across an upgrade instead of stranding it.
-    /// </summary>
-    static bool IsOurDaemon(int pid, string? expectedStartToken) {
-        try {
-            using var process = Process.GetProcessById(pid);
-
-            if (expectedStartToken is not null && ProcessStartToken.Matches(pid, expectedStartToken) is { } matched)
-                return matched;
-
-            // No token, unreadable, or a legacy/foreign scheme we can't compare:
-            // best-effort match by process image name.
-            var daemonPath = ResolveDaemonBinary();
-
-            var ourName = daemonPath is not null
-                ? Path.GetFileNameWithoutExtension(daemonPath)
-                : "kcap-daemon";
-
-            return string.Equals(process.ProcessName, ourName, StringComparison.OrdinalIgnoreCase);
-        } catch (ArgumentException) {
-            return false; // process doesn't exist
-        }
-    }
+    //
+    // PID-file parsing and identity validation (formerly ReadPidFile/IsOurDaemon here)
+    // now live in DaemonPidProbe — see its ValidatedPid for the combined check.
 
     /// <summary>
     /// Returns the daemon names that currently have a PID file on disk
@@ -899,10 +844,10 @@ public static class DaemonCommands {
 
         switch (action) {
             case "install":   return await ServiceInstall(manager, rest, id, startNow: !noStart);
-            case "uninstall": manager.Uninstall(id); await Console.Out.WriteLineAsync($"Service '{id}' uninstalled ({manager.Describe()})."); return 0;
-            case "start":     manager.Start(id);     await Console.Out.WriteLineAsync($"Service '{id}' started.");   return 0;
-            case "stop":      manager.Stop(id);      await Console.Out.WriteLineAsync($"Service '{id}' stopped (still installed)."); return 0;
-            case "status":    return await ServiceStatus(manager, id);
+            case "uninstall": return await ServiceUninstall(manager, id);
+            case "start":     return await ServiceStart(manager, rest, id);
+            case "stop":      return await ServiceStop(manager, id);
+            case "status":    return rest.Contains("--json") ? await ServiceStatusJson(manager, id) : await ServiceStatus(manager, id);
             default:          return ServiceUsage();
         }
     }
@@ -925,7 +870,35 @@ public static class DaemonCommands {
         return ["--max-agents", maxAgents.ToString()];
     }
 
-    static async Task<int> ServiceInstall(IServiceManager manager, string[] args, string id, bool startNow) {
+    internal static async Task<int> ServiceInstall(IServiceManager manager, string[] args, string id, bool startNow) {
+        var verify  = args.Contains("--verify");
+        var replace = args.Contains("--replace");
+
+        // --no-start withholds the start; --verify's whole job is to prove the started daemon is
+        // ready. The two contradict — reject rather than silently start anyway (or silently skip
+        // verification).
+        if (verify && !startNow) {
+            await Console.Error.WriteLineAsync("--no-start is incompatible with --verify.");
+            return 1;
+        }
+
+        // --replace only has meaning inside the verify transaction engine (it selects the
+        // ownership matrix in ServiceVerify.InstallVerifiedAsync) — a plain (non-verified) install
+        // has no transaction to hand it to.
+        if (replace && !verify) {
+            await Console.Error.WriteLineAsync("install --replace requires --verify.");
+            return 1;
+        }
+
+        // --verify is a launchd-only slice for now: the engine's readiness/version check needs a
+        // manager that actually implements a verify-aware WriteAndBootstrap, and the on-disk
+        // recheck needs GenerateFiles to return exactly one file (Windows returns two). Reject
+        // early and clearly rather than let either assumption fail deep inside the transaction.
+        if (verify && manager is not LaunchdServiceManager) {
+            await Console.Error.WriteLineAsync("install --verify is only supported on macOS (launchd) in this release.");
+            return 1;
+        }
+
         var daemonPath = ResolveDaemonBinary();
         if (daemonPath is null) { await Console.Error.WriteLineAsync(DaemonNotFoundMessage()); return 1; }
 
@@ -946,29 +919,154 @@ public static class DaemonCommands {
         var logPath = PathHelpers.ConfigPath($"daemon-{id}.log");
         var spec    = new ServiceSpec(id, daemonPath, logPath, env, extra);
 
-        manager.Install(spec, startNow);
-
-        await Console.Out.WriteLineAsync($"Service '{id}' installed ({manager.Describe()}).");
-        await Console.Out.WriteLineAsync("  Auto-restarts on crash/SIGKILL; starts at login.");
-
-        // A reviewer switch frozen into a unit is worth saying out loud: the unit outlives the shell it
-        // was captured from, so an operator who later changes the variable has no effect until they
-        // reinstall. The line must state what the captured VALUE does, not assume it enables — since
-        // these became opt-outs, a captured `0` DISABLES, and the old "the reviewer it enables stays on"
-        // text was exactly backwards for that case. Classified through the same Core parser the daemon
-        // reads, so the notice and the daemon can never disagree about a value's meaning.
-        foreach (var flag in ServiceEnvironment.CarriedConsentFlags(env)) {
-            var effect = ReviewerConsent.IsEnabled(env[flag])
-                ? "keeps that reviewer ENABLED (already the default)"
-                : "DISABLES that reviewer";
-            await Console.Out.WriteLineAsync(
-                $"  Reviewer:  {flag}={env[flag]} captured into the unit — {effect} for this service "
-              + "until you reinstall with a different value.");
+        if (verify) {
+            // The CLI is the safety boundary for §4.1's precondition: prove the pinned profile resolves
+            // to a valid server URL here too, so the transaction never destroys a working unit only to
+            // install one whose daemon would exit config-invalid and never satisfy readiness.
+            var profileUrlValid = await ServiceInstallViability.PinnedProfileServerUrlValidAsync(env);
+            var engine = new ServiceVerify((LaunchdServiceManager)manager, DaemonPidProbe.ValidatedPid, HelloProbe.RunAsync,
+                TimeProvider.System, profileViable: () => profileUrlValid);
+            var exit   = await engine.InstallVerifiedAsync(spec, replace: replace, CapacitorVersion.Current());
+            if (exit != VerifyExit.Ok) return exit;
+        } else {
+            // Plain (non-verify) install serializes on the same per-label lock every other mutating
+            // verb takes — a terminal install must not race an app-driven --replace --verify.
+            var exit = await ServiceInstallPlain(manager, spec, startNow);
+            if (exit != 0) return exit;
         }
 
-        await Console.Out.WriteLineAsync($"  Log:       {logPath}");
-        await Console.Out.WriteLineAsync($"  Stop:      kcap daemon service stop --name {id}");
-        await Console.Out.WriteLineAsync($"  Remove:    kcap daemon service uninstall --name {id}");
+        // Closed-stdio tolerance for the entire success tail (not just the first line): the npm
+        // grandchild shares the GUI's pipes, and by this point the real mutation already happened
+        // — a broken pipe on any of these purely informational lines must never turn an
+        // already-successful install into a crash/non-zero exit.
+        try {
+            if (verify) {
+                await Console.Out.WriteLineAsync($"Service '{id}' installed (verified, {manager.Describe()}).");
+            } else {
+                await Console.Out.WriteLineAsync($"Service '{id}' installed ({manager.Describe()}).");
+                await Console.Out.WriteLineAsync("  Auto-restarts on crash/SIGKILL; starts at login.");
+            }
+
+            // A reviewer switch frozen into a unit is worth saying out loud: the unit outlives the shell it
+            // was captured from, so an operator who later changes the variable has no effect until they
+            // reinstall. The line must state what the captured VALUE does, not assume it enables — since
+            // these became opt-outs, a captured `0` DISABLES, and the old "the reviewer it enables stays on"
+            // text was exactly backwards for that case. Classified through the same Core parser the daemon
+            // reads, so the notice and the daemon can never disagree about a value's meaning.
+            foreach (var flag in ServiceEnvironment.CarriedConsentFlags(env)) {
+                var effect = ReviewerConsent.IsEnabled(env[flag])
+                    ? "keeps that reviewer ENABLED (already the default)"
+                    : "DISABLES that reviewer";
+                await Console.Out.WriteLineAsync(
+                    $"  Reviewer:  {flag}={env[flag]} captured into the unit — {effect} for this service "
+                  + "until you reinstall with a different value.");
+            }
+
+            await Console.Out.WriteLineAsync($"  Log:       {logPath}");
+            await Console.Out.WriteLineAsync($"  Stop:      kcap daemon service stop --name {id}");
+            await Console.Out.WriteLineAsync($"  Remove:    kcap daemon service uninstall --name {id}");
+        } catch (IOException) { }
+
+        return 0;
+    }
+
+    /// <summary>Plain install under the per-label service lock, matching stop/start/uninstall:
+    /// null lock → the same coded-contention message, exit 1, without calling <c>Install</c>. Internal so
+    /// the lock-contention path is testable without <c>ResolveDaemonBinary</c> in the loop.</summary>
+    internal static async Task<int> ServiceInstallPlain(IServiceManager manager, ServiceSpec spec, bool startNow) {
+        using var txn = ServiceTxnLock.TryAcquire(spec.ServiceId, TimeSpan.FromSeconds(10));
+
+        if (txn is null) {
+            await Console.Error.WriteLineAsync($"Another service operation is in progress for '{spec.ServiceId}'. Try again shortly.");
+            return 1;
+        }
+
+        manager.Install(spec, startNow);
+        return 0;
+    }
+
+    static async Task<int> ServiceUninstall(IServiceManager manager, string id) {
+        using var txn = ServiceTxnLock.TryAcquire(id, TimeSpan.FromSeconds(10));
+
+        if (txn is null) {
+            await Console.Error.WriteLineAsync($"Another service operation is in progress for '{id}'. Try again shortly.");
+            return 1;
+        }
+
+        if (!manager.Uninstall(id, out var error)) {
+            await Console.Error.WriteLineAsync($"Could not uninstall service '{id}': {error}");
+            return 1;
+        }
+
+        await Console.Out.WriteLineAsync($"Service '{id}' uninstalled ({manager.Describe()}).");
+        return 0;
+    }
+
+    /// <summary>
+    /// Routes plain vs <c>--verify</c> starts. <c>--verify</c> is gated to launchd like
+    /// <see cref="ServiceInstall"/>'s own gate — the engine's readiness/ownership poll needs a
+    /// manager whose WriteAndBootstrap/Query actually implement the verify algorithm.
+    /// </summary>
+    internal static async Task<int> ServiceStart(IServiceManager manager, string[] args, string id) {
+        if (!args.Contains("--verify")) return await ServiceStartPlain(manager, id);
+
+        if (manager is not LaunchdServiceManager) {
+            await Console.Error.WriteLineAsync("start --verify is only supported on macOS (launchd) in this release.");
+            return 1;
+        }
+
+        return await ServiceStartVerified(manager, id);
+    }
+
+    static async Task<int> ServiceStartPlain(IServiceManager manager, string id) {
+        using var txn = ServiceTxnLock.TryAcquire(id, TimeSpan.FromSeconds(10));
+
+        if (txn is null) {
+            await Console.Error.WriteLineAsync($"Another service operation is in progress for '{id}'. Try again shortly.");
+            return 1;
+        }
+
+        if (!manager.Start(id, out var error)) {
+            await Console.Error.WriteLineAsync($"Could not start service '{id}': {error}");
+            return 1;
+        }
+
+        await Console.Out.WriteLineAsync($"Service '{id}' started.");
+        return 0;
+    }
+
+    /// <summary>
+    /// <c>--verify</c>: hands off to the <see cref="ServiceVerify"/> transaction engine, which
+    /// acquires the <see cref="ServiceTxnLock"/> itself — no double-acquire here.
+    /// </summary>
+    static async Task<int> ServiceStartVerified(IServiceManager manager, string id) {
+        var engine = new ServiceVerify((LaunchdServiceManager)manager, DaemonPidProbe.ValidatedPid, HelloProbe.RunAsync, TimeProvider.System);
+        var exit = await engine.StartVerifiedAsync(id);
+
+        // Same closed-stdio tolerance as the engine's own Say: a broken pipe on this purely
+        // informational line must not turn an already-successful verified start into a crash.
+        if (exit == VerifyExit.Ok) {
+            try { await Console.Out.WriteLineAsync($"Service '{id}' started (verified)."); }
+            catch (IOException) { }
+        }
+
+        return exit;
+    }
+
+    static async Task<int> ServiceStop(IServiceManager manager, string id) {
+        using var txn = ServiceTxnLock.TryAcquire(id, TimeSpan.FromSeconds(10));
+
+        if (txn is null) {
+            await Console.Error.WriteLineAsync($"Another service operation is in progress for '{id}'. Try again shortly.");
+            return 1;
+        }
+
+        if (!manager.Stop(id, out var error)) {
+            await Console.Error.WriteLineAsync($"Could not stop service '{id}': {error}");
+            return 1;
+        }
+
+        await Console.Out.WriteLineAsync($"Service '{id}' stopped (still installed).");
         return 0;
     }
 
@@ -979,14 +1077,36 @@ public static class DaemonCommands {
         return 0;
     }
 
+    static async Task<int> ServiceStatusJson(IServiceManager manager, string id) {
+        var query           = manager.Query(id);
+        var installBinary   = ResolveDaemonBinary();
+        var daemonPid       = DaemonPidProbe.ValidatedPid(id);
+        var txnActive       = ServiceTxnLock.IsHeld(id);
+        var txnMarker       = ServiceTxnMarker.Exists(id);
+
+        var (json, exitCode) = ServiceStatusRender.Render(query, id, installBinary, daemonPid, txnMarker, txnActive);
+
+        if (json is null) {
+            await Console.Error.WriteLineAsync($"Could not determine service status for '{id}' ({manager.Describe()}).");
+            return exitCode;
+        }
+
+        await Console.Out.WriteLineAsync(json);
+        return exitCode;
+    }
+
     static int ServiceUsage() {
         Console.Error.WriteLine("Usage: kcap daemon service <install|uninstall|start|stop|status> [--name N]");
         Console.Error.WriteLine();
-        Console.Error.WriteLine("  install [--name N] [--profile P] [--max-agents N] [--no-start]");
+        Console.Error.WriteLine("  install [--name N] [--profile P] [--max-agents N] [--no-start] [--replace] [--verify]");
+        Console.Error.WriteLine("                          --verify (macOS/launchd only) polls readiness/version/ownership and rolls back on failure");
+        Console.Error.WriteLine("                          --replace (requires --verify) takes over an existing label/unit/live owner");
+        Console.Error.WriteLine("                          --no-start is incompatible with --verify");
         Console.Error.WriteLine("  uninstall [--name N]   Stop and remove the service unit");
-        Console.Error.WriteLine("  start [--name N]       Start the installed service now");
+        Console.Error.WriteLine("  start [--name N] [--verify]   Start the installed service now");
+        Console.Error.WriteLine("                          --verify (macOS/launchd only) polls readiness/ownership and rolls back on failure");
         Console.Error.WriteLine("  stop [--name N]        Stop the running service (stays installed)");
-        Console.Error.WriteLine("  status [--name N]      Show installed/running state");
+        Console.Error.WriteLine("  status [--name N] [--json]   Show installed/running state (--json for machine-readable output)");
         return 1;
     }
 
@@ -1019,9 +1139,11 @@ public static class DaemonCommands {
     }
 
     /// <summary>
-    /// Resolve the kcap-daemon executable shipped alongside this binary.
+    /// Resolve the kcap-daemon executable shipped alongside this binary. Internal so
+    /// <see cref="DaemonPidProbe"/>'s moved-in <c>IsOurDaemon</c> can reuse it for the
+    /// process-image-name fallback rather than duplicating the lookup.
     /// </summary>
-    static string? ResolveDaemonBinary() {
+    internal static string? ResolveDaemonBinary() {
         var dir     = AppContext.BaseDirectory;
         var ext     = OperatingSystem.IsWindows() ? ".exe" : "";
         var sibling = Path.Combine(dir, $"kcap-daemon{ext}");
@@ -1052,5 +1174,26 @@ public static class DaemonCommands {
         Console.Error.WriteLine("  -d, --detach          Run in background (logs to file automatically)");
 
         return 1;
+    }
+}
+
+/// <summary>Pre-mutation viability for <c>service install --verify</c>: does the unit's pinned profile
+/// resolve to a valid server URL? Mirrors the daemon's own resolution — <see cref="ProfileResolver"/>
+/// over the captured <c>KCAP_URL</c>/<c>KCAP_PROFILE</c> — and the daemon's validity check (absolute
+/// http/https), so the CLI rejects before the transaction destroys anything what the daemon would only
+/// reject at startup.</summary>
+static class ServiceInstallViability {
+    public static async Task<bool> PinnedProfileServerUrlValidAsync(IReadOnlyDictionary<string, string> env) {
+        var envUrl     = env.GetValueOrDefault("KCAP_URL");
+        var envProfile = env.GetValueOrDefault("KCAP_PROFILE");
+
+        var config   = await AppConfig.LoadProfileConfig();
+        var resolver = new ProfileResolver(config, cliServerUrl: null, envUrl, envProfile,
+            repoConfig: null, repoRemoteUrls: [], repoPath: null);
+        var url = resolver.Resolve().ServerUrl;
+
+        return url is not null
+            && Uri.TryCreate(url, UriKind.Absolute, out var uri)
+            && uri.Scheme is "http" or "https";
     }
 }

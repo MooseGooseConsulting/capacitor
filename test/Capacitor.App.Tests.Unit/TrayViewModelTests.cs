@@ -866,6 +866,120 @@ public class TrayViewModelTests {
         });
     }
 
+    // ---- spec: ILifecycleSurface.Attention ----
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Lifecycle_attention_upgrades_idle_and_supplies_its_own_header_text() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var service = new FakeDaemonClientService();
+            var pause = new FakePauseController();
+            var actions = NewActions(service);
+            var consent = new FakeConsentService();
+            var lifecycleAttention = new BehaviorSubject<string?>(null);
+            using var vm = new TrayViewModel(service, pause, actions, consent, lifecycleAttention: lifecycleAttention);
+
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, []));
+            service.SnapshotsSubject.OnNext(Snap("connected", 0));
+            await Assert.That(vm.MenuModel.State).IsEqualTo(TrayState.Idle);
+
+            lifecycleAttention.OnNext("restore-verification failed — see terminal for repair steps");
+
+            await Assert.That(vm.MenuModel.State).IsEqualTo(TrayState.Attention);
+            await Assert.That(vm.MenuModel.Header).IsEqualTo("daemon-a: restore-verification failed — see terminal for repair steps");
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Lifecycle_attention_never_downgrades_a_connection_trouble_row() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var service = new FakeDaemonClientService();
+            var pause = new FakePauseController();
+            var actions = NewActions(service);
+            var consent = new FakeConsentService();
+            var lifecycleAttention = new BehaviorSubject<string?>("orphan label needs repair");
+            using var vm = new TrayViewModel(service, pause, actions, consent, lifecycleAttention: lifecycleAttention);
+
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
+
+            await Assert.That(vm.MenuModel.State).IsEqualTo(TrayState.Stopped); // row 1 still wins
+            await Assert.That(vm.MenuModel.Header).IsEqualTo("daemon-a: not running"); // untouched by the lifecycle text
+        });
+    }
+
+    /// Fix round 1: rows that resolve to Attention ON THEIR OWN (2, 5, 6, 9, 10) — as opposed to
+    /// row 1 (Stopped), the only row the test above exercises — are the ones a co-occurring
+    /// lifecycle Attention could actually collide with, since both land on TrayState.Attention.
+    /// Each row's own text must still win; only a genuinely fine baseState (Idle/Running) may ever
+    /// yield its header to the lifecycle message.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Lifecycle_attention_never_masks_a_connection_trouble_rows_own_header_text() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var service = new FakeDaemonClientService();
+            var pause = new FakePauseController();
+            var actions = NewActions(service);
+            var consent = new FakeConsentService();
+            var lifecycleAttention = new BehaviorSubject<string?>("orphan label needs repair");
+            using var vm = new TrayViewModel(service, pause, actions, consent, lifecycleAttention: lifecycleAttention);
+
+            // Row 2: daemon_incompatible — the skew special-case (no daemon-name prefix) wins even
+            // over the connection-trouble exemption below.
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_incompatible", null));
+            await Assert.That(vm.MenuModel.State).IsEqualTo(TrayState.Attention);
+            await Assert.That(vm.MenuModel.Header).IsEqualTo("app and daemon are incompatible — make sure both are up to date");
+
+            // Row 10: an unrecognized Unreachable reason.
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "some_future_reason", null));
+            await Assert.That(vm.MenuModel.State).IsEqualTo(TrayState.Attention);
+            await Assert.That(vm.MenuModel.Header).IsEqualTo("daemon-a: needs attention");
+
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, []));
+
+            // Row 5: reconnecting.
+            service.SnapshotsSubject.OnNext(Snap("reconnecting"));
+            await Assert.That(vm.MenuModel.State).IsEqualTo(TrayState.Attention);
+            await Assert.That(vm.MenuModel.Header).IsEqualTo("daemon-a: reconnecting to server");
+
+            // Row 5: disconnected.
+            service.SnapshotsSubject.OnNext(Snap("disconnected"));
+            await Assert.That(vm.MenuModel.State).IsEqualTo(TrayState.Attention);
+            await Assert.That(vm.MenuModel.Header).IsEqualTo("daemon-a: disconnected from server");
+
+            // Row 6: connected, malformed (negative) active-agent count.
+            service.SnapshotsSubject.OnNext(Snap("connected", -1));
+            await Assert.That(vm.MenuModel.State).IsEqualTo(TrayState.Attention);
+            await Assert.That(vm.MenuModel.Header).IsEqualTo("daemon-a: needs attention");
+
+            // Row 9: unrecognized connection value.
+            service.SnapshotsSubject.OnNext(Snap("weird"));
+            await Assert.That(vm.MenuModel.State).IsEqualTo(TrayState.Attention);
+            await Assert.That(vm.MenuModel.Header).IsEqualTo("daemon-a: needs attention");
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Lifecycle_attention_wins_header_text_over_pending_consent() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var service = new FakeDaemonClientService();
+            var pause = new FakePauseController();
+            var actions = NewActions(service);
+            var consent = new FakeConsentService();
+            var lifecycleAttention = new BehaviorSubject<string?>("orphan label needs repair");
+            using var vm = new TrayViewModel(service, pause, actions, consent, lifecycleAttention: lifecycleAttention);
+
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, []));
+            service.SnapshotsSubject.OnNext(Snap("connected", 0));
+            consent.Add(Entry("a1", "p1"));
+
+            await Assert.That(vm.MenuModel.State).IsEqualTo(TrayState.Attention);
+            await Assert.That(vm.MenuModel.Header).IsEqualTo("daemon-a: orphan label needs repair");
+            await Assert.That(vm.MenuModel.PendingConsent).IsEqualTo(1); // the badge count is unaffected
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task ReviewPendingCommand_invokes_the_injected_delegate() {
@@ -878,6 +992,46 @@ public class TrayViewModelTests {
             using var vm = new TrayViewModel(service, pause, actions, consent, openReviewPrompts: () => calls++);
 
             await vm.ReviewPendingCommand.Execute().ToTask();
+
+            await Assert.That(calls).IsEqualTo(1);
+        });
+    }
+
+    // ---- spec: the shim tray item ----
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task ShimOfferable_drives_MenuModel_ShimInstallVisible() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var service = new FakeDaemonClientService();
+            var pause = new FakePauseController();
+            var actions = NewActions(service);
+            var consent = new FakeConsentService();
+            var shimOfferable = new BehaviorSubject<bool>(false);
+            using var vm = new TrayViewModel(service, pause, actions, consent, shimOfferable: shimOfferable);
+
+            await Assert.That(vm.MenuModel.ShimInstallVisible).IsFalse();
+
+            shimOfferable.OnNext(true);
+
+            await Assert.That(vm.MenuModel.ShimInstallVisible).IsTrue();
+            // Orthogonal to the rest of the model — the state-matrix projection is untouched.
+            await Assert.That(vm.MenuModel.State).IsEqualTo(TrayState.Connecting);
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task InstallShimCommand_invokes_the_injected_delegate() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var service = new FakeDaemonClientService();
+            var pause = new FakePauseController();
+            var actions = NewActions(service);
+            var consent = new FakeConsentService();
+            var calls = 0;
+            using var vm = new TrayViewModel(service, pause, actions, consent, installShim: () => { calls++; return Task.CompletedTask; });
+
+            await vm.InstallShimCommand.Execute().ToTask();
 
             await Assert.That(calls).IsEqualTo(1);
         });
