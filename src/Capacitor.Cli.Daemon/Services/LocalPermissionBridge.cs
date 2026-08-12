@@ -30,6 +30,12 @@ internal sealed partial class LocalPermissionBridge(
     const int    MaxBindAttempts = 15;
     const string PathSuffix      = "/permission-request";
 
+    // Revoked reviewer prefixes are intentionally retained (see RevokeReviewerToken), so the
+    // listener's prefix set only grows over a daemon's lifetime, bounded by the reviewer-launch
+    // count. Warn once each time the count crosses a multiple of this step so runaway growth in a
+    // very long-lived daemon is diagnosable rather than silent.
+    const int    ReviewerPrefixHighWaterStep = 1024;
+
     /// <summary>Cap on a reviewer submission body. The poster is a sandboxed vendor child, so an
     /// unbounded read is a memory-exhaustion lever.</summary>
     internal const int MaxSubmitBodyBytes = 1024 * 1024;
@@ -235,6 +241,12 @@ internal sealed partial class LocalPermissionBridge(
             _reviewerTokens[token] = new ReviewerGrant(
                 [.. allowlistServers], reviewContext, activityClock, submitForwarder);
 
+            // Prefixes are never removed on revoke, so this count only rises — surface a warning at
+            // each high-water step so a leak is diagnosable (the count grows by one per launch).
+            var prefixCount = _listener.Prefixes.Count;
+            if (prefixCount % ReviewerPrefixHighWaterStep == 0)
+                LogReviewerPrefixHighWater(logger, prefixCount);
+
             return $"http://127.0.0.1:{_port}/{token}";
         }
     }
@@ -245,10 +257,16 @@ internal sealed partial class LocalPermissionBridge(
         var token = ExtractToken(reviewerBridgeUrlOrToken);
         if (token is null) return;
 
-        lock (_prefixLock) {
-            if (_reviewerTokens.TryRemove(token, out _))
-                _listener?.Prefixes.Remove($"http://127.0.0.1:{_port}/{token}/");
-        }
+        // Removing the token from the dictionary is the ONE authoritative revocation: HandleAsync
+        // re-validates every request against _reviewerTokens (a stray prefix "can't quietly admit
+        // anything"), so a dict miss is a deterministic 404. We deliberately do NOT remove the
+        // HttpListener prefix. On the managed (Linux/macOS) HttpListener, a request on a keep-alive
+        // connection to a just-removed prefix no longer routes to our handler and instead yields a
+        // transport-level artifact — a spurious empty-body 200 or a connection reset — rather than
+        // the clean 404 our code would return. Keeping the prefix registered means the request still
+        // reaches HandleAsync, where the dict miss produces the intended 404. The prefixes are freed
+        // when the listener closes; their count is bounded by the daemon's reviewer-launch count.
+        _reviewerTokens.TryRemove(token, out _);
     }
 
     /// <summary>Atomically publishes a completed immutable sidecar generation for a live reviewer.
@@ -722,4 +740,7 @@ internal sealed partial class LocalPermissionBridge(
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Permission bridge shutdown failed; continuing teardown")]
     static partial void LogDisposeFailed(ILogger logger, Exception exception);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Local permission bridge has {PrefixCount} listener prefixes; revoked reviewer prefixes are retained until the daemon stops")]
+    static partial void LogReviewerPrefixHighWater(ILogger logger, int prefixCount);
 }
