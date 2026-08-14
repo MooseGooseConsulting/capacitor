@@ -112,7 +112,14 @@ if (args.Length >= 4 && command == "config" && args[1] == "set" && args[2] == "t
     TelemetryState.SetEnabled(false);
 }
 
-CliTelemetry.Initialize(command, baseUrl, loggedIn);
+// spec decision 9: an app-spawned CLI child must not emit CLI-labeled telemetry nor consume
+// the one-time privacy notice on an invisible stderr. Consume-and-REMOVE before dispatch so
+// no grandchild (detached daemon, hosted agents) can observe the marker.
+var telemetrySuppressed = CliTelemetry.ConsumeSpawnMarker(
+    Environment.GetEnvironmentVariable,
+    k => Environment.SetEnvironmentVariable(k, null));
+
+CliTelemetry.Initialize(command, baseUrl, loggedIn, telemetrySuppressed);
 
 AppDomain.CurrentDomain.ProcessExit += (_, _) => {
     CliTelemetry.RecordCommand(command, args, Environment.ExitCode, CommandTiming.ElapsedMs(commandStart));
@@ -885,9 +892,7 @@ async Task<int> HandleDiscoverLoginAsync(bool forceDevice) {
     }
 
     // Merge discovered tenants as profiles; the picked one becomes active
-    var cfg = await AppConfig.LoadProfileConfig();
-    cfg = TenantDiscovery.MergeProfiles(cfg, outcome.Tenants, outcome.Picked!);
-    await AppConfig.SaveProfileConfig(cfg);
+    await ConfigMutator.MutateAsync(c => TenantDiscovery.MergeProfiles(c, outcome.Tenants, outcome.Picked!));
 
     // Discovery flows only via the shared GitHub App proxy, so every discovered tenant
     // uses the GitHubApp provider. If DiscoveredTenant ever gains a Provider field, read it here.

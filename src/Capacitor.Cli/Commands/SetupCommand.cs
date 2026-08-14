@@ -13,6 +13,7 @@ using Capacitor.Cli.Core.Kiro;
 using Capacitor.Cli.Core.Mcp;
 using Capacitor.Cli.Core.OpenCode;
 using Capacitor.Cli.Core.Pi;
+using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.Core.Telemetry;
 using Spectre.Console;
 using Spectre.Console.Rendering;
@@ -208,35 +209,20 @@ public static class SetupCommand {
         await Console.Out.WriteLineAsync();
 
         var pluginPath = ResolvePluginPath();
+        // Composed once in Core so the probe set is testable without touching the real
+        // environment — see Capacitor.Cli.Core.Setup.AgentDetection for the per-vendor
+        // rationale (dual PATH + install-marker signals, Cursor's marker-only exception, etc).
+        var r          = AgentDetection.Detect(AgentDetection.FromEnvironment());
         var detected   = new CodingAgentsStep.DetectedAgents(
-            Claude:  AgentDetector.IsInstalled("claude"),
-            Codex:   AgentDetector.IsInstalled("codex"),
-            Cursor:  CursorPaths.IsInstalled(),
-            // Dir presence covers users who launch Copilot through an IDE
-            // wrapper; the PATH probe covers fresh installs that haven't run
-            // yet (no ~/.copilot until first launch).
-            Copilot: CopilotPaths.IsInstalled() || AgentDetector.IsInstalled("copilot"),
-            // Dir presence covers IDE-launched Gemini; the PATH probe covers a
-            // fresh install that hasn't created ~/.gemini yet.
-            Gemini:  GeminiPaths.IsInstalled()  || AgentDetector.IsInstalled("gemini"),
-            // Same dual signal for Kiro: the ~/.kiro tree or the conversation DB
-            // covers IDE-launched users; the PATH probe (kiro / kiro-cli) covers
-            // fresh CLI installs.
-            Kiro:    KiroPaths.IsInstalled() || AgentDetector.IsInstalled("kiro") || AgentDetector.IsInstalled("kiro-cli"),
-            // Pi keeps state under ~/.pi/agent; the PATH probe covers fresh
-            // installs that haven't created it yet.
-            Pi:      PiPaths.IsInstalled() || AgentDetector.IsInstalled("pi"),
-            // OpenCode keeps config under ~/.config/opencode + data under
-            // ~/.local/share/opencode; the PATH probe covers fresh installs.
-            OpenCode: OpenCodePaths.IsInstalled() || AgentDetector.IsInstalled("opencode"),
-            // Antigravity is one vendor over two surfaces: the GUI (state under
-            // ~/.gemini/antigravity) and the `agy` CLI (state under ~/.gemini/antigravity-cli).
-            // IsInstalled() now covers either root; the PATH probes cover a fresh install that has
-            // not created a root yet — and the CLI binary is `agy`, not `antigravity`, so both
-            // names must be probed or an agy-only machine goes undetected and nothing installs.
-            Antigravity: AntigravityPaths.IsInstalled()
-                || AgentDetector.IsInstalled("antigravity")
-                || AgentDetector.IsInstalled("agy"));
+            Claude:      r.Claude.Detected,
+            Codex:       r.Codex.Detected,
+            Cursor:      r.Cursor.Detected,
+            Copilot:     r.Copilot.Detected,
+            Gemini:      r.Gemini.Detected,
+            Kiro:        r.Kiro.Detected,
+            Pi:          r.Pi.Detected,
+            OpenCode:    r.OpenCode.Detected,
+            Antigravity: r.Antigravity.Detected);
 
         bool PromptYesNo(string text) =>
             AnsiConsole.Prompt(new ConfirmationPrompt(text) { DefaultValue = true });
@@ -329,7 +315,7 @@ public static class SetupCommand {
             InstallCursorHooks:     PluginCommand.InstallCursorHooks,
             InstallCopilotHooks:    PluginCommand.InstallCopilotHooks,
             InstallGeminiHooks:     PluginCommand.InstallGeminiHooks,
-            CapacitorOnPath:        () => AgentDetector.IsInstalled("kcap"),
+            CapacitorOnPath:        () => AgentDetection.BinaryOnPath("kcap"),
             InstallAgentSkills:     AgentsSkillsInstaller.Install,
             CleanLegacyCodexSkills: legacyDir => AgentsSkillsInstaller.CleanLegacyCodexSkills(legacyDir).RemovedAny,
             InstallKiroHooks:       PluginCommand.InstallKiroHooks,
@@ -433,22 +419,24 @@ public static class SetupCommand {
         await Console.Out.WriteLineAsync();
 
         // Save config
-        var profileConfig  = await AppConfig.LoadProfileConfig();
-        var activeName     = string.IsNullOrWhiteSpace(profileConfig.ActiveProfile) ? "default" : profileConfig.ActiveProfile;
-        var defaultProfile = profileConfig.Profiles.GetValueOrDefault(activeName) ?? new Profile();
+        var activeName     = "default";
+        var defaultProfile = new Profile();
 
-        defaultProfile = defaultProfile with {
-            ServerUrl          = serverUrl,
-            DefaultVisibility  = defaultVisibility,
-            UseProviderApiKey  = useProviderApiKey,
-            Daemon             = (defaultProfile.Daemon ?? new DaemonSettings()) with { Name = daemonName }
-        };
+        await ConfigMutator.MutateAsync(c => {
+            activeName     = string.IsNullOrWhiteSpace(c.ActiveProfile) ? "default" : c.ActiveProfile;
+            defaultProfile = c.Profiles.GetValueOrDefault(activeName) ?? new Profile();
 
-        var profiles = new Dictionary<string, Profile>(profileConfig.Profiles) {
-            [activeName] = defaultProfile
-        };
-        profileConfig = profileConfig with { Profiles = profiles };
-        await AppConfig.SaveProfileConfig(profileConfig);
+            defaultProfile = defaultProfile with {
+                ServerUrl          = serverUrl,
+                DefaultVisibility  = defaultVisibility,
+                UseProviderApiKey  = useProviderApiKey,
+                Daemon             = (defaultProfile.Daemon ?? new DaemonSettings()) with { Name = daemonName }
+            };
+
+            return c with {
+                Profiles = new Dictionary<string, Profile>(c.Profiles) { [activeName] = defaultProfile }
+            };
+        });
 
         // Refresh the in-process resolved state to the exact values just
         // saved, so any same-process work after this point (e.g. the import
@@ -913,9 +901,7 @@ public static class SetupCommand {
             return null;
         }
 
-        var profileCfg = await AppConfig.LoadProfileConfig();
-        profileCfg     = TenantDiscovery.MergeProfiles(profileCfg, outcome.Tenants, outcome.Picked!);
-        await AppConfig.SaveProfileConfig(profileCfg);
+        await ConfigMutator.MutateAsync(c => TenantDiscovery.MergeProfiles(c, outcome.Tenants, outcome.Picked!));
 
         AnsiConsole.MarkupLine($"  [green]✓[/] Discovered {outcome.Tenants.Length} tenant(s). Active: [cyan]{Markup.Escape(outcome.Picked!.OrgLogin)}[/]");
 

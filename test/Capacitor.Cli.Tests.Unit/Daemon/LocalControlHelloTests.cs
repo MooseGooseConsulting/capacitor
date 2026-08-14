@@ -50,7 +50,6 @@ public class LocalControlHelloTests {
         var broker      = new LaunchConsentBroker();
         var decisionLog = new LaunchConsentDecisionLog(stateDir, NullLogger.Instance);
         var gate        = new LaunchConsentGate(store, decisionLog, broker, TimeProvider.System, NullLogger<LaunchConsentGate>.Instance);
-        var consentIpc  = new LaunchConsentIpc(broker, store, NullLogger<LaunchConsentIpc>.Instance);
 
         var config = new DaemonConfig {
             Name         = daemonName,
@@ -58,6 +57,7 @@ public class LocalControlHelloTests {
             StateDir     = stateDir,
             WorktreeRoot = Path.Combine(Path.GetTempPath(), "kcap-hello-ipc-wt-" + Guid.NewGuid().ToString("N")[..8]),
         };
+        var consentIpc  = new LaunchConsentIpc(broker, store, config, NullLogger<LaunchConsentIpc>.Instance);
 
         var connection       = new ServerConnection(config, NullLoggerFactory.Instance, NullLogger<ServerConnection>.Instance);
         var worktreeManager  = new WorktreeManager(config, NullLogger<WorktreeManager>.Instance);
@@ -133,7 +133,7 @@ public class LocalControlHelloTests {
             await Assert.That(dto!.ProtocolVersion).IsEqualTo(1);
             await Assert.That(dto.DaemonVersion).IsNotEmpty();
             await Assert.That(dto.DaemonName).IsEqualTo(h.Config.Name);
-            await Assert.That(dto.Capabilities).IsEquivalentTo(new[] { "consent/1", "consent/2", "status/1" });
+            await Assert.That(dto.Capabilities).IsEquivalentTo(new[] { "consent/1", "consent/2", "consent/3", "status/1" });
         });
     }
 
@@ -152,7 +152,7 @@ public class LocalControlHelloTests {
             await Assert.That(dto!.ProtocolVersion).IsEqualTo(1);
             await Assert.That(dto.DaemonVersion).IsNotEmpty();
             await Assert.That(dto.DaemonName).IsEqualTo(h.Config.Name);
-            await Assert.That(dto.Capabilities).IsEquivalentTo(new[] { "consent/1", "consent/2", "status/1" });
+            await Assert.That(dto.Capabilities).IsEquivalentTo(new[] { "consent/1", "consent/2", "consent/3", "status/1" });
         });
     }
 
@@ -174,7 +174,24 @@ public class LocalControlHelloTests {
             await Assert.That(dto!.ProtocolVersion).IsEqualTo(1);
             await Assert.That(dto.DaemonVersion).IsNotEmpty();
             await Assert.That(dto.DaemonName).IsEqualTo(h.Config.Name);
-            await Assert.That(dto.Capabilities).IsEquivalentTo(new[] { "consent/1", "consent/2", "status/1" });
+            await Assert.That(dto.Capabilities).IsEquivalentTo(new[] { "consent/1", "consent/2", "consent/3", "status/1" });
+        });
+    }
+
+    [Test]
+    [NotInParallel(nameof(DaemonLockPaths) + ".OverrideDirectoryForTesting")]
+    public async Task Hello_reply_carries_pid_and_instance_id() {
+        if (OperatingSystem.IsWindows()) return; // Unix-domain socket path
+
+        await RunAsync("hello-id", async (h, ct) => {
+            h.Config.InstanceId = "inst-test-1";
+            await using var s = await ConnectAsync(h.SockPath, ct);
+            await FrameCodec.WriteAsync(s, new LocalFrame(FrameType.Hello), ct);
+            var frame = await FrameCodec.ReadAsync(s, ct);
+            var dto = JsonSerializer.Deserialize(frame!.Text, HelloIpcJsonContext.Default.HelloReplyDto);
+
+            await Assert.That(dto!.Pid).IsEqualTo(Environment.ProcessId);
+            await Assert.That(dto.InstanceId).IsEqualTo("inst-test-1");
         });
     }
 

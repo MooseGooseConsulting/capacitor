@@ -53,6 +53,122 @@ public class LaunchdUnitTests {
         await Assert.That(LaunchdUnit.BinaryFromPlist(plist)).IsEqualTo("/opt/kcap/kcap-daemon");
     }
 
+    /// <summary>A decoy <c>&lt;array&gt;</c> planted before the real <c>ProgramArguments</c> must
+    /// never be read as the binary — <see cref="LaunchdUnit.BinaryFromPlist"/> pairs the array with
+    /// its OWN preceding <c>&lt;key&gt;ProgramArguments&lt;/key&gt;</c>, not "the document's first
+    /// array". A foreign writer relying on the old first-array behavior would pass the digest gate
+    /// while launchd actually executes the later, real ProgramArguments.</summary>
+    [Test]
+    public async Task BinaryFromPlist_ignores_a_decoy_array_before_the_real_ProgramArguments() {
+        const string xml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+            <plist version="1.0">
+            <dict>
+              <key>Label</key><string>io.kurrent.kcap.daemon.decoy</string>
+              <key>Decoy</key><array>
+                <string>/bin/evil-daemon</string>
+              </array>
+              <key>ProgramArguments</key><array>
+                <string>/bin/kcap-daemon</string>
+              </array>
+            </dict>
+            </plist>
+            """;
+        await Assert.That(LaunchdUnit.BinaryFromPlist(xml)).IsEqualTo("/bin/kcap-daemon");
+    }
+
+    [Test]
+    public async Task BinaryFromPlist_throws_on_a_duplicate_ProgramArguments_key() {
+        const string xml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+            <plist version="1.0">
+            <dict>
+              <key>Label</key><string>io.kurrent.kcap.daemon.dup</string>
+              <key>ProgramArguments</key><array>
+                <string>/bin/kcap-daemon</string>
+              </array>
+              <key>ProgramArguments</key><array>
+                <string>/bin/evil-daemon</string>
+              </array>
+            </dict>
+            </plist>
+            """;
+        await Assert.That(() => LaunchdUnit.BinaryFromPlist(xml)).Throws<InvalidDataException>();
+    }
+
+    [Test]
+    public async Task EnvFromPlist_throws_on_a_duplicate_top_level_EnvironmentVariables_key() {
+        const string xml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+            <plist version="1.0">
+            <dict>
+              <key>Label</key><string>io.kurrent.kcap.daemon.dup</string>
+              <key>ProgramArguments</key><array>
+                <string>/bin/kcap-daemon</string>
+              </array>
+              <key>EnvironmentVariables</key><dict>
+                <key>KCAP_CONSENT_SEED_DEFAULT</key><string>prompt</string>
+              </dict>
+              <key>EnvironmentVariables</key><dict>
+                <key>KCAP_CONSENT_SEED_DEFAULT</key><string>allow</string>
+              </dict>
+            </dict>
+            </plist>
+            """;
+        await Assert.That(() => LaunchdUnit.EnvFromPlist(xml)).Throws<InvalidDataException>();
+    }
+
+    [Test]
+    public async Task EnvFromPlist_round_trips_what_Plist_writes() {
+        var spec = Spec() with {
+            Environment = new Dictionary<string, string> {
+                ["KCAP_PROFILE"]              = "acme",
+                ["KCAP_CONSENT_SEED_DEFAULT"] = "prompt",
+                ["KCAP_EXPECT_SERVER_URL"]    = "https://s",
+            },
+        };
+        var xml = LaunchdUnit.Plist(spec);
+        var env = LaunchdUnit.EnvFromPlist(xml);
+
+        await Assert.That(env["KCAP_PROFILE"]).IsEqualTo("acme");
+        await Assert.That(env["KCAP_CONSENT_SEED_DEFAULT"]).IsEqualTo("prompt");
+        await Assert.That(env["KCAP_EXPECT_SERVER_URL"]).IsEqualTo("https://s");
+    }
+
+    [Test]
+    public async Task EnvFromPlist_on_plist_without_env_dict_returns_empty() {
+        var xml = LaunchdUnit.Plist(Spec() with { Environment = new Dictionary<string, string>() });
+        await Assert.That(LaunchdUnit.EnvFromPlist(xml)).IsEmpty();
+    }
+
+    /// <summary>This file is never hand-edited by <see cref="LaunchdUnit.Plist"/> — a duplicate
+    /// key can only mean a foreign/corrupt writer. Last-win would let a gate caller silently trust
+    /// whichever value happened to land last; throwing forces every caller's existing "unreadable
+    /// evidence" containment to see it instead.</summary>
+    [Test]
+    public async Task EnvFromPlist_throws_on_a_duplicate_key_rather_than_last_win() {
+        const string xml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+            <plist version="1.0">
+            <dict>
+              <key>Label</key><string>io.kurrent.kcap.daemon.dup</string>
+              <key>ProgramArguments</key><array>
+                <string>/bin/kcap-daemon</string>
+              </array>
+              <key>EnvironmentVariables</key><dict>
+                <key>KCAP_CONSENT_SEED_DEFAULT</key><string>prompt</string>
+                <key>KCAP_CONSENT_SEED_DEFAULT</key><string>allow</string>
+              </dict>
+            </dict>
+            </plist>
+            """;
+        await Assert.That(() => LaunchdUnit.EnvFromPlist(xml)).Throws<InvalidDataException>();
+    }
+
     [Test]
     public async Task StatusFromPrint_maps_exit_and_state() {
         await Assert.That(LaunchdUnit.StatusFromPrint(exitCode: 1, stdout: "")).IsEqualTo(ServiceState.NotInstalled);

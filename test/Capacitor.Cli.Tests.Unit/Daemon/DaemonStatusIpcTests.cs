@@ -144,7 +144,6 @@ public class DaemonStatusIpcTests {
         var broker      = new LaunchConsentBroker();
         var decisionLog = new LaunchConsentDecisionLog(stateDir, NullLogger.Instance);
         var gate        = new LaunchConsentGate(store, decisionLog, broker, TimeProvider.System, NullLogger<LaunchConsentGate>.Instance);
-        var consentIpc  = new LaunchConsentIpc(broker, store, NullLogger<LaunchConsentIpc>.Instance);
 
         var config = new DaemonConfig {
             Name         = daemonName,
@@ -152,6 +151,7 @@ public class DaemonStatusIpcTests {
             StateDir     = stateDir,
             WorktreeRoot = Path.Combine(Path.GetTempPath(), "kcap-status-ipc-wt-" + Guid.NewGuid().ToString("N")[..8]),
         };
+        var consentIpc  = new LaunchConsentIpc(broker, store, config, NullLogger<LaunchConsentIpc>.Instance);
 
         var notifier   = new DaemonStatusNotifier();
         var connection = new ServerConnection(
@@ -278,6 +278,23 @@ public class DaemonStatusIpcTests {
             var r1 = dto.Agents.Single(a => a.Id == "s1");
             await Assert.That(r1.Kind).IsEqualTo("review-flow");
             await Assert.That(r1.Requester).IsEqualTo("github:12345");
+        });
+    }
+
+    [Test] // pid/instance_id identity on the daemon block, first snapshot
+    [NotInParallel(nameof(DaemonLockPaths) + ".OverrideDirectoryForTesting")]
+    public async Task First_snapshot_carries_pid_and_instance_id() {
+        if (OperatingSystem.IsWindows()) return; // Unix-domain socket path
+
+        await RunAsync("st-id", async (h, ct) => {
+            h.Config.InstanceId = "inst-status-1";
+
+            await using var s = await ConnectAsync(h.SockPath, ct);
+            await FrameCodec.WriteAsync(s, new LocalFrame(FrameType.StatusSubscribe), ct);
+
+            var dto = await ReadStatusAsync(s, ct);
+            await Assert.That(dto.Daemon.Pid).IsEqualTo(Environment.ProcessId);
+            await Assert.That(dto.Daemon.InstanceId).IsEqualTo("inst-status-1");
         });
     }
 

@@ -1,4 +1,6 @@
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Daemon;
+using Capacitor.Cli.Daemon.Services;
 using Capacitor.Cli.Services;
 using Microsoft.Extensions.Time.Testing;
 
@@ -77,6 +79,7 @@ public class ServiceVerifyInstallTests {
         }
 
         public bool Start(string serviceId, TimeSpan timeout, out string? error) { error = null; return true; }
+        public bool StartBootstrapOnly(string serviceId, TimeSpan timeout, out string? error) => Start(serviceId, timeout, out error);
         public bool Stop(string serviceId, TimeSpan timeout, out string? error) { error = null; return true; }
     }
 
@@ -643,6 +646,191 @@ public class ServiceVerifyInstallTests {
         } finally { DaemonLockPaths.OverrideDirectoryForTesting(null); }
     }
 
+    /// <summary>The gated viability arm's digest check fires alongside the
+    /// existing missing-sibling/unusable-profile checks — BEFORE anything on disk is touched (no
+    /// query, no marker) — and reports exactly one stderr line naming the reason, not the generic
+    /// verify_viability token.</summary>
+    [Test, NotInParallel]
+    public async Task Gated_install_with_bad_binary_digest_aborts_viability_with_reason_line() {
+        var (dir, daemonPath) = SetUpViableInstall();
+        var originalErr = Console.Error;
+        var capturedErr = new StringWriter();
+        try {
+            Console.SetError(capturedErr);
+
+            var manager = new FakeServiceManager();
+            Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
+                Task.FromResult(new HelloProbeResult(true, 1, ExpectedVersion, Id));
+
+            var sut = new ServiceVerify(manager, _ => 4242, Hello, TimeProvider.System,
+                readPlist: OwnPlist,
+                gateEnv: k => k == "KCAP_CONSENT_SEED_DEFAULT" ? "prompt" : null,
+                digestMatches: _ => false); // viability digest check fails
+
+            var exit = await sut.InstallVerifiedAsync(Spec(daemonPath), replace: false, ExpectedVersion);
+
+            await Assert.That(exit).IsEqualTo(VerifyExit.Viability);
+            var lines = capturedErr.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+            await Assert.That(lines).IsEquivalentTo(["viability_reason=package_inconsistent"]);
+            await Assert.That(manager.Calls).IsEmpty();
+            await Assert.That(ServiceTxnMarker.Exists(Id)).IsFalse();
+        } finally {
+            Console.SetError(originalErr);
+            DaemonLockPaths.OverrideDirectoryForTesting(null);
+        }
+    }
+
+    /// <summary>The pre-bootstrap TOCTOU recheck. Viability's digest check passes (call 1)
+    /// but the recheck immediately before WriteAndBootstrap fails (call 2) — the transaction must
+    /// roll back through the existing InstallRollback machinery to exit 29 without ever calling
+    /// WriteAndBootstrap, leaving no unit on disk.</summary>
+    [Test]
+    public async Task Gated_install_digest_drift_before_bootstrap_rolls_back_with_29() {
+        var (dir, daemonPath) = SetUpViableInstall();
+        try {
+            var manager = new FakeServiceManager();
+            Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
+                Task.FromResult(new HelloProbeResult(true, 1, ExpectedVersion, Id));
+
+            var digestCalls = 0;
+            var sut = new ServiceVerify(manager, _ => 4242, Hello, TimeProvider.System,
+                readPlist: OwnPlist,
+                gateEnv: k => k == "KCAP_CONSENT_SEED_DEFAULT" ? "prompt" : null,
+                digestMatches: _ => Interlocked.Increment(ref digestCalls) == 1); // pass viability, fail pre-bootstrap
+
+            var exit = await sut.InstallVerifiedAsync(Spec(daemonPath), replace: false, ExpectedVersion);
+
+            await Assert.That(exit).IsEqualTo(VerifyExit.StartGateDrift);
+            await Assert.That(manager.WriteAndBootstrapCalls).IsEqualTo(0);
+            // install's verified-safe failure state: no unit on disk — InstallRollback's own
+            // uninstall ran and confirmed absent, same machinery every other install rollback uses.
+            await Assert.That(manager.UninstallCalls).IsEqualTo(1);
+            await Assert.That(ServiceTxnMarker.Exists(Id)).IsFalse();
+        } finally { DaemonLockPaths.OverrideDirectoryForTesting(null); }
+    }
+
+    /// <summary>A gated install whose digest passes at every checkpoint (viability,
+    /// pre-bootstrap, post-readiness) must still commit exactly like the ungated path.</summary>
+    [Test]
+    public async Task Gated_install_with_passing_digest_throughout_still_commits() {
+        var (dir, daemonPath) = SetUpViableInstall();
+        try {
+            var manager = new FakeServiceManager();
+            Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
+                Task.FromResult(new HelloProbeResult(true, 1, ExpectedVersion, Id));
+
+            var sut = new ServiceVerify(manager, _ => 4242, Hello, TimeProvider.System,
+                readPlist: OwnPlist,
+                gateEnv: k => k == "KCAP_CONSENT_SEED_DEFAULT" ? "prompt" : null,
+                digestMatches: _ => true);
+
+            var exit = await sut.InstallVerifiedAsync(Spec(daemonPath), replace: false, ExpectedVersion);
+
+            await Assert.That(exit).IsEqualTo(VerifyExit.Ok);
+            await Assert.That(manager.WriteAndBootstrapCalls).IsEqualTo(1);
+            await Assert.That(ServiceTxnMarker.Exists(Id)).IsFalse();
+        } finally { DaemonLockPaths.OverrideDirectoryForTesting(null); }
+    }
+
+    /// <summary>The gate is truly INACTIVE without the invoking env's consent-seed
+    /// directive — a digestMatches that always fails must have zero effect when no gateEnv seam is
+    /// wired at all, matching a plain `kcap daemon service install --verify` from a terminal.</summary>
+    [Test]
+    public async Task Ungated_install_with_failing_digest_still_commits_gate_truly_inactive() {
+        var (dir, daemonPath) = SetUpViableInstall();
+        try {
+            var manager = new FakeServiceManager();
+            Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
+                Task.FromResult(new HelloProbeResult(true, 1, ExpectedVersion, Id));
+
+            var sut = new ServiceVerify(manager, _ => 4242, Hello, TimeProvider.System,
+                readPlist: OwnPlist,
+                digestMatches: _ => false); // no gateEnv wired at all — must never be consulted
+
+            var exit = await sut.InstallVerifiedAsync(Spec(daemonPath), replace: false, ExpectedVersion);
+
+            await Assert.That(exit).IsEqualTo(VerifyExit.Ok);
+            await Assert.That(manager.WriteAndBootstrapCalls).IsEqualTo(1);
+            await Assert.That(ServiceTxnMarker.Exists(Id)).IsFalse();
+        } finally { DaemonLockPaths.OverrideDirectoryForTesting(null); }
+    }
+
+    /// <summary>The viability arm's digest check must fire for
+    /// <c>--replace</c> too, and — crucially — BEFORE <c>ApplyReplaceMatrixAsync</c>'s ownership
+    /// matrix ever runs. A loaded, owned label (with a live validated pid) gives that matrix real
+    /// bootout/kill work to do if it were ever reached, so an empty <see cref="FakeServiceManager.Calls"/>
+    /// here is the regression net: it proves viability precedes the replace matrix, not merely that
+    /// there happened to be nothing to replace.</summary>
+    [Test, NotInParallel]
+    public async Task Gated_replace_with_bad_binary_digest_aborts_viability_before_any_destructive_step() {
+        var (dir, daemonPath) = SetUpViableInstall();
+        var originalErr = Console.Error;
+        var capturedErr = new StringWriter();
+        try {
+            Console.SetError(capturedErr);
+
+            // Loaded and owned (RunningPid matches the validated pid below) — exactly the shape
+            // that would otherwise drive ApplyReplaceMatrixAsync's owning-label bootout branch.
+            var manager = new FakeServiceManager { InitialProbe = LabelProbe.Loaded, RunningPid = 4242 };
+            Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
+                Task.FromResult(new HelloProbeResult(true, 1, ExpectedVersion, Id));
+
+            var sut = new ServiceVerify(manager, _ => 4242, Hello, TimeProvider.System,
+                readPlist: OwnPlist,
+                gateEnv: k => k == "KCAP_CONSENT_SEED_DEFAULT" ? "prompt" : null,
+                digestMatches: _ => false);
+
+            var exit = await sut.InstallVerifiedAsync(Spec(daemonPath), replace: true, ExpectedVersion);
+
+            await Assert.That(exit).IsEqualTo(VerifyExit.Viability);
+            var lines = capturedErr.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+            await Assert.That(lines).IsEquivalentTo(["viability_reason=package_inconsistent"]);
+            // No destructive step ran at all: not even the pre-mutation Query, let alone
+            // ApplyReplaceMatrixAsync's Uninstall-driven bootout or the takeover kill it can
+            // trigger — the manager was never touched.
+            await Assert.That(manager.Calls).IsEmpty();
+            await Assert.That(manager.UninstallCalls).IsEqualTo(0);
+            await Assert.That(ServiceTxnMarker.Exists(Id)).IsFalse();
+        } finally {
+            Console.SetError(originalErr);
+            DaemonLockPaths.OverrideDirectoryForTesting(null);
+        }
+    }
+
+    /// <summary>Exercises the THIRD checkpoint — the
+    /// post-readiness recheck joined onto the final on-disk fingerprint recheck — in isolation.
+    /// digestMatches passes viability (call 1) and the pre-bootstrap recheck (call 2), so
+    /// WriteAndBootstrap DOES run this time (unlike the pre-bootstrap-drift test), then fails only
+    /// on the third call. The commit must never happen: <c>onCommitted</c> is the same callback the
+    /// real commit path invokes right before deleting the marker, so it not firing is direct proof
+    /// the transaction never reached "committed", not just that the final exit code is 29.</summary>
+    [Test]
+    public async Task Gated_install_digest_drift_at_post_readiness_recheck_rolls_back_with_29_never_committing() {
+        var (dir, daemonPath) = SetUpViableInstall();
+        try {
+            var manager = new FakeServiceManager();
+            Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
+                Task.FromResult(new HelloProbeResult(true, 1, ExpectedVersion, Id));
+
+            var digestCalls = 0;
+            var committedInvoked = false;
+            var sut = new ServiceVerify(manager, _ => 4242, Hello, TimeProvider.System,
+                readPlist: OwnPlist,
+                gateEnv: k => k == "KCAP_CONSENT_SEED_DEFAULT" ? "prompt" : null,
+                // pass(1)=viability, pass(2)=pre-bootstrap, fail(3)=post-readiness.
+                digestMatches: _ => Interlocked.Increment(ref digestCalls) is not 3,
+                onCommitted: () => committedInvoked = true);
+
+            var exit = await sut.InstallVerifiedAsync(Spec(daemonPath), replace: false, ExpectedVersion);
+
+            await Assert.That(exit).IsEqualTo(VerifyExit.StartGateDrift);
+            await Assert.That(manager.WriteAndBootstrapCalls).IsEqualTo(1);  // reached bootstrap this time
+            await Assert.That(manager.UninstallCalls).IsEqualTo(1);          // rollback's own uninstall ran
+            await Assert.That(committedInvoked).IsFalse();                  // never reached "committed"
+            await Assert.That(ServiceTxnMarker.Exists(Id)).IsFalse();
+        } finally { DaemonLockPaths.OverrideDirectoryForTesting(null); }
+    }
+
     [Test]
     public async Task Rollback_uninstalls_when_the_plist_is_genuinely_absent() {
         var (dir, daemonPath) = SetUpViableInstall();
@@ -662,5 +850,100 @@ public class ServiceVerifyInstallTests {
             await Assert.That(manager.UninstallCalls).IsEqualTo(1);
             await Assert.That(ServiceTxnMarker.Exists(Id)).IsFalse();
         } finally { DaemonLockPaths.OverrideDirectoryForTesting(null); }
+    }
+
+    // ── gated install readiness-timeout refusal attribution (mirrors StartVerifiedAsync's) ──
+
+    [Test, NotInParallel]
+    public async Task Gated_install_readiness_timeout_with_matching_marker_attributes_refusal_reason() {
+        var (dir, daemonPath) = SetUpViableInstall();
+        var originalErr = Console.Error;
+        var capturedErr = new StringWriter();
+        try {
+            Console.SetError(capturedErr);
+
+            // The observed job pid IS this test process's own pid, matching what BootRefusal.TryWrite
+            // (the daemon's real writer) stamps onto the marker — planted from OnWriteAndBootstrap,
+            // simulating the daemon starting (and refusing) right after this transaction spawns it.
+            var manager = new FakeServiceManager { RunningPid = Environment.ProcessId };
+            manager.OnWriteAndBootstrap = id => {
+                var stateDir = Path.Combine(DaemonLockPaths.Directory, DaemonLockPaths.Sanitize(id));
+                Directory.CreateDirectory(stateDir);
+                BootRefusal.TryWrite(stateDir,
+                    new DaemonConfig { Name = id, ExpectedServerUrl = "https://s.example", ServerUrl = "https://resolved.example", InstanceId = "inst-1" },
+                    "server_expectation_mismatch");
+            };
+
+            Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
+                Task.FromResult(new HelloProbeResult(true, 1, ExpectedVersion, Id));
+
+            var time = new FakeTimeProvider();
+            var spec = Spec(daemonPath) with {
+                Environment = new Dictionary<string, string> { ["KCAP_EXPECT_SERVER_URL"] = "https://s.example" },
+            };
+
+            // Ownership never matches (validated pid always disagrees with the observed job pid), so
+            // readiness never settles and the forward budget genuinely rolls back to a timeout.
+            var sut = new ServiceVerify(manager, _ => -1, Hello, time,
+                forwardBudget: TimeSpan.FromSeconds(2),
+                readPlist: OwnPlist,
+                gateEnv: k => k == "KCAP_CONSENT_SEED_DEFAULT" ? "prompt" : null,
+                digestMatches: _ => true);
+
+            var task = sut.InstallVerifiedAsync(spec, replace: false, ExpectedVersion);
+            var exit = await Drive(task, time, TimeSpan.FromMilliseconds(500));
+
+            await Assert.That(exit).IsEqualTo(VerifyExit.ReadinessTimeout);
+            var lines = capturedErr.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+            await Assert.That(lines.Count(l => l == "refusal_reason=server_expectation_mismatch")).IsEqualTo(1);
+        } finally {
+            Console.SetError(originalErr);
+            DaemonLockPaths.OverrideDirectoryForTesting(null);
+        }
+    }
+
+    [Test, NotInParallel]
+    public async Task Gated_install_readiness_timeout_with_a_foreign_marker_reports_no_refusal_reason() {
+        var (dir, daemonPath) = SetUpViableInstall();
+        var originalErr = Console.Error;
+        var capturedErr = new StringWriter();
+        try {
+            Console.SetError(capturedErr);
+
+            // Same shape as the matching-marker test, but the marker names a DIFFERENT daemon —
+            // residue from an unrelated service. Attributable must reject it on name alone.
+            var manager = new FakeServiceManager { RunningPid = Environment.ProcessId };
+            manager.OnWriteAndBootstrap = id => {
+                var stateDir = Path.Combine(DaemonLockPaths.Directory, DaemonLockPaths.Sanitize(id));
+                Directory.CreateDirectory(stateDir);
+                BootRefusal.TryWrite(stateDir,
+                    new DaemonConfig { Name = "some-other-daemon", ExpectedServerUrl = "https://s.example", ServerUrl = "https://resolved.example", InstanceId = "inst-1" },
+                    "server_expectation_mismatch");
+            };
+
+            Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
+                Task.FromResult(new HelloProbeResult(true, 1, ExpectedVersion, Id));
+
+            var time = new FakeTimeProvider();
+            var spec = Spec(daemonPath) with {
+                Environment = new Dictionary<string, string> { ["KCAP_EXPECT_SERVER_URL"] = "https://s.example" },
+            };
+
+            var sut = new ServiceVerify(manager, _ => -1, Hello, time,
+                forwardBudget: TimeSpan.FromSeconds(2),
+                readPlist: OwnPlist,
+                gateEnv: k => k == "KCAP_CONSENT_SEED_DEFAULT" ? "prompt" : null,
+                digestMatches: _ => true);
+
+            var task = sut.InstallVerifiedAsync(spec, replace: false, ExpectedVersion);
+            var exit = await Drive(task, time, TimeSpan.FromMilliseconds(500));
+
+            await Assert.That(exit).IsEqualTo(VerifyExit.ReadinessTimeout);
+            var lines = capturedErr.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+            await Assert.That(lines.Any(l => l.StartsWith("refusal_reason=", StringComparison.Ordinal))).IsFalse();
+        } finally {
+            Console.SetError(originalErr);
+            DaemonLockPaths.OverrideDirectoryForTesting(null);
+        }
     }
 }

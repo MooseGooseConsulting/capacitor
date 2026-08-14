@@ -1,3 +1,5 @@
+using Capacitor.Cli.Core.Auth;
+using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.LocalIpc;
 
 namespace Capacitor.Cli.Services;
@@ -51,7 +53,26 @@ public static class VerifyExit {
     /// transaction wrote (a foreign writer). The marker, and any foreign file, are left alone.</summary>
     public const int RestoreVerification = 27;
     public const string RestoreVerificationToken = "verify_restore_verification";
+
+    /// <summary>start --verify's pre-mutation consent-directive gate refused to
+    /// proceed: the invoking launcher set <c>KCAP_CONSENT_SEED_DEFAULT</c> but the installed unit's
+    /// own baked directive, binary digest, or identity evidence didn't satisfy the gate. Fires right
+    /// after the fresh query and BEFORE the marker is even written — nothing is touched. The stderr
+    /// line <c>start_gate_reason=&lt;reason&gt;</c> names which check failed.</summary>
+    public const int StartGate = 28;
+    public const string StartGateToken = "verify_start_gate";
+
+    /// <summary>The gated start path detected drift between the evidence Phase A gated on and what
+    /// bootstrap was about to act on — the unit's plist content changed, or its digest stopped
+    /// matching, in the window between the gate check and the boot-out/bootstrap it authorizes.
+    /// Rolled back the same way a forward-phase failure is (bootout, plist retained).</summary>
+    public const int StartGateDrift = 29;
+    public const string StartGateDriftToken = "verify_start_gate_drift";
 }
+
+/// <summary>Why <see cref="ServiceVerify.EvaluateStartGate"/> refused a gated start. Reported on
+/// stderr as <c>start_gate_reason=&lt;snake_case&gt;</c> beside <see cref="VerifyExit.StartGateToken"/>.</summary>
+internal enum StartGateReason { DirectiveMissing, DirectiveInvalid, IdentityMismatch, ForeignBinary, PackageInconsistent, EvidenceUnreadable }
 
 /// <summary>
 /// Spec §3.4 transaction engine: viability → marker → mutate → ownership+readiness poll → final
@@ -71,7 +92,9 @@ sealed class ServiceVerify(
     Func<string, string?>? readPlist = null,
     Func<string, bool>? plistExists = null,
     Func<bool>? profileViable = null,
-    Action? onCommitted = null) {
+    Action? onCommitted = null,
+    Func<string, string?>? gateEnv = null,
+    Func<string, bool>? digestMatches = null) {
     static readonly TimeSpan LockWait      = TimeSpan.FromSeconds(10);
     static readonly TimeSpan PollInterval  = TimeSpan.FromMilliseconds(500);
     static readonly TimeSpan KillWait      = TimeSpan.FromSeconds(5);
@@ -118,6 +141,25 @@ sealed class ServiceVerify(
     /// <see cref="_readPlist"/> returns null for both.</summary>
     readonly Func<string, bool> _plistExists = plistExists ?? File.Exists;
 
+    /// <summary>The gated start seam: when non-null AND <c>gateEnv(ConsentSeedVar)</c> is
+    /// PRESENT — any value, including empty, under the exact-value contract —
+    /// <see cref="StartVerifiedAsync"/> runs the pre-mutation gate (Phase A) and the
+    /// TOCTOU re-check before bootstrap (Phase B). Null (the default) leaves start completely
+    /// behavior-unchanged — the production caller in <c>DaemonCommands</c> passes
+    /// <see cref="Environment.GetEnvironmentVariable(string)"/>.</summary>
+    readonly Func<string, string?>? _gateEnv = gateEnv;
+
+    /// <summary>Digest seam for the gate's foreign/package-inconsistent check and Phase B's
+    /// TOCTOU re-check. Defaults to <see cref="DaemonDigest.Matches"/>; tests that only care about
+    /// the identity half of the gate inject a trivial pass here since the real digest is a
+    /// fail-closed placeholder in dev/test builds.</summary>
+    readonly Func<string, bool> _digestMatches = digestMatches ?? DaemonDigest.Matches;
+
+    const string ConsentSeedVar = "KCAP_CONSENT_SEED_DEFAULT";
+    const string ProfileVar     = "KCAP_PROFILE";
+    const string UrlVar         = "KCAP_URL";
+    const string ExpectVar      = "KCAP_EXPECT_SERVER_URL";
+
     /// <summary>Closed-stdio tolerance: the npm grandchild shares the GUI's pipes, so a broken pipe
     /// must never abort the transaction.</summary>
     static void Say(string line) {
@@ -147,29 +189,175 @@ sealed class ServiceVerify(
         var deadline = time.GetUtcNow() + _forwardBudget;
 
         var pre = manager.Query(serviceId, Remaining(deadline));
+
+        // Gated ONLY when the invoking launcher itself carries the consent-seed
+        // directive — a bare `kcap daemon service start --verify` typed at a terminal never sees
+        // this branch. `is not null` (not IsNullOrEmpty): an EMPTY invoking value is a deliberate
+        // refusal under the exact-value contract, not absence, so it must still activate the gate —
+        // EvaluateStartGate's own directive check then reports DirectiveInvalid for it. Phase A runs
+        // right here (after the fresh query, before ANY write) so a rejected gate leaves absolutely
+        // nothing touched — not even the marker.
+        var gated = _gateEnv is not null && _gateEnv(ConsentSeedVar) is not null;
+        string? phaseAPlistContent = null;
+
+        // The unit's own baked KCAP_EXPECT_SERVER_URL, captured alongside Phase
+        // A's gate evaluation and threaded through to the readiness-timeout attribution below —
+        // there is no other point in this method that parses the unit's environment.
+        string? unitExpectation = null;
+
+        if (gated) {
+            var plistPath = LaunchdUnit.PlistPath(serviceId);
+            phaseAPlistContent = _readPlist(plistPath);
+
+            // A malformed/truncated plist (exactly the foreign-writer race Phase B defends
+            // against, caught here instead) must not let XDocument.Parse's XmlException escape
+            // this method — that would abort to a generic, uncoded exit 1 instead of the gate's
+            // own contract. Unreadable evidence is EvidenceUnreadable, same as every other
+            // evidence read this gate performs.
+            StartGateReason? reason;
+            try {
+                var unitEnv = phaseAPlistContent is not null ? LaunchdUnit.EnvFromPlist(phaseAPlistContent) : new Dictionary<string, string>();
+                var unitBinaryPath = phaseAPlistContent is not null ? LaunchdUnit.BinaryFromPlist(phaseAPlistContent) : null;
+                reason = EvaluateStartGate(unitEnv, unitBinaryPath, UnitIdentity.ResolveDaemonBinary(), _gateEnv!, _digestMatches);
+                unitEnv.TryGetValue(ExpectVar, out unitExpectation);
+            } catch {
+                reason = StartGateReason.EvidenceUnreadable;
+            }
+
+            if (reason is { } r) {
+                Say($"start_gate_reason={GateReasonToken(r)}");
+                Say(VerifyExit.StartGateToken);
+                return VerifyExit.StartGate;
+            }
+        }
+
         ServiceTxnMarker.Write(serviceId,
             new TxnMarker(1, "start", "captured", DescribeQuery(pre), "unloaded-plist-retained", null));
 
-        // A false Start doesn't short-circuit — the readiness poll is the source of truth — but the
-        // reason is worth surfacing if it never recovers.
-        if (!manager.Start(serviceId, Remaining(deadline), out var startError) && startError is not null) Say($"start: {startError}");
+        if (gated) {
+            // Phase B: the gated path never kickstarts a loaded label the way the ungated Start()
+            // below would — it boots it out first, then re-reads the plist and re-checks the digest
+            // ONE more time immediately before bootstrap. That closes the TOCTOU window between
+            // Phase A's read and this mutation: anything that changed the evidence in between (a
+            // foreign writer, a swapped binary) must not ride the gate's earlier pass into a start.
+            if (pre.Probe == LabelProbe.Loaded) {
+                manager.Stop(serviceId, Remaining(deadline), out var bootOutError);
+                if (bootOutError is not null) {
+                    // An unconfirmed bootout must never fall through to the ungated Start()
+                    // below — that would kickstart launchd's still-loaded, possibly stale
+                    // definition, exactly the path this gate exists to prevent. Reuse the
+                    // existing bootout-unknown contract (22): Rollback re-attempts the bootout
+                    // with its own verification, landing in RestoreVerification if that also fails.
+                    Say($"stop: {bootOutError}");
+                    ServiceTxnMarker.Write(serviceId,
+                        new TxnMarker(1, "start", "gate-bootout-failed", DescribeQuery(pre), "unloaded-plist-retained", null));
+                    return await Rollback(serviceId, VerifyExit.BootoutUnknown, VerifyExit.BootoutUnknownToken);
+                }
+
+                // Stop() reporting success is only the CALL's exit code — launchd does not
+                // guarantee the label is synchronously gone the instant bootout returns. Confirm
+                // Absent in a bounded poll before ever bootstrapping on top of it: bootstrapping
+                // while the probe still reads Loaded would silently kickstart the stale definition
+                // (via the ungated manager.Start below's own Loaded→kickstart branch) instead of
+                // provably starting the fresh one this gate is authorizing.
+                if (!await WaitForLabelAbsentAsync(serviceId, deadline)) {
+                    ServiceTxnMarker.Write(serviceId,
+                        new TxnMarker(1, "start", "gate-bootout-unconfirmed", DescribeQuery(pre), "unloaded-plist-retained", null));
+                    return await Rollback(serviceId, VerifyExit.BootoutUnknown, VerifyExit.BootoutUnknownToken);
+                }
+            }
+
+            var plistPath      = LaunchdUnit.PlistPath(serviceId);
+            var recheckContent = _readPlist(plistPath);
+
+            // Same XmlException hazard as Phase A's parse, but here escaping is worse: it would
+            // abort AFTER the marker write and boot-out, past the point Rollback runs, leaving the
+            // service stopped with a stuck marker instead of the guaranteed unloaded-plist-retained
+            // outcome. A recheck that can't be parsed/validated is exactly what drift means — the
+            // content changed (to something unreadable) or can no longer be confirmed unchanged —
+            // so route it into the same drift branch rather than letting it throw.
+            bool digestStillGood;
+            try {
+                var recheckBinary = recheckContent is not null ? LaunchdUnit.BinaryFromPlist(recheckContent) : null;
+                digestStillGood = recheckBinary is not null && _digestMatches(recheckBinary);
+            } catch {
+                digestStillGood = false;
+            }
+
+            if (recheckContent != phaseAPlistContent || !digestStillGood) {
+                ServiceTxnMarker.Write(serviceId,
+                    new TxnMarker(1, "start", "gate-drift", DescribeQuery(pre), "unloaded-plist-retained", null));
+                return await Rollback(serviceId, VerifyExit.StartGateDrift, VerifyExit.StartGateDriftToken);
+            }
+        }
+
+        // Verified pre-clear before bootstrap, gated paths only — the marker a
+        // readiness timeout later finds is only trustworthy evidence for THIS attempt once any
+        // leftover from a prior one is provably gone. A clear that can't be verified (locked file,
+        // undeletable directory sitting at the path) disables coded attribution for this action
+        // entirely rather than risk attributing a stale marker; the mutation itself still proceeds.
+        var attributionEnabled = false;
+        if (gated) {
+            attributionEnabled = BootRefusalReader.TryClear(serviceId);
+            if (!attributionEnabled) Say("boot-refusal marker could not be cleared; coded attribution disabled");
+        }
+
+        // The gated path uses the bootstrap-only seam instead of the generic Start: StartCore's own
+        // Loaded-probe branch would silently KICKSTART a stale definition if a foreign writer
+        // re-loaded the label in the window between the confirmed-absent wait above and this call —
+        // exactly the race this gate exists to close. A bootstrap-only failure (including "the label
+        // turned out Loaded") is therefore fatal here, not a soft warning: the label state is no
+        // longer what Phase B proved, so roll back via the coded bootout-unknown exit instead of
+        // bootstrapping onto unverified ground. The ungated path keeps the soft-warning Start(),
+        // whose readiness poll — not the call's own return value — is the source of truth.
+        if (gated) {
+            if (!manager.StartBootstrapOnly(serviceId, Remaining(deadline), out var bootstrapOnlyError)) {
+                Say($"start: {bootstrapOnlyError}");
+                ServiceTxnMarker.Write(serviceId,
+                    new TxnMarker(1, "start", "gate-bootstrap-only-failed", DescribeQuery(pre), "unloaded-plist-retained", null));
+                return await Rollback(serviceId, VerifyExit.BootoutUnknown, VerifyExit.BootoutUnknownToken);
+            }
+        } else if (!manager.Start(serviceId, Remaining(deadline), out var startError) && startError is not null) {
+            Say($"start: {startError}");
+        }
 
         ServiceTxnMarker.Write(serviceId,
             new TxnMarker(1, "start", "bootstrapped", DescribeQuery(pre), "unloaded-plist-retained", null));
 
         var pollDeadline = deadline - _confirmReserve;
 
+        // Every job pid actually observed (owned or not) across this readiness window — the
+        // attribution rule below only trusts a marker whose pid was seen here, never a stale one.
+        var observedJobPids = new HashSet<int>();
+
         while (time.GetUtcNow() < pollDeadline) {
             var (ready, pid) = await IsReadyAsync(serviceId, pollDeadline, requirePid: null);
+            if (pid is not null) observedJobPids.Add(pid.Value);
+
+            // IsReadyAsync only reports a pid once hello is well-formed — but a REFUSING daemon
+            // exits before its control socket exists, so hello is NEVER well-formed in exactly the
+            // scenario attribution needs to see. Query the job pid directly whenever IsReadyAsync
+            // couldn't, so a refused boot's pid still lands in observedJobPids. Gated paths only —
+            // the ungated flow never reads this set, so it stays untouched.
+            if (gated && pid is null) {
+                var directRemaining = Remaining(pollDeadline);
+                if (directRemaining > TimeSpan.Zero) {
+                    var directPid = manager.Query(serviceId, directRemaining).JobPid;
+                    if (directPid is not null) observedJobPids.Add(directPid.Value);
+                }
+            }
+
             if (ready) {
                 // Recheck against the ORIGINAL deadline, pinning pid: a job that answered then
                 // respawned under KeepAlive must not bless a crash-looping unit.
-                var (confirmed, _) = await IsReadyAsync(serviceId, deadline, requirePid: pid);
+                var (confirmed, confirmedPid) = await IsReadyAsync(serviceId, deadline, requirePid: pid);
+                if (confirmedPid is not null) observedJobPids.Add(confirmedPid.Value);
                 if (confirmed) {
                     ServiceTxnMarker.Write(serviceId,
                         new TxnMarker(1, "start", "committed", DescribeQuery(pre), "unloaded-plist-retained", null));
                     onCommitted?.Invoke();
                     ServiceTxnMarker.Delete(serviceId);
+                    if (gated) BootRefusalReader.Consume(serviceId); // hygiene — no refusal to attribute on success
                     return VerifyExit.Ok;
                 }
             }
@@ -178,8 +366,198 @@ sealed class ServiceVerify(
             await Task.Delay(PollInterval, time, CancellationToken.None);
         }
 
-        return await Rollback(serviceId);
+        var rollbackExit = await Rollback(serviceId);
+
+        return AttributeReadinessTimeout(serviceId, rollbackExit, gated, attributionEnabled, unitExpectation, observedJobPids);
     }
+
+    /// <summary>
+    /// Shared readiness-timeout attribution tail for both <see cref="StartVerifiedAsync"/> and
+    /// <see cref="InstallVerifiedAsync"/>: attribute ONLY on the genuine readiness-timeout exit,
+    /// ONLY when pre-clear was verified, and ONLY via the pure <see cref="Attributable"/> rule — a
+    /// deterministic mismatch (hello validation, gate drift) or any other rollback reason is never
+    /// what a boot-refusal marker explains, so <paramref name="rollbackExit"/> passes through
+    /// unchanged in every case; this only ever adds the one stderr line and consumes the marker.
+    /// </summary>
+    static int AttributeReadinessTimeout(string serviceId, int rollbackExit, bool gated, bool attributionEnabled,
+            string? unitExpectation, IReadOnlySet<int> observedJobPids) {
+        if (gated && attributionEnabled && rollbackExit == VerifyExit.ReadinessTimeout
+            && BootRefusalReader.TryRead(serviceId) is { } evidence
+            && Attributable(evidence, serviceId, unitExpectation, observedJobPids)) {
+            Say($"refusal_reason={evidence.Token}");
+            BootRefusalReader.Consume(serviceId);
+        }
+
+        return rollbackExit;
+    }
+
+    /// <summary>
+    /// The pure decision core of readiness-timeout boot-refusal attribution. A
+    /// marker is trustworthy evidence for THIS attempt only when: it names this same daemon; it
+    /// carries no attempt id (an attempt-id-bearing marker is DETACHED evidence for a different
+    /// subsystem, not this service verb's own boot — see the daemon-side boot-carrier lifecycle);
+    /// its baked server expectation agrees with the unit's own (see <see cref="ExpectationsAgree"/>);
+    /// and its pid was positively observed as a job pid during THIS readiness window, never a pid
+    /// merely assumed from a stale marker left by a previous incarnation.
+    /// </summary>
+    internal static bool Attributable(BootRefusalEvidence evidence, string daemonName, string? unitExpectation, IReadOnlySet<int> observedJobPids) =>
+        evidence.DaemonName == daemonName
+        && evidence.AttemptId is null
+        && ExpectationsAgree(evidence.Expectation, unitExpectation)
+        && observedJobPids.Contains(evidence.Pid);
+
+    /// <summary>Whether two expectation values agree for attribution purposes. Both genuinely UNSET
+    /// (null) is agreement — no expectation configured on either side is not a mismatch. A
+    /// present-but-empty value on EITHER side is a deliberate-but-invalid value under the same
+    /// exact-value contract used everywhere else in this gate, so it can never trivially agree with
+    /// anything, including another empty value — only a null/null pair is absence. Otherwise both
+    /// sides are canonicalized and compared through <see cref="ServerIdentity.Matches"/>.</summary>
+    internal static bool ExpectationsAgree(string? a, string? b) =>
+        (a is null && b is null) || (!string.IsNullOrEmpty(a) && !string.IsNullOrEmpty(b) && ServerIdentity.Matches(a, b));
+
+    /// <summary>
+    /// The pure decision core of the gated start path. Given the environment
+    /// baked into the installed unit and this invocation's own environment, decides whether a
+    /// gated start may proceed. Order of checks (first hit wins): the invocation itself never asked
+    /// to be gated → null (pass); the unit lacks the directive the invocation carries →
+    /// <see cref="StartGateReason.DirectiveMissing"/>; the unit's directive isn't exactly
+    /// <c>"prompt"</c> → <see cref="StartGateReason.DirectiveInvalid"/>; the unit's baked binary
+    /// doesn't hash-match this CLI build's embedded digest → <see cref="StartGateReason.PackageInconsistent"/>
+    /// (same path as this install's own daemon binary — a broken/stale package, not a hijack) or
+    /// <see cref="StartGateReason.ForeignBinary"/> (a different path entirely); the unit's resolved
+    /// server identity disagrees with itself or with this invocation's expectation →
+    /// <see cref="StartGateReason.IdentityMismatch"/>. Any evidence read that throws (a malformed
+    /// plist fragment, an unreadable config file) reports <see cref="StartGateReason.EvidenceUnreadable"/>
+    /// rather than letting the exception escape — pure and total over its inputs.
+    /// </summary>
+    internal static StartGateReason? EvaluateStartGate(
+            IReadOnlyDictionary<string, string> unitEnv, string? unitBinaryPath,
+            string? installBinaryPath, Func<string, string?> env, Func<string, bool>? digestMatches = null) {
+        var invokingDirective = env(ConsentSeedVar);
+        if (invokingDirective is null) return null; // true absence — this invocation never asked to be gated
+
+        // Exact-value contract: an empty (or otherwise non-"prompt") invoking value is a deliberate
+        // refusal, not absence — reported the same way an invalid UNIT directive is below.
+        if (invokingDirective != "prompt") return StartGateReason.DirectiveInvalid;
+
+        // Key absent → DirectiveMissing (the unit never baked one at all). Key present with any
+        // value other than "prompt" — INCLUDING empty — → DirectiveInvalid: a present-but-empty
+        // value is a deliberate (if broken) value, not absence, same exact-value contract as the
+        // invoking side above.
+        if (!unitEnv.TryGetValue(ConsentSeedVar, out var unitDirective))
+            return StartGateReason.DirectiveMissing;
+
+        if (unitDirective != "prompt")
+            return StartGateReason.DirectiveInvalid;
+
+        var matches = digestMatches ?? DaemonDigest.Matches;
+
+        try {
+            if (unitBinaryPath is null) return StartGateReason.EvidenceUnreadable;
+
+            if (!matches(unitBinaryPath)) {
+                var comparison = OperatingSystem.IsLinux() ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+                var samePath = installBinaryPath is not null && SameBinaryPath(unitBinaryPath, installBinaryPath, comparison);
+                return samePath ? StartGateReason.PackageInconsistent : StartGateReason.ForeignBinary;
+            }
+        } catch {
+            return StartGateReason.EvidenceUnreadable;
+        }
+
+        try {
+            return EvaluateIdentity(unitEnv, env);
+        } catch {
+            return StartGateReason.EvidenceUnreadable;
+        }
+    }
+
+    /// <summary>Whether the unit's baked binary path and this install's own resolved binary path
+    /// name the same file — the split between <see cref="StartGateReason.PackageInconsistent"/>
+    /// (this install's own binary, just stale/broken) and <see cref="StartGateReason.ForeignBinary"/>
+    /// (a different path entirely). Takes the comparison explicitly (rather than deciding OS-ness
+    /// itself) so both branches are directly unit-testable: callers pass
+    /// <see cref="StringComparison.Ordinal"/> on Linux's case-sensitive filesystems and
+    /// <see cref="StringComparison.OrdinalIgnoreCase"/> elsewhere (macOS/Windows default to
+    /// case-insensitive), so distinct paths on a case-sensitive filesystem never compare equal.</summary>
+    internal static bool SameBinaryPath(string unitBinaryPath, string installBinaryPath, StringComparison comparison) =>
+        string.Equals(Path.GetFullPath(unitBinaryPath), Path.GetFullPath(installBinaryPath), comparison);
+
+    /// <summary>
+    /// Identity half of <see cref="EvaluateStartGate"/>. The unit's effective identity is its
+    /// baked <c>KCAP_URL</c> (precedence) or, absent that, its
+    /// baked profile's <c>server_url</c> looked up via <see cref="ConfigMutator.TryLoadPure"/> under
+    /// the unit's own baked <c>KCAP_CONFIG_DIR</c> (or the default config root when it baked none).
+    /// Fail-closed on absent required evidence (spec §3.4(b)): a gated launch is always app-managed,
+    /// so the invoking environment is expected to carry BOTH <c>KCAP_PROFILE</c> and
+    /// <c>KCAP_EXPECT_SERVER_URL</c>, and the unit being gated is expected to carry its own baked
+    /// <c>KCAP_EXPECT_SERVER_URL</c> — any of those missing, or the unit's server proving
+    /// unresolvable, means the identity assertion this gate exists to make simply cannot be made, so
+    /// it must never be silently skipped as "no assertion to make". Only the unit's OWN baked
+    /// <c>KCAP_PROFILE</c> stays optional — a unit pinned directly by a baked <c>KCAP_URL</c>
+    /// legitimately carries none. The stale-pin rule: the unit's baked expectation, its resolved
+    /// identity, and this invocation's expected server URL must all agree — so a unit installed for
+    /// server S whose profile was later re-pointed to T is caught here even when a fresh
+    /// T-expecting invocation would otherwise match one side of that split. Profile identity is
+    /// compared by exact name, server identity through <see cref="ServerIdentity.Canonicalize"/> — a
+    /// candidate that fails to canonicalize can never silently agree with the others.
+    /// </summary>
+    static StartGateReason? EvaluateIdentity(IReadOnlyDictionary<string, string> unitEnv, Func<string, string?> env) {
+        unitEnv.TryGetValue(ProfileVar, out var unitProfile);
+        unitEnv.TryGetValue(UrlVar, out var unitUrl);
+        unitEnv.TryGetValue(ExpectVar, out var unitExpect);
+
+        var envProfile = env(ProfileVar);
+        var envExpect  = env(ExpectVar);
+
+        if (string.IsNullOrEmpty(unitExpect) || string.IsNullOrEmpty(envProfile) || string.IsNullOrEmpty(envExpect))
+            return StartGateReason.IdentityMismatch;
+
+        if (!string.IsNullOrEmpty(unitProfile) && !string.Equals(envProfile, unitProfile, StringComparison.Ordinal))
+            return StartGateReason.IdentityMismatch;
+
+        var unitResolved = !string.IsNullOrEmpty(unitUrl) ? unitUrl : BakedProfileServerUrl(unitEnv, unitProfile);
+        if (string.IsNullOrEmpty(unitResolved)) return StartGateReason.IdentityMismatch; // unresolvable unit server
+
+        string? canonical = null;
+        foreach (var candidate in new[] { unitResolved, unitExpect, envExpect }) {
+            var normalized = ServerIdentity.Canonicalize(candidate);
+            if (normalized is null) return StartGateReason.IdentityMismatch;
+            if (canonical is null) { canonical = normalized; continue; }
+            if (!string.Equals(canonical, normalized, StringComparison.Ordinal))
+                return StartGateReason.IdentityMismatch;
+        }
+
+        return null;
+    }
+
+    /// <summary>The <c>KCAP_URL</c>-absent fallback for <see cref="EvaluateIdentity"/> — the
+    /// config-path resolution itself is shared with <c>DaemonCommands.BakedProfileServerUrl</c>
+    /// (the same lookup <c>service status --json</c> does for its UX-only evidence fields) via
+    /// <see cref="UnitIdentity.ConfigPathFromUnitEnv"/>; the failure contract on top is NOT
+    /// shared and must not be: this uses <see cref="ConfigMutator.TryLoadPure"/> rather than
+    /// <c>LoadPure</c>, because a config file that exists but cannot be read/parsed (a directory
+    /// sitting at the path, a permissions error) is unreadable EVIDENCE for a pre-mutation gate —
+    /// the caller's try/catch reports that as <see cref="StartGateReason.EvidenceUnreadable"/>,
+    /// never silently folded into the same "server unresolvable" outcome an absent/unconfigured
+    /// profile gets. <c>DaemonCommands</c>' UX-only counterpart fails soft to null instead.</summary>
+    static string? BakedProfileServerUrl(IReadOnlyDictionary<string, string> unitEnv, string? profile) {
+        if (string.IsNullOrEmpty(profile)) return null;
+        var configPath = UnitIdentity.ConfigPathFromUnitEnv(unitEnv);
+
+        if (!ConfigMutator.TryLoadPure(configPath, out var config))
+            throw new InvalidDataException($"unreadable config at '{configPath}'");
+
+        return config.Profiles.TryGetValue(profile, out var p) ? p.ServerUrl : null;
+    }
+
+    static string GateReasonToken(StartGateReason reason) => reason switch {
+        StartGateReason.DirectiveMissing     => "directive_missing",
+        StartGateReason.DirectiveInvalid     => "directive_invalid",
+        StartGateReason.IdentityMismatch     => "identity_mismatch",
+        StartGateReason.ForeignBinary        => "foreign_binary",
+        StartGateReason.PackageInconsistent  => "package_inconsistent",
+        _                                    => "evidence_unreadable"
+    };
 
     /// <summary>Ownership + readiness predicate: hello well-formed AND the freshly-queried job pid
     /// matches the validated daemon pid (both non-null). Returns the observed job pid so a caller can
@@ -203,9 +581,15 @@ sealed class ServiceVerify(
 
     /// <summary>Bootout (plist retained) then verify the restore, polled (bounded by the reserve)
     /// rather than single-shot — <c>bootout</c> can return before the label is gone. Absent → the
-    /// rollback itself is the verified-safe state, marker deleted. Still loaded at reserve expiry →
-    /// marker kept so a resumer can see the transaction never settled.</summary>
-    async Task<int> Rollback(string serviceId) {
+    /// rollback itself is the verified-safe state, marker deleted, and reports
+    /// <paramref name="reasonExit"/>/<paramref name="reasonToken"/> — defaulted to a genuine
+    /// readiness timeout, but a caller rolling back for a DIFFERENT reason (e.g. gated start's
+    /// Phase B drift) overrides both so exactly one verify_* line is ever printed for that failure,
+    /// mirroring <see cref="InstallRollback"/>'s own reasonToken parameter. Still loaded at reserve
+    /// expiry → marker kept so a resumer can see the transaction never settled; that failure path
+    /// always reports its OWN token regardless of the override, since the rollback itself did not
+    /// reach the verified-safe state the override describes.</summary>
+    async Task<int> Rollback(string serviceId, int reasonExit = VerifyExit.ReadinessTimeout, string reasonToken = VerifyExit.ReadinessTimeoutToken) {
         var deadline = time.GetUtcNow() + _rollbackReserve;
 
         manager.Stop(serviceId, Remaining(deadline), out var stopError);
@@ -216,8 +600,8 @@ sealed class ServiceVerify(
             lastProbe = manager.Query(serviceId, Remaining(deadline)).Probe;
             if (lastProbe == LabelProbe.Absent) {
                 ServiceTxnMarker.Delete(serviceId);
-                Say(VerifyExit.ReadinessTimeoutToken);
-                return VerifyExit.ReadinessTimeout;
+                Say(reasonToken);
+                return reasonExit;
             }
 
             if (time.GetUtcNow() >= deadline) break;
@@ -232,6 +616,15 @@ sealed class ServiceVerify(
 
         Say(VerifyExit.RestoreVerificationToken);
         return VerifyExit.RestoreVerification;
+    }
+
+    /// <summary>The gated install/replace path's digest recheck seam, shared by
+    /// the viability arm and both TOCTOU rechecks below. An exception hashing the binary (a race
+    /// with a package manager mid-replace, a permissions error) is treated as failure —
+    /// unreadable evidence at a recheck is drift, never let it escape uncaught.</summary>
+    bool DigestStillGood(string binaryPath) {
+        try { return _digestMatches(binaryPath); }
+        catch { return false; }
     }
 
     enum InstallReady { NotReady, Ready, VersionMismatch }
@@ -249,6 +642,20 @@ sealed class ServiceVerify(
             return VerifyExit.Contended;
         }
 
+        // Gated ONLY when the invoking launcher itself carries the consent-seed
+        // directive — a bare `kcap daemon service install/replace --verify` typed at a terminal
+        // never sees any of this task's checks. `is not null`, same exact-value contract as
+        // StartVerifiedAsync's `gated`: an empty invoking value still activates. Computed once, up
+        // front, so the viability arm and both rechecks below share one activation decision.
+        var gated = _gateEnv is not null && _gateEnv(ConsentSeedVar) is not null;
+
+        // The refusal-attribution unit expectation for install/replace: unlike start (which reads
+        // an EXISTING unit's baked env), install is about to WRITE a fresh unit, so there is no
+        // installed plist to re-parse — the freshly generated spec's own baked env, about to become
+        // the unit's env, is the equivalent evidence.
+        spec.Environment.TryGetValue(ExpectVar, out var unitExpectation);
+        var observedJobPids = new HashSet<int>();
+
         // Viability is proven BEFORE any destructive step (recovery, marker, bootout, kill) so
         // VerifyExit.Viability's "nothing is touched" contract holds even for --replace: a missing
         // binary, an invalid pinned-profile URL, or a plist that cannot be rendered (e.g. an
@@ -260,6 +667,19 @@ sealed class ServiceVerify(
 
         if (!_profileViable()) {
             Say(VerifyExit.ViabilityToken);
+            return VerifyExit.Viability;
+        }
+
+        // The binary about to be installed must still hash-match this CLI build's own
+        // embedded digest — same "package_inconsistent" failure mode the gated start path already
+        // reports, but here it's a viability abort (nothing written yet, no marker) rather than a
+        // rollback. One stderr line naming the reason; no separate generic viability token.
+        // Deliberate conflation: DigestStillGood's catch also reports an unreadable/unhashable
+        // binary as package_inconsistent here, where EvaluateStartGate would separately bucket
+        // that as EvidenceUnreadable — install has no third bucket, and either way the binary
+        // about to be installed cannot be trusted, so it's still a viability abort.
+        if (gated && !DigestStillGood(spec.DaemonBinaryPath)) {
+            Say($"viability_reason={GateReasonToken(StartGateReason.PackageInconsistent)}");
             return VerifyExit.Viability;
         }
 
@@ -312,13 +732,33 @@ sealed class ServiceVerify(
 
         ServiceTxnMarker.Write(serviceId, new TxnMarker(1, op, "written", preState, "no-unit", fingerprint));
 
+        // TOCTOU re-check immediately before the mutation viability's digest check
+        // authorized — the same binary content could have been swapped (a foreign writer, a broken
+        // mid-upgrade package) in the window between that check and this bootstrap. Drift here rolls
+        // back through the SAME fingerprint-gated machinery a bootstrap throw does, just with the
+        // gate's own exit code/token instead of ReadinessTimeout's.
+        if (gated && !DigestStillGood(spec.DaemonBinaryPath))
+            return await InstallRollback(serviceId, generated.Path, fingerprint, VerifyExit.StartGateDrift, VerifyExit.StartGateDriftToken);
+
+        // Verified pre-clear before bootstrap, gated paths only — mirrors StartVerifiedAsync: the
+        // marker a readiness timeout later finds is only trustworthy evidence for THIS attempt once
+        // any leftover from a prior one is provably gone. A clear that can't be verified disables
+        // coded attribution for this action entirely rather than risk attributing a stale marker;
+        // the mutation itself still proceeds.
+        var attributionEnabled = false;
+        if (gated) {
+            attributionEnabled = BootRefusalReader.TryClear(serviceId);
+            if (!attributionEnabled) Say("boot-refusal marker could not be cleared; coded attribution disabled");
+        }
+
         try {
             manager.WriteAndBootstrap(spec, Remaining(forward));
         } catch (Exception ex) {
             // WriteAndBootstrap writes the unit before it bootstraps — a throw here can still leave the
             // plist on disk, so route through the same fingerprint-gated rollback.
             Say($"{op}: {ex.Message}");
-            return await InstallRollback(serviceId, generated.Path, fingerprint, VerifyExit.ReadinessTimeout, VerifyExit.ReadinessTimeoutToken);
+            var bootstrapThrowExit = await InstallRollback(serviceId, generated.Path, fingerprint, VerifyExit.ReadinessTimeout, VerifyExit.ReadinessTimeoutToken);
+            return AttributeReadinessTimeout(serviceId, bootstrapThrowExit, gated, attributionEnabled, unitExpectation, observedJobPids);
         }
 
         ServiceTxnMarker.Write(serviceId, new TxnMarker(1, op, "bootstrapped", preState, "no-unit", fingerprint));
@@ -327,12 +767,27 @@ sealed class ServiceVerify(
 
         while (time.GetUtcNow() < pollDeadline) {
             var (primary, pinnedPid) = await IsInstallReadyAsync(serviceId, expectedVersion, pollDeadline, requirePid: null);
+            if (pinnedPid is not null) observedJobPids.Add(pinnedPid.Value);
+
+            // Same reasoning as StartVerifiedAsync's readiness loop: IsInstallReadyAsync only
+            // reports a pid once hello is well-formed, but a REFUSING daemon exits before its
+            // control socket exists — query the job pid directly whenever hello couldn't, so a
+            // refused boot's pid still lands in observedJobPids.
+            if (gated && pinnedPid is null) {
+                var directRemaining = Remaining(pollDeadline);
+                if (directRemaining > TimeSpan.Zero) {
+                    var directPid = manager.Query(serviceId, directRemaining).JobPid;
+                    if (directPid is not null) observedJobPids.Add(directPid.Value);
+                }
+            }
+
             if (primary == InstallReady.VersionMismatch)
                 return await InstallRollback(serviceId, generated.Path, fingerprint, VerifyExit.HelloValidation, VerifyExit.HelloValidationToken);
 
             if (primary == InstallReady.Ready) {
                 // Recheck against the ORIGINAL forward cutoff, pinning pid (same incarnation).
-                var (confirm, _) = await IsInstallReadyAsync(serviceId, expectedVersion, forward, requirePid: pinnedPid);
+                var (confirm, confirmedPid) = await IsInstallReadyAsync(serviceId, expectedVersion, forward, requirePid: pinnedPid);
+                if (confirmedPid is not null) observedJobPids.Add(confirmedPid.Value);
                 if (confirm == InstallReady.VersionMismatch)
                     return await InstallRollback(serviceId, generated.Path, fingerprint, VerifyExit.HelloValidation, VerifyExit.HelloValidationToken);
 
@@ -341,9 +796,17 @@ sealed class ServiceVerify(
                     // old CLI can overwrite it under a healthy job, and a PID check would miss that.
                     var onDisk = _readPlist(generated.Path);
                     if (onDisk is not null && ServiceTxnMarker.Fingerprint(onDisk) == fingerprint) {
+                        // The final gated recheck, joined onto this existing on-disk
+                        // recheck rather than a separate poll step — catches a binary swap that
+                        // landed AFTER bootstrap started the job (the pre-bootstrap recheck only
+                        // covers the window up to that point).
+                        if (gated && !DigestStillGood(spec.DaemonBinaryPath))
+                            return await InstallRollback(serviceId, generated.Path, fingerprint, VerifyExit.StartGateDrift, VerifyExit.StartGateDriftToken);
+
                         ServiceTxnMarker.Write(serviceId, new TxnMarker(1, op, "committed", preState, "no-unit", fingerprint));
                         onCommitted?.Invoke();
                         ServiceTxnMarker.Delete(serviceId);
+                        if (gated) BootRefusalReader.Consume(serviceId); // hygiene — no refusal to attribute on success
                         return VerifyExit.Ok;
                     }
 
@@ -356,7 +819,8 @@ sealed class ServiceVerify(
             await Task.Delay(PollInterval, time, CancellationToken.None);
         }
 
-        return await InstallRollback(serviceId, generated.Path, fingerprint, VerifyExit.ReadinessTimeout, VerifyExit.ReadinessTimeoutToken);
+        var readinessTimeoutExit = await InstallRollback(serviceId, generated.Path, fingerprint, VerifyExit.ReadinessTimeout, VerifyExit.ReadinessTimeoutToken);
+        return AttributeReadinessTimeout(serviceId, readinessTimeoutExit, gated, attributionEnabled, unitExpectation, observedJobPids);
     }
 
     /// <summary>
@@ -479,6 +943,18 @@ sealed class ServiceVerify(
 
         ServiceTxnMarker.Write(serviceId, new TxnMarker(1, op, "owner-stopped", preState, "no-unit", null));
         return null;
+    }
+
+    /// <summary>Poll (bounded by <paramref name="deadline"/>) until <c>manager.Query</c> reports the
+    /// label <see cref="LabelProbe.Absent"/> — used by the gated start path to confirm a bootout
+    /// actually settled before bootstrapping on top of it (a launchctl exit code alone is not proof
+    /// the label unloaded synchronously).</summary>
+    async Task<bool> WaitForLabelAbsentAsync(string serviceId, DateTimeOffset deadline) {
+        while (true) {
+            if (manager.Query(serviceId, Remaining(deadline)).Probe == LabelProbe.Absent) return true;
+            if (time.GetUtcNow() >= deadline) return false;
+            await Task.Delay(PollInterval, time, CancellationToken.None);
+        }
     }
 
     /// <summary>Poll (bounded by <paramref name="deadline"/>) until the validated daemon pid is null —

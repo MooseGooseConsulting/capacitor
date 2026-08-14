@@ -326,8 +326,19 @@ public static class AppConfig {
             }
 
             try {
-                await SaveProfileConfig(result.Config, ct);
-            } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+                // Identity mutation: MutateAsync re-reads the file fresh under the lock and
+                // re-applies ConfigMigration itself, so it publishes the same migrated form
+                // `result.Config` holds here — the mutate callback need not (and must not,
+                // to avoid clobbering a concurrent writer) reuse this already-read snapshot.
+                await ConfigMutator.MutateAsync(c => c, ct);
+            } catch (Exception ex) when (ex is not OperationCanceledException) {
+                // Broad on purpose: unlike the pre-ConfigMutator write, this path now also goes
+                // through ConfigFileLock, which can throw TimeoutException (10s lock wait) or a
+                // mutex-open failure that isn't UnauthorizedAccessException — every kcap command
+                // hits this at startup, and the comment above still holds: the in-memory migrated
+                // config must never be dropped just because the best-effort persist couldn't run.
+                // OperationCanceledException is excluded so a caller's own cancellation still
+                // propagates instead of being swallowed as a warning.
                 await Console.Error.WriteLineAsync($"Warning: could not persist migrated config at {ConfigPath}: {ex.Message}");
             }
         }
@@ -360,20 +371,6 @@ public static class AppConfig {
         }
 
         return rebuilt is null ? config : config with { Profiles = rebuilt };
-    }
-
-    public static async Task SaveProfileConfig(ProfileConfig config, CancellationToken ct = default) {
-        var dir = Path.GetDirectoryName(ConfigPath)!;
-        Directory.CreateDirectory(dir);
-        var tempPath = $"{ConfigPath}.tmp";
-
-        await File.WriteAllBytesAsync(
-            tempPath,
-            JsonSerializer.SerializeToUtf8Bytes(config, ProfileConfigJsonContextIndented.Default.ProfileConfig),
-            ct
-        );
-        ct.ThrowIfCancellationRequested();
-        File.Move(tempPath, ConfigPath, overwrite: true);
     }
 
     public static string GetConfigPath() => ConfigPath;

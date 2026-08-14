@@ -7,6 +7,7 @@ using Capacitor.Cli.Daemon.Pty.Unix;
 using Capacitor.Cli.Daemon.Pty.Windows;
 using Capacitor.Cli.Daemon.Services;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -41,6 +42,12 @@ public static partial class DaemonRunner {
         // the successor's --await-lock handoff flag.
         config.OriginalArgs = args;
         var awaitLock = args.Contains("--await-lock");
+
+        // Boot-local carriers: read off ambient env and IMMEDIATELY remove them, before anything
+        // else reads env or the host builder exists, so no descendant process (PTY-spawned agent,
+        // ACP child, a self-respawned successor's own inheritance from OUR ambient env) can ever
+        // observe them except through the explicit re-injection paths that need them.
+        CaptureBootCarriers(config, Environment.GetEnvironmentVariable, k => Environment.SetEnvironmentVariable(k, null));
 
         // Resolve server URL + active profile. The CLI does this in its own
         // Program.cs, but the daemon is a separate process so its statics start
@@ -249,6 +256,24 @@ public static partial class DaemonRunner {
 
         config.InstanceId = daemonLock.InstanceId;
 
+        // Phase B2-b (sequenced-settlement design §4.2.3): the durable per-daemon state root — used by
+        // the pre-host boot-check block immediately below AND (further down) by the coverage journal /
+        // reviewer-home sweeps. Computed once here so every consumer agrees on the exact same directory.
+        var coverageStateDir = Path.Combine(
+            config.StateDir ?? DaemonLockPaths.Directory, DaemonLockPaths.Sanitize(config.Name));
+
+        // Best-effort, never throws: on a brand-new daemon name nothing has created this directory yet
+        // (LaunchConsentStore's ctor — the previous sole creator — only runs below, and not at all on
+        // the expectation-mismatch arm), so without this an expectation-mismatch refusal on a fresh
+        // name would have nowhere to write its marker. Same fail-soft posture as BootRefusal.TryWrite
+        // itself — a failure here just means that call's own containment swallows the write too.
+        try { Directory.CreateDirectory(coverageStateDir); } catch { /* best-effort */ }
+
+        // Pre-host boot checks — see RunBootChecksAsync. Both refusal arms return BEFORE the host is
+        // built, before any ServerConnection/token use of any kind, so a misdirected or un-consented
+        // daemon never gets far enough to touch the network or spawn anything.
+        if (await RunBootChecksAsync(config, coverageStateDir) is { } bootCheckExit) return bootCheckExit;
+
         // Phase B2-b (sequenced-settlement design): pin the per-boot epoch here, before any service is
         // built, so the epoch advertised on DaemonConnect and the orchestrator's own _daemonEpoch (which
         // falls back to config.DaemonEpoch) are provably the same value.
@@ -258,8 +283,6 @@ public static partial class DaemonRunner {
         // Connect/spawn. this_epoch_contained is true only where OS containment leaves NO recordless
         // survivor class (the Windows Job Object). Fail-closed inside RecordBoot. NullLogger is acceptable
         // this early — the host's logging pipeline isn't built yet.
-        var coverageStateDir = Path.Combine(
-            config.StateDir ?? DaemonLockPaths.Directory, DaemonLockPaths.Sanitize(config.Name));
         SeedReviewerFloors(coverageStateDir, config);
 
         // Recovers reviewer homes left by a SIGKILLed predecessor. Runs unconditionally: a daemon
@@ -295,10 +318,15 @@ public static partial class DaemonRunner {
 
         // The owner consent gate — policy store + append-only decision log share the
         // per-daemon state root with the coverage journal above; the prompter is null until
-        // Task 6 registers the broker (a Prompt-default policy then denies with "prompt_no_ui").
+        // the broker below registers itself (a Prompt-default policy then denies with "prompt_no_ui").
         // TimeProvider.System drives the gate's monotonic deadline discipline (spec §3.2) — a
         // real singleton in production, swapped for a FakeTimeProvider in tests.
         builder.Services.AddSingleton(TimeProvider.System);
+        // A FRESH instance with the real ILogger<LaunchConsentStore> — deliberately NOT the throwaway
+        // NullLogger store the boot-check block above used for classification. Reusing that instance
+        // here would silence LaunchConsentStore's diagnostics (Load()-time corruption warnings, and the
+        // Persist() failure path LaunchConsentIpc doesn't independently log) for the daemon's entire
+        // lifetime. The extra file read at boot is cheap; a permanently silenced diagnostic is not.
         builder.Services.AddSingleton(sp => new LaunchConsentStore(
             coverageStateDir, sp.GetRequiredService<ILogger<LaunchConsentStore>>()));
         builder.Services.AddSingleton(sp => new LaunchConsentDecisionLog(
@@ -306,13 +334,13 @@ public static partial class DaemonRunner {
         builder.Services.AddSingleton(sp => new LaunchConsentGate(
             sp.GetRequiredService<LaunchConsentStore>(),
             sp.GetRequiredService<LaunchConsentDecisionLog>(),
-            sp.GetService<ILaunchConsentPrompter>(),   // null until Task 6 registers the broker
+            sp.GetService<ILaunchConsentPrompter>(),   // null until the broker below registers itself
             sp.GetRequiredService<TimeProvider>(),
             sp.GetRequiredService<ILogger<LaunchConsentGate>>()));
         builder.Services.AddSingleton<LaunchConsentBroker>();
         builder.Services.AddSingleton<ILaunchConsentPrompter>(sp => sp.GetRequiredService<LaunchConsentBroker>());
-        // Task 7: local-socket consent frames — the same broker instance the gate above prompts
-        // through, so a subscriber connected via ConsentSubscribe sees the gate's own pending requests.
+        // Local-socket consent frames — the same broker instance the gate above prompts through, so
+        // a subscriber connected via ConsentSubscribe sees the gate's own pending requests.
         builder.Services.AddSingleton<LaunchConsentIpc>();
 
         // The DaemonStatus push: ONE notifier singleton shared by ServerConnection (pulses on hub
@@ -673,6 +701,59 @@ public static partial class DaemonRunner {
     }
 
     /// <summary>
+    /// Pre-host boot checks, callable without a live host. Order matters: the server-expectation
+    /// check runs FIRST (a server the operator didn't expect must never even reach consent
+    /// classification), then the consent-seed directive. A directive is ABSENT only when
+    /// <paramref name="config"/>'s
+    /// <see cref="DaemonConfig.ConsentSeedDirective"/> is null — an empty string is a deliberate
+    /// refusal under the exact-value contract, and <c>BootSeed("")</c> already classifies it
+    /// <see cref="SeedOutcome.RefusedInvalidDirective"/>, so activating on "is not null" reaches
+    /// that path rather than silently treating an empty directive as no directive at all.
+    /// <see cref="LaunchConsentStore"/>'s own constructor can throw (e.g. a file sitting where the
+    /// state directory belongs) — that must land as the same coded refusal as any other
+    /// unwritable-state-dir condition, never an uncoded crash that respins under KeepAlive. A
+    /// passing boot (both checks green, or no directive at all) clears any refusal marker a PRIOR
+    /// failed attempt left behind — otherwise `kcap daemon status` (or a desktop supervisor) would
+    /// keep reporting a refusal that no longer applies. Returns the process exit code on refusal,
+    /// or null to proceed to host construction.
+    /// </summary>
+    internal static async Task<int?> RunBootChecksAsync(DaemonConfig config, string stateDir) {
+        if (!ExpectationSatisfied(config.ExpectedServerUrl, config.ServerUrl)) {
+            BootRefusal.TryWrite(stateDir, config, "server_expectation_mismatch");
+            await Console.Error.WriteLineAsync("kcap-daemon: refusing to start: server_expectation_mismatch");
+
+            return 0;
+        }
+
+        if (config.ConsentSeedDirective is not null) {
+            // A THROWAWAY store, used only for this boot-time classification — deliberately NOT the
+            // instance handed to DI below (see the DI registration's own comment for why: reusing it
+            // would silence LaunchConsentStore's diagnostics, via a NullLogger, for the daemon's
+            // entire lifetime).
+            SeedResult seed;
+            try {
+                seed = new LaunchConsentStore(stateDir, NullLogger.Instance).BootSeed(config.ConsentSeedDirective);
+            } catch {
+                BootRefusal.TryWrite(stateDir, config, "consent_seed_unwritable");
+                await Console.Error.WriteLineAsync("kcap-daemon: refusing to start: consent_seed_unwritable");
+
+                return 0;
+            }
+
+            if (seed.Outcome is SeedOutcome.RefusedInvalidDirective or SeedOutcome.RefusedUnwritable) {
+                BootRefusal.TryWrite(stateDir, config, seed.RefusalToken!);
+                await Console.Error.WriteLineAsync($"kcap-daemon: refusing to start: {seed.RefusalToken}");
+
+                return 0;
+            }
+        }
+
+        BootRefusal.TryDelete(stateDir);   // passing boot clears leftovers (hygiene)
+
+        return null;
+    }
+
+    /// <summary>
     /// Disposes the host so its ServiceProvider — and therefore every registered
     /// <see cref="IDisposable"/> singleton (e.g. <see cref="UnixSpawnerThread"/>) — is released.
     /// <see cref="IHost"/> only surfaces <see cref="IDisposable"/>, but the concrete host built by
@@ -841,6 +922,51 @@ public static partial class DaemonRunner {
         "none"                         => LogLevel.None,
         _                              => null
     };
+
+    /// <summary>
+    /// The three boot-local carrier env vars: set by whatever spawned this daemon
+    /// (`kcap daemon start`, a service unit, or a self-respawned predecessor), read exactly once at
+    /// boot by <see cref="CaptureBootCarriers"/>, and never left in the ambient process environment
+    /// afterward. Names are shared with <c>DetachedRespawnStrategy</c>'s re-injection and the PTY/ACP
+    /// scrub lists so every consumer agrees on the literal strings.
+    /// </summary>
+    internal static class BootCarriers {
+        public const string Seed    = "KCAP_CONSENT_SEED_DEFAULT";
+        public const string Expect  = "KCAP_EXPECT_SERVER_URL";
+        public const string Attempt = "KCAP_BOOT_ATTEMPT";
+        public static readonly string[] All = [Seed, Expect, Attempt];
+    }
+
+    /// <summary>
+    /// Reads <see cref="BootCarriers.Seed"/>/<see cref="BootCarriers.Expect"/>/<see cref="BootCarriers.Attempt"/>
+    /// off ambient env into <paramref name="config"/> and immediately clears them via
+    /// <paramref name="clear"/> — called from <see cref="RunAsync"/> right after
+    /// <c>config.OriginalArgs = args;</c>, BEFORE anything else reads env or the host builder
+    /// exists, so no descendant process can observe them by inheritance. <paramref name="get"/>/
+    /// <paramref name="clear"/> are injected so this is testable without touching real process env.
+    /// </summary>
+    internal static void CaptureBootCarriers(DaemonConfig config, Func<string, string?> get, Action<string> clear) {
+        config.ConsentSeedDirective = get(BootCarriers.Seed);
+        config.ExpectedServerUrl    = get(BootCarriers.Expect);
+        config.BootAttemptId        = get(BootCarriers.Attempt);
+        clear(BootCarriers.Seed);
+        clear(BootCarriers.Expect);
+        clear(BootCarriers.Attempt);
+    }
+
+    /// <summary>
+    /// Does the resolved <see cref="DaemonConfig.ServerUrl"/> match what the
+    /// launcher told this boot to expect (<see cref="DaemonConfig.ExpectedServerUrl"/>, carried in
+    /// via <c>KCAP_EXPECT_SERVER_URL</c>)? Only a genuinely NULL expectation is absence and
+    /// trivially satisfied — this check exists to catch a daemon that resolved a DIFFERENT server
+    /// than the one it was launched to point at, not to require an expectation be set. A
+    /// present-but-empty (or otherwise non-canonicalizable) expectation is a deliberate value, same
+    /// exact-value contract as the consent-seed directive, so it must MISMATCH rather than be
+    /// silently skipped. Otherwise compared through <see cref="ServerIdentity.Matches"/> —
+    /// scheme/host normalized, default ports converged, path case preserved.
+    /// </summary>
+    internal static bool ExpectationSatisfied(string? expected, string resolved) =>
+        expected is null || (!string.IsNullOrEmpty(expected) && ServerIdentity.Matches(expected, resolved));
 
     /// <summary>Phase B (D3): parse a seconds-valued env var into a <see cref="TimeSpan"/>
     /// (<c>0</c> → <see cref="TimeSpan.Zero"/>, which disables the bound). Unset/blank/invalid/negative

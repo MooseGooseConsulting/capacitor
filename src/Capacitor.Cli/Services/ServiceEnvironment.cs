@@ -12,7 +12,8 @@ static class ServiceEnvironment {
     /// <summary>Variables carried from the installing shell into the service unit. No credentials —
     /// the unit is a file on disk.</summary>
     static readonly string[] Keys =
-        ["PATH", "KCAP_CONFIG_DIR", "KCAP_PROFILE", "KCAP_URL", "KCAP_CLAUDE_PATH", "KCAP_CODEX_PATH"];
+        ["PATH", "KCAP_CONFIG_DIR", "KCAP_PROFILE", "KCAP_URL", "KCAP_CLAUDE_PATH", "KCAP_CODEX_PATH",
+         "KCAP_CONSENT_SEED_DEFAULT", "KCAP_EXPECT_SERVER_URL"];
 
     /// <summary>
     /// The unattended reviewers' opt-OUT switches. Carried on every platform: these are booleans, not
@@ -117,6 +118,13 @@ static class ServiceEnvironment {
         return d;
     }
 
+    /// <summary>These two carry the exact-value contract (spec): an empty value is a deliberate
+    /// refusal at the gate/daemon, distinct from the key being absent altogether — so unlike every
+    /// other key here (which skips a present-but-empty value as if unset), these are baked
+    /// VERBATIM whenever the key is present, empty or not. Silently dropping an empty directive
+    /// on the way into the unit would let it vanish instead of failing closed.</summary>
+    static readonly string[] BakeEvenEmptyKeys = ["KCAP_CONSENT_SEED_DEFAULT", "KCAP_EXPECT_SERVER_URL"];
+
     /// <summary>Pure: select the relevant keys from <paramref name="source"/>, pin the profile.</summary>
     /// <param name="isWindows">Platform, passed rather than probed so the exclusion is testable.</param>
     public static IReadOnlyDictionary<string, string> Build(
@@ -125,8 +133,10 @@ static class ServiceEnvironment {
         string[] keys = isWindows
             ? [.. Keys, .. ReviewerConsentKeys, .. GoogleConfigKeys]
             : [.. Keys, .. ReviewerConsentKeys, TokenCommandKey, .. GoogleConfigKeys, .. GoogleSecretCapableKeys];
-        foreach (var key in keys)
-            if (source.TryGetValue(key, out var v) && !string.IsNullOrEmpty(v)) env[key] = v;
+        foreach (var key in keys) {
+            if (!source.TryGetValue(key, out var v)) continue;
+            if (!string.IsNullOrEmpty(v) || BakeEvenEmptyKeys.Contains(key)) env[key] = v;
+        }
         if (!string.IsNullOrEmpty(profileName)) env["KCAP_PROFILE"] = profileName; // explicit pin wins
         return env;
     }

@@ -19,10 +19,23 @@ public static class CopilotPaths {
     /// Detection by root-dir presence — Copilot CLI creates <c>~/.copilot</c>
     /// on first run, and (unlike Codex) the binary name <c>copilot</c> is too
     /// generic for a PATH probe to be the only signal. Callers that want the
-    /// PATH probe too OR this with <c>AgentDetector.IsInstalled("copilot")</c>.
+    /// PATH probe too OR this with <c>AgentDetection.BinaryOnPath("copilot")</c>.
     /// </summary>
     public static bool IsInstalled(string? home = null, string? copilotHome = null)
         => Directory.Exists(Root(home, copilotHome));
+
+    /// <summary>Pure variant of <see cref="Root"/> for fully-injected callers (e.g.
+    /// <see cref="Setup.AgentDetection"/>) — <paramref name="copilotHome"/> null means "not set",
+    /// never falls back to a real <c>COPILOT_HOME</c> process-env read; <paramref name="home"/> is
+    /// taken as-is, never falling back to a real user-profile read either — the caller is expected
+    /// to have already resolved a concrete value (<see cref="Setup.AgentDetectionInputs.Home"/>).</summary>
+    public static string RootPure(string? home, string? copilotHome) =>
+        !string.IsNullOrEmpty(copilotHome) ? copilotHome : Path.Combine(home ?? "", ".copilot");
+
+    /// <summary>Pure variant of <see cref="IsInstalled"/> — never falls back to the real process
+    /// environment for <c>COPILOT_HOME</c> or the real user profile for <c>home</c>.</summary>
+    public static bool IsInstalledPure(string? home, string? copilotHome) =>
+        Directory.Exists(RootPure(home, copilotHome));
 
     /// <summary>
     /// User-level hooks directory. Copilot merges every <c>*.json</c> file in

@@ -97,7 +97,7 @@ public static class DaemonCommands {
     }
 
     static async Task<int> SpawnForegroundAsync(string name, string[] args) {
-        var daemonPath = ResolveDaemonBinary();
+        var daemonPath = UnitIdentity.ResolveDaemonBinary();
 
         if (daemonPath is null) {
             await Console.Error.WriteLineAsync(DaemonNotFoundMessage());
@@ -166,13 +166,15 @@ public static class DaemonCommands {
             return 1;
         }
 
-        var daemonPath = ResolveDaemonBinary();
+        var daemonPath = UnitIdentity.ResolveDaemonBinary();
 
         if (daemonPath is null) {
             Console.Error.WriteLine(DaemonNotFoundMessage());
 
             return 1;
         }
+
+        if (DetachedDigestGate(daemonPath, Environment.GetEnvironmentVariable) is int gateExit) return gateExit;
 
         // Redirect ALL three standard streams so the detached daemon does not
         // inherit our stdout/stderr. Left un-redirected, the daemon
@@ -252,6 +254,35 @@ public static class DaemonCommands {
         Console.Out.WriteLine($"  Status:    kcap daemon status --name {name}");
 
         return 0;
+    }
+
+    /// <summary><c>DaemonRunner.BootCarriers.Seed</c>'s twin: the daemon project defines the
+    /// canonical constant, but the CLI project does not reference the daemon project, so the
+    /// literal is duplicated here (same pattern as <c>ServiceVerify</c>'s duplicated verify codes).</summary>
+    const string SeedVar = "KCAP_CONSENT_SEED_DEFAULT";
+
+    /// <summary>
+    /// Gates a detached spawn on the embedded daemon digest, but ONLY when
+    /// <see cref="SeedVar"/> is PRESENT (<c>is not null</c> — the exact-value contract: an empty
+    /// value still activates, it is a deliberate refusal, not absence) in the process env — that
+    /// directive is set exclusively by an app-managed start (the desktop supervisor / a
+    /// self-respawn), never by a bare `kcap daemon start -d` typed at a terminal, so a manual start
+    /// is never gated. This gate's only job is the digest; an empty/invalid directive value is not
+    /// separately checked here — the daemon child refuses it itself (<c>consent_seed_invalid</c>,
+    /// exit 0) once it actually boots. When gated, <see cref="DaemonDigest.Matches"/> false
+    /// (including the fail-closed dev/test placeholder) means the sibling daemon binary doesn't
+    /// match what this CLI build shipped with — refuse before spawning anything, on
+    /// stdout/stderr/exit-code contract the app-side caller parses. <paramref name="env"/> is
+    /// injected so this is testable without touching real process env.
+    /// </summary>
+    internal static int? DetachedDigestGate(string daemonPath, Func<string, string?> env) {
+        if (env(SeedVar) is null) return null; // manual start: no gate
+
+        if (DaemonDigest.Matches(daemonPath)) return null;
+
+        Console.Error.WriteLine("daemon_start_reason=package_inconsistent");
+
+        return 43;
     }
 
     // ── stop ────────────────────────────────────────────────────────────────
@@ -899,7 +930,7 @@ public static class DaemonCommands {
             return 1;
         }
 
-        var daemonPath = ResolveDaemonBinary();
+        var daemonPath = UnitIdentity.ResolveDaemonBinary();
         if (daemonPath is null) { await Console.Error.WriteLineAsync(DaemonNotFoundMessage()); return 1; }
 
         var profileName = ExtractFlagValue(args, "--profile") ?? AppConfig.ResolvedProfile?.ProfileName;
@@ -925,7 +956,7 @@ public static class DaemonCommands {
             // install one whose daemon would exit config-invalid and never satisfy readiness.
             var profileUrlValid = await ServiceInstallViability.PinnedProfileServerUrlValidAsync(env);
             var engine = new ServiceVerify((LaunchdServiceManager)manager, DaemonPidProbe.ValidatedPid, HelloProbe.RunAsync,
-                TimeProvider.System, profileViable: () => profileUrlValid);
+                TimeProvider.System, profileViable: () => profileUrlValid, gateEnv: Environment.GetEnvironmentVariable);
             var exit   = await engine.InstallVerifiedAsync(spec, replace: replace, CapacitorVersion.Current());
             if (exit != VerifyExit.Ok) return exit;
         } else {
@@ -972,7 +1003,7 @@ public static class DaemonCommands {
 
     /// <summary>Plain install under the per-label service lock, matching stop/start/uninstall:
     /// null lock → the same coded-contention message, exit 1, without calling <c>Install</c>. Internal so
-    /// the lock-contention path is testable without <c>ResolveDaemonBinary</c> in the loop.</summary>
+    /// the lock-contention path is testable without <see cref="UnitIdentity.ResolveDaemonBinary"/> in the loop.</summary>
     internal static async Task<int> ServiceInstallPlain(IServiceManager manager, ServiceSpec spec, bool startNow) {
         using var txn = ServiceTxnLock.TryAcquire(spec.ServiceId, TimeSpan.FromSeconds(10));
 
@@ -1040,7 +1071,8 @@ public static class DaemonCommands {
     /// acquires the <see cref="ServiceTxnLock"/> itself — no double-acquire here.
     /// </summary>
     static async Task<int> ServiceStartVerified(IServiceManager manager, string id) {
-        var engine = new ServiceVerify((LaunchdServiceManager)manager, DaemonPidProbe.ValidatedPid, HelloProbe.RunAsync, TimeProvider.System);
+        var engine = new ServiceVerify((LaunchdServiceManager)manager, DaemonPidProbe.ValidatedPid, HelloProbe.RunAsync, TimeProvider.System,
+            gateEnv: Environment.GetEnvironmentVariable);
         var exit = await engine.StartVerifiedAsync(id);
 
         // Same closed-stdio tolerance as the engine's own Say: a broken pipe on this purely
@@ -1079,12 +1111,15 @@ public static class DaemonCommands {
 
     static async Task<int> ServiceStatusJson(IServiceManager manager, string id) {
         var query           = manager.Query(id);
-        var installBinary   = ResolveDaemonBinary();
+        var installBinary   = UnitIdentity.ResolveDaemonBinary();
         var daemonPid       = DaemonPidProbe.ValidatedPid(id);
         var txnActive       = ServiceTxnLock.IsHeld(id);
         var txnMarker       = ServiceTxnMarker.Exists(id);
+        var (unitProfile, unitServerUrl, unitExpectedServer, unitConsentSeed) = UnitEnvEvidence(id, query.UnitPresent);
 
-        var (json, exitCode) = ServiceStatusRender.Render(query, id, installBinary, daemonPid, txnMarker, txnActive);
+        var (json, exitCode) = ServiceStatusRender.Render(
+            query, id, installBinary, daemonPid, txnMarker, txnActive,
+            unitProfile, unitServerUrl, unitExpectedServer, unitConsentSeed);
 
         if (json is null) {
             await Console.Error.WriteLineAsync($"Could not determine service status for '{id}' ({manager.Describe()}).");
@@ -1093,6 +1128,46 @@ public static class DaemonCommands {
 
         await Console.Out.WriteLineAsync(json);
         return exitCode;
+    }
+
+    /// <summary>
+    /// UX-evidence-only re-read of the installed unit's baked environment (spec §3): which profile,
+    /// server URL, expectation and consent-seed default it was installed with. Sourced by re-reading the
+    /// plist rather than threading it through <see cref="ServiceQuery"/> so the query type stays a pure
+    /// lifecycle probe. All four are null when no unit is present or the re-read/parse fails for any
+    /// reason (moved/corrupt plist, permissions) — this is evidence for an operator, never load-bearing.
+    /// </summary>
+    static (string? Profile, string? ServerUrl, string? ExpectedServer, string? ConsentSeed)
+            UnitEnvEvidence(string id, bool unitPresent) {
+        if (!unitPresent) return (null, null, null, null);
+
+        try {
+            var env = LaunchdUnit.EnvFromPlist(File.ReadAllText(LaunchdUnit.PlistPath(id)));
+            env.TryGetValue("KCAP_PROFILE", out var profile);
+            env.TryGetValue("KCAP_EXPECT_SERVER_URL", out var expectedServer);
+            env.TryGetValue("KCAP_CONSENT_SEED_DEFAULT", out var consentSeed);
+
+            var serverUrl = env.TryGetValue("KCAP_URL", out var bakedUrl)
+                ? bakedUrl
+                : BakedProfileServerUrl(env, profile);
+
+            return (profile, serverUrl, expectedServer, consentSeed);
+        } catch {
+            return (null, null, null, null);
+        }
+    }
+
+    /// <summary>The <c>KCAP_URL</c>-absent fallback for <see cref="UnitEnvEvidence"/>: the baked
+    /// profile's <c>server_url</c>, read from the baked <c>KCAP_CONFIG_DIR</c> (or the default config
+    /// root when none was baked) — null on any ambiguity (no baked profile) or miss.</summary>
+    static string? BakedProfileServerUrl(IReadOnlyDictionary<string, string> env, string? profile) {
+        if (string.IsNullOrEmpty(profile)) return null;
+        try {
+            var config = ConfigMutator.LoadPure(UnitIdentity.ConfigPathFromUnitEnv(env));
+            return config.Profiles.TryGetValue(profile, out var p) ? p.ServerUrl : null;
+        } catch {
+            return null;
+        }
     }
 
     static int ServiceUsage() {
@@ -1136,19 +1211,6 @@ public static class DaemonCommands {
             var note = bad ? "  ⚠ binary missing — re-run `kcap daemon service install`" : "";
             await Console.Out.WriteLineAsync($"  {sid,-20}  {st.State}{note}");
         }
-    }
-
-    /// <summary>
-    /// Resolve the kcap-daemon executable shipped alongside this binary. Internal so
-    /// <see cref="DaemonPidProbe"/>'s moved-in <c>IsOurDaemon</c> can reuse it for the
-    /// process-image-name fallback rather than duplicating the lookup.
-    /// </summary>
-    internal static string? ResolveDaemonBinary() {
-        var dir     = AppContext.BaseDirectory;
-        var ext     = OperatingSystem.IsWindows() ? ".exe" : "";
-        var sibling = Path.Combine(dir, $"kcap-daemon{ext}");
-
-        return File.Exists(sibling) ? sibling : null;
     }
 
     static string DaemonNotFoundMessage() =>
