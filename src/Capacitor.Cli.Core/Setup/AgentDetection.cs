@@ -111,14 +111,22 @@ public static class AgentDetection {
     /// null/empty PATH. On Unix, requires at least one of the user/group/other execute bits; on
     /// Windows, walks PATHEXT (defaulting to .EXE/.CMD/.BAT) and accepts any file that exists.
     /// </summary>
-    public static bool BinaryOnPath(string binaryName, AgentDetectionInputs i) {
+    public static bool BinaryOnPath(string binaryName, AgentDetectionInputs i) =>
+        BinaryOnPath(binaryName, i, IsExecutable);
+
+    /// <summary>Stubbing seam for <see cref="BinaryOnPath(string, AgentDetectionInputs)"/>; separator/
+    /// extensions/comparer are all derived from <paramref name="i"/>'s platform, never the host's.</summary>
+    internal static bool BinaryOnPath(string binaryName, AgentDetectionInputs i, Func<string, bool, bool> isExecutable) {
         if (string.IsNullOrEmpty(i.PathEnv)) return false;
 
-        var paths      = i.PathEnv.Split(Path.PathSeparator);
+        var separator  = i.IsWindows ? ';' : ':';
+        var paths      = i.PathEnv.Split(separator);
         var extensions = i.IsWindows ? WindowsExtensions(i.PathExt) : [""];
+        var comparer   = i.IsWindows ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
 
         return paths.Where(dir => !string.IsNullOrEmpty(dir))
-            .Any(dir => extensions.Select(ext => Path.Combine(dir, binaryName + ext)).Any(path => IsExecutable(path, i.IsWindows)));
+            .Distinct(comparer)
+            .Any(dir => extensions.Select(ext => Path.Combine(dir, binaryName + ext)).Any(path => isExecutable(path, i.IsWindows)));
     }
 
     /// <summary>Convenience overload for CLI call sites that only need a single-binary current-

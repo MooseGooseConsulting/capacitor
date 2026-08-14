@@ -131,15 +131,25 @@ sealed class ServiceVerify(
     /// tests; the command wires the real resolution.</summary>
     readonly Func<bool> _profileViable = profileViable ?? (() => true);
 
-    /// <summary>Install-only seam for the on-disk plist read (final recheck + rollback's foreign-file
-    /// guard). Real launchd needs HOME to compute the path, so tests inject this directly.</summary>
+    /// <summary>Install-only seam for the on-disk plist read (Phase B's pre/post-readiness recheck
+    /// and install's final on-disk fingerprint recheck). Real launchd needs HOME to compute the
+    /// path, so tests inject this directly.</summary>
     readonly Func<string, string?> _readPlist = readPlist ?? (path => {
         try { return File.Exists(path) ? File.ReadAllText(path) : null; } catch { return null; }
     });
 
-    /// <summary>Entry-recovery-only seam: distinguishes "absent" from "present but unreadable" when
-    /// <see cref="_readPlist"/> returns null for both.</summary>
-    readonly Func<string, bool> _plistExists = plistExists ?? File.Exists;
+    /// <summary>Discriminated read shared by Phase A, marker recovery, and install rollback: unlike
+    /// <see cref="_readPlist"/> composed with a separate exists check, a structural obstruction (a
+    /// directory, a dangling symlink) can never be misread as confirmed absence.</summary>
+    readonly Func<string, (LaunchdUnit.PlistRead Status, string? Content)> _discriminatedPlistRead =
+        readPlist is null && plistExists is null
+            ? (path => { var status = LaunchdUnit.TryReadPlist(path, out var content); return (status, content); })
+            : (path => {
+                var content = readPlist?.Invoke(path);
+                if (content is not null) return (LaunchdUnit.PlistRead.Ok, content);
+                var exists = plistExists?.Invoke(path) ?? false;
+                return (exists ? LaunchdUnit.PlistRead.Unreadable : LaunchdUnit.PlistRead.Absent, null);
+            });
 
     /// <summary>The gated start seam: when non-null AND <c>gateEnv(ConsentSeedVar)</c> is
     /// PRESENT — any value, including empty, under the exact-value contract —
@@ -207,21 +217,23 @@ sealed class ServiceVerify(
 
         if (gated) {
             var plistPath = LaunchdUnit.PlistPath(serviceId);
-            phaseAPlistContent = _readPlist(plistPath);
+            var (readStatus, content) = _discriminatedPlistRead(plistPath);
+            phaseAPlistContent = content;
 
-            // A malformed/truncated plist (exactly the foreign-writer race Phase B defends
-            // against, caught here instead) must not let XDocument.Parse's XmlException escape
-            // this method — that would abort to a generic, uncoded exit 1 instead of the gate's
-            // own contract. Unreadable evidence is EvidenceUnreadable, same as every other
-            // evidence read this gate performs.
             StartGateReason? reason;
-            try {
-                var unitEnv = phaseAPlistContent is not null ? LaunchdUnit.EnvFromPlist(phaseAPlistContent) : new Dictionary<string, string>();
-                var unitBinaryPath = phaseAPlistContent is not null ? LaunchdUnit.BinaryFromPlist(phaseAPlistContent) : null;
-                reason = EvaluateStartGate(unitEnv, unitBinaryPath, UnitIdentity.ResolveDaemonBinary(), _gateEnv!, _digestMatches);
-                unitEnv.TryGetValue(ExpectVar, out unitExpectation);
-            } catch {
+            // A fresh query that saw the unit but a read that didn't is contradictory evidence, not
+            // genuine absence — only agreement on absence may pass through to directive_missing.
+            if (readStatus == LaunchdUnit.PlistRead.Unreadable || (readStatus == LaunchdUnit.PlistRead.Absent && pre.UnitPresent)) {
                 reason = StartGateReason.EvidenceUnreadable;
+            } else {
+                try {
+                    var unitEnv = content is not null ? LaunchdUnit.EnvFromPlist(content) : new Dictionary<string, string>();
+                    var unitBinaryPath = content is not null ? LaunchdUnit.BinaryFromPlist(content) : null;
+                    reason = EvaluateStartGate(unitEnv, unitBinaryPath, UnitIdentity.ResolveDaemonBinary(), _gateEnv!, _digestMatches);
+                    unitEnv.TryGetValue(ExpectVar, out unitExpectation);
+                } catch {
+                    reason = StartGateReason.EvidenceUnreadable;
+                }
             }
 
             if (reason is { } r) {
@@ -267,24 +279,13 @@ sealed class ServiceVerify(
                 }
             }
 
-            var plistPath      = LaunchdUnit.PlistPath(serviceId);
-            var recheckContent = _readPlist(plistPath);
-
             // Same XmlException hazard as Phase A's parse, but here escaping is worse: it would
             // abort AFTER the marker write and boot-out, past the point Rollback runs, leaving the
             // service stopped with a stuck marker instead of the guaranteed unloaded-plist-retained
             // outcome. A recheck that can't be parsed/validated is exactly what drift means — the
             // content changed (to something unreadable) or can no longer be confirmed unchanged —
             // so route it into the same drift branch rather than letting it throw.
-            bool digestStillGood;
-            try {
-                var recheckBinary = recheckContent is not null ? LaunchdUnit.BinaryFromPlist(recheckContent) : null;
-                digestStillGood = recheckBinary is not null && _digestMatches(recheckBinary);
-            } catch {
-                digestStillGood = false;
-            }
-
-            if (recheckContent != phaseAPlistContent || !digestStillGood) {
+            if (!RecheckPlistUnchanged(serviceId, phaseAPlistContent)) {
                 ServiceTxnMarker.Write(serviceId,
                     new TxnMarker(1, "start", "gate-drift", DescribeQuery(pre), "unloaded-plist-retained", null));
                 return await Rollback(serviceId, VerifyExit.StartGateDrift, VerifyExit.StartGateDriftToken);
@@ -302,14 +303,9 @@ sealed class ServiceVerify(
             if (!attributionEnabled) Say("boot-refusal marker could not be cleared; coded attribution disabled");
         }
 
-        // The gated path uses the bootstrap-only seam instead of the generic Start: StartCore's own
-        // Loaded-probe branch would silently KICKSTART a stale definition if a foreign writer
-        // re-loaded the label in the window between the confirmed-absent wait above and this call —
-        // exactly the race this gate exists to close. A bootstrap-only failure (including "the label
-        // turned out Loaded") is therefore fatal here, not a soft warning: the label state is no
-        // longer what Phase B proved, so roll back via the coded bootout-unknown exit instead of
-        // bootstrapping onto unverified ground. The ungated path keeps the soft-warning Start(),
-        // whose readiness poll — not the call's own return value — is the source of truth.
+        // Bootstrap-only (see IVerifyServiceManager.StartBootstrapOnly): any failure — including a
+        // Loaded probe — rolls back via BootoutUnknown rather than falling through to the ungated
+        // Start() below, whose own readiness poll is normally the source of truth.
         if (gated) {
             if (!manager.StartBootstrapOnly(serviceId, Remaining(deadline), out var bootstrapOnlyError)) {
                 Say($"start: {bootstrapOnlyError}");
@@ -353,6 +349,18 @@ sealed class ServiceVerify(
                 var (confirmed, confirmedPid) = await IsReadyAsync(serviceId, deadline, requirePid: pid);
                 if (confirmedPid is not null) observedJobPids.Add(confirmedPid.Value);
                 if (confirmed) {
+                    // Post-readiness recheck (spec §3, mirrors install/replace's own final recheck):
+                    // Phase B's pre-bootstrap recheck only bounds the recheck→exec race up to the
+                    // moment bootstrap started — a foreign writer swapping the plist or the binary
+                    // bytes AFTER that, but before this commit, must not ride readiness into a
+                    // silent commit. Re-read the plist (contained) and compare against Phase A's own
+                    // captured content, and re-check the digest one more time.
+                    if (gated && !RecheckPlistUnchanged(serviceId, phaseAPlistContent)) {
+                        ServiceTxnMarker.Write(serviceId,
+                            new TxnMarker(1, "start", "gate-post-readiness-drift", DescribeQuery(pre), "unloaded-plist-retained", null));
+                        return await Rollback(serviceId, VerifyExit.StartGateDrift, VerifyExit.StartGateDriftToken);
+                    }
+
                     ServiceTxnMarker.Write(serviceId,
                         new TxnMarker(1, "start", "committed", DescribeQuery(pre), "unloaded-plist-retained", null));
                     onCommitted?.Invoke();
@@ -369,6 +377,23 @@ sealed class ServiceVerify(
         var rollbackExit = await Rollback(serviceId);
 
         return AttributeReadinessTimeout(serviceId, rollbackExit, gated, attributionEnabled, unitExpectation, observedJobPids);
+    }
+
+    /// <summary>Re-reads the plist and re-checks the digest (both contained — never an escaping
+    /// exception), comparing against Phase A's captured <paramref name="phaseAPlistContent"/>;
+    /// false means drift. Shared by Phase B's pre-bootstrap and post-readiness rechecks — callers
+    /// own their own marker phase and rollback call.</summary>
+    bool RecheckPlistUnchanged(string serviceId, string? phaseAPlistContent) {
+        var content = _readPlist(LaunchdUnit.PlistPath(serviceId));
+        bool digestGood;
+        try {
+            var binary = content is not null ? LaunchdUnit.BinaryFromPlist(content) : null;
+            digestGood = binary is not null && _digestMatches(binary);
+        } catch {
+            digestGood = false;
+        }
+
+        return content == phaseAPlistContent && digestGood;
     }
 
     /// <summary>
@@ -837,19 +862,18 @@ sealed class ServiceVerify(
             return null;
         }
 
-        var onDisk = _readPlist(onDiskPath);
-        if (onDisk is null) {
-            if (_plistExists(onDiskPath)) {
-                // Present but unreadable is NOT absent — the file exists and was never fingerprint-
-                // compared, so never guess it's our own gone residue.
-                Say(VerifyExit.RestoreVerificationToken);
-                return VerifyExit.RestoreVerification;
-            }
+        var (status, onDisk) = _discriminatedPlistRead(onDiskPath);
+        if (status == LaunchdUnit.PlistRead.Unreadable) {
+            // Present but unreadable is NOT absent — never guess it's our own gone residue.
+            Say(VerifyExit.RestoreVerificationToken);
+            return VerifyExit.RestoreVerification;
+        }
+        if (status == LaunchdUnit.PlistRead.Absent) {
             ServiceTxnMarker.Delete(serviceId); // confirmed absent — residue already gone
             return null;
         }
 
-        if (ServiceTxnMarker.Fingerprint(onDisk) != leftover.PlistFingerprint) {
+        if (ServiceTxnMarker.Fingerprint(onDisk!) != leftover.PlistFingerprint) {
             // A foreign writer touched the file after the death — surface, never pave.
             Say(VerifyExit.RestoreVerificationToken);
             return VerifyExit.RestoreVerification;
@@ -1014,18 +1038,14 @@ sealed class ServiceVerify(
     /// is label-absent AND file-gone (unlike start, which retains the plist), bounded by the reserve. A
     /// foreign plist (fingerprint mismatch) is never touched — checked before the uninstall.</summary>
     async Task<int> InstallRollback(string serviceId, string plistPath, string fingerprint, int reasonExit, string reasonToken) {
-        // Never uninstall what we can't verify is ours. A null read is either genuine absence OR a
-        // present-but-unreadable file (a lock-unaware writer replaced ours between bootstrap and
-        // rollback): only the confirmed-absent case (read null AND the file does not exist) may be
-        // cleared. Present-but-unreadable, and readable-but-foreign, both surface untouched — the
-        // same fail-closed rule RecoverLeftoverMarker applies at entry.
-        var onDisk = _readPlist(plistPath);
-        if (onDisk is null) {
-            if (_plistExists(plistPath)) {
-                Say(VerifyExit.RestoreVerificationToken);
-                return VerifyExit.RestoreVerification;
-            }
-        } else if (ServiceTxnMarker.Fingerprint(onDisk) != fingerprint) {
+        // Never uninstall what we can't verify is ours — unreadable-but-present and readable-but-
+        // foreign both surface untouched, the same fail-closed rule RecoverLeftoverMarker applies.
+        var (status, onDisk) = _discriminatedPlistRead(plistPath);
+        if (status == LaunchdUnit.PlistRead.Unreadable) {
+            Say(VerifyExit.RestoreVerificationToken);
+            return VerifyExit.RestoreVerification;
+        }
+        if (status == LaunchdUnit.PlistRead.Ok && ServiceTxnMarker.Fingerprint(onDisk!) != fingerprint) {
             Say(VerifyExit.RestoreVerificationToken);
             return VerifyExit.RestoreVerification;
         }

@@ -119,6 +119,68 @@ public class AgentDetectionTests {
     }
 
     [Test]
+    public async Task BinaryOnPath_dedupes_a_repeated_PATH_entry() {
+        if (OperatingSystem.IsWindows()) return;
+
+        var dir    = Directory.CreateTempSubdirectory("kcap-detect-dedupe-").FullName;
+        var claude = Path.Combine(dir, "claude");
+        await File.WriteAllTextAsync(claude, "#!/bin/sh\n");
+        File.SetUnixFileMode(claude, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+
+        // The same directory repeated three times must still be found (and probed only once per
+        // Distinct dir, not once per occurrence).
+        var pathEnv = $"{dir}{Path.PathSeparator}{dir}{Path.PathSeparator}{dir}";
+        await Assert.That(AgentDetection.BinaryOnPath("claude", Inputs(pathEnv: pathEnv))).IsTrue();
+    }
+
+    [Test]
+    public async Task BinaryOnPath_windows_dedupes_case_variant_directories() {
+        var probed = new List<string>();
+        bool CountingProbe(string path, bool isWindows) { probed.Add(path); return false; }
+
+        var winInputs = new AgentDetectionInputs(
+            PathEnv: @"C:\Tools;c:\tools;C:\TOOLS", PathExt: ".EXE", IsWindows: true, Home: "/nonexistent");
+
+        AgentDetection.BinaryOnPath("claude", winInputs, CountingProbe);
+
+        // Three case-variant spellings of the same directory collapse to ONE probed candidate
+        // (one extension × one deduped dir) under Windows' case-insensitive PATH identity.
+        await Assert.That(probed.Count).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task BinaryOnPath_unix_dedupes_same_case_duplicate_directories() {
+        if (OperatingSystem.IsWindows()) return;
+
+        var probed = new List<string>();
+        bool CountingProbe(string path, bool isWindows) { probed.Add(path); return false; }
+
+        var inputs = new AgentDetectionInputs(
+            PathEnv: "/usr/bin:/usr/bin:/usr/bin", PathExt: null, IsWindows: false, Home: "/nonexistent");
+
+        AgentDetection.BinaryOnPath("claude", inputs, CountingProbe);
+
+        await Assert.That(probed.Count).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task BinaryOnPath_unix_probes_case_variant_directories_separately() {
+        if (OperatingSystem.IsWindows()) return;
+
+        var probed = new List<string>();
+        bool CountingProbe(string path, bool isWindows) { probed.Add(path); return false; }
+
+        var inputs = new AgentDetectionInputs(
+            PathEnv: "/usr/bin:/USR/BIN", PathExt: null, IsWindows: false, Home: "/nonexistent");
+
+        AgentDetection.BinaryOnPath("claude", inputs, CountingProbe);
+
+        // Unix PATH identity is case-sensitive — these are two genuinely distinct directories,
+        // each probed once, unlike Windows' case-insensitive dedup above.
+        await Assert.That(probed.Count).IsEqualTo(2);
+    }
+
+    [Test]
     public async Task BinaryOnPath_skips_empty_path_entries_without_throwing() {
         if (OperatingSystem.IsWindows()) return;
 
@@ -192,33 +254,14 @@ public class AgentDetectionTests {
         await Assert.That(inputs.IsWindows).IsEqualTo(OperatingSystem.IsWindows());
     }
 
-    // ── BinaryOnPath(string): the single-arg convenience overload (FromEnvironment() + the pure
-    // walk), against the REAL process environment — what call sites moved off AgentDetector to. ──
+    // ── BinaryOnPath(string): the single-arg convenience overload is documented as nothing more
+    // than FromEnvironment() + the pure walk (see AgentDetection.cs) — FromEnvironment_reads_the_
+    // real_process_PATH above already smoke-tests that wiring. The edge cases below (empty/null
+    // PATH, exec-bit requirement) are therefore driven through the pure 2-arg overload with
+    // injected inputs — never mutating real process PATH — so nothing here needs NotInParallel. ──
 
-    [Test, NotInParallel("PATH_env_mutation")]
-    public async Task BinaryOnPath_single_arg_returns_false_when_path_env_is_empty() {
-        var original = Environment.GetEnvironmentVariable("PATH");
-        Environment.SetEnvironmentVariable("PATH", "");
-        try {
-            await Assert.That(AgentDetection.BinaryOnPath("anything-at-all")).IsFalse();
-        } finally {
-            Environment.SetEnvironmentVariable("PATH", original);
-        }
-    }
-
-    [Test, NotInParallel("PATH_env_mutation")]
-    public async Task BinaryOnPath_single_arg_returns_false_when_path_env_is_null() {
-        var original = Environment.GetEnvironmentVariable("PATH");
-        Environment.SetEnvironmentVariable("PATH", null);
-        try {
-            await Assert.That(AgentDetection.BinaryOnPath("anything-at-all")).IsFalse();
-        } finally {
-            Environment.SetEnvironmentVariable("PATH", original);
-        }
-    }
-
-    [Test, NotInParallel("PATH_env_mutation")]
-    public async Task BinaryOnPath_single_arg_unix_requires_any_execute_bit() {
+    [Test]
+    public async Task BinaryOnPath_pure_unix_requires_any_execute_bit() {
         if (OperatingSystem.IsWindows()) return; // Unix-only
 
         var tmp     = Directory.CreateTempSubdirectory("kcap-agentprobe-").FullName;
@@ -230,13 +273,39 @@ public class AgentDetectionTests {
         File.SetUnixFileMode(exec,    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);   // 0700
         File.SetUnixFileMode(nonExec, UnixFileMode.UserRead | UnixFileMode.UserWrite);                              // 0600
 
-        var original = Environment.GetEnvironmentVariable("PATH");
-        Environment.SetEnvironmentVariable("PATH", tmp);
-        try {
-            await Assert.That(AgentDetection.BinaryOnPath("agentprobe-exec")).IsTrue();
-            await Assert.That(AgentDetection.BinaryOnPath("agentprobe-nonexec")).IsFalse();
-        } finally {
-            Environment.SetEnvironmentVariable("PATH", original);
-        }
+        await Assert.That(AgentDetection.BinaryOnPath("agentprobe-exec", Inputs(pathEnv: tmp))).IsTrue();
+        await Assert.That(AgentDetection.BinaryOnPath("agentprobe-nonexec", Inputs(pathEnv: tmp))).IsFalse();
+    }
+
+    // ── BinaryOnPath separator is derived from the injected platform, never the host-global
+    // Path.PathSeparator — pin both directions purely. ──
+
+    [Test]
+    public async Task BinaryOnPath_windows_input_splits_on_semicolon_regardless_of_host_platform() {
+        var dir = Directory.CreateTempSubdirectory("kcap-detect-winsep-").FullName;
+        await File.WriteAllTextAsync(Path.Combine(dir, "claude.CMD"), "@echo off\n");
+
+        var otherDir = Directory.CreateTempSubdirectory("kcap-detect-winsep2-").FullName;
+        var winInputs = new AgentDetectionInputs(
+            PathEnv: $"{otherDir};{dir}", PathExt: ".EXE;.CMD", IsWindows: true, Home: "/nonexistent");
+
+        // A colon-joined PATH would be read as ONE bogus entry under a semicolon split and never
+        // find claude.CMD in `dir` — this only passes if the separator is genuinely ';' here.
+        await Assert.That(AgentDetection.BinaryOnPath("claude", winInputs)).IsTrue();
+    }
+
+    [Test]
+    public async Task BinaryOnPath_unix_input_splits_on_colon() {
+        if (OperatingSystem.IsWindows()) return; // exec-bit semantics only make sense on Unix
+
+        var dir = Directory.CreateTempSubdirectory("kcap-detect-unixsep-").FullName;
+        var claude = Path.Combine(dir, "claude");
+        await File.WriteAllTextAsync(claude, "#!/bin/sh\n");
+        File.SetUnixFileMode(claude, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+
+        var otherDir = Directory.CreateTempSubdirectory("kcap-detect-unixsep2-").FullName;
+        var r = AgentDetection.Detect(Inputs(pathEnv: $"{otherDir}:{dir}", home: "/nonexistent"));
+
+        await Assert.That(r.Claude.BinaryFound).IsTrue();
     }
 }

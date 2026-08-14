@@ -18,6 +18,10 @@ public class ServiceVerifyStartTests {
         public int? RunningPid = 4242;
         public string? StopError;
 
+        /// <summary>Reported as <see cref="ServiceQuery.UnitPresent"/> on every <see cref="Query"/>
+        /// call. Defaults true; a genuinely-absent-unit test sets this false.</summary>
+        public bool UnitPresent = true;
+
         /// <summary>When set, <see cref="StopError"/> is reported on only the FIRST <see cref="Stop"/>
         /// call and cleared thereafter — for scripting a bootout that fails once (e.g. a foreign
         /// writer momentarily holding the label) but succeeds on Rollback's own re-attempt.</summary>
@@ -54,15 +58,15 @@ public class ServiceVerifyStartTests {
             if (Started && HangQueryClock is not null) HangQueryClock.Advance(timeout);
             if (Stopped) {
                 if (ProbeUnknownAfterStop)
-                    return new ServiceQuery(LabelProbe.Unknown, true, ServiceState.Installed, "/bin/kcap-daemon", null);
+                    return new ServiceQuery(LabelProbe.Unknown, UnitPresent, ServiceState.Installed, "/bin/kcap-daemon", null);
                 if (RemainsLoadedUntilSecondStop && StopCalls < 2)
-                    return new ServiceQuery(LabelProbe.Loaded, true, ServiceState.Running, "/bin/kcap-daemon", RunningPid);
+                    return new ServiceQuery(LabelProbe.Loaded, UnitPresent, ServiceState.Running, "/bin/kcap-daemon", RunningPid);
                 if (!RemainsLoadedAfterStop)
-                    return new ServiceQuery(LabelProbe.Absent, true, ServiceState.Installed, "/bin/kcap-daemon", null);
+                    return new ServiceQuery(LabelProbe.Absent, UnitPresent, ServiceState.Installed, "/bin/kcap-daemon", null);
             }
             if (Started)
-                return new ServiceQuery(LabelProbe.Loaded, true, ServiceState.Running, "/bin/kcap-daemon", RunningPid);
-            return new ServiceQuery(LabelProbe.Absent, true, ServiceState.Installed, "/bin/kcap-daemon", null);
+                return new ServiceQuery(LabelProbe.Loaded, UnitPresent, ServiceState.Running, "/bin/kcap-daemon", RunningPid);
+            return new ServiceQuery(LabelProbe.Absent, UnitPresent, ServiceState.Installed, "/bin/kcap-daemon", null);
         }
 
         public void WriteAndBootstrap(ServiceSpec spec, TimeSpan timeout) { }
@@ -450,30 +454,42 @@ public class ServiceVerifyStartTests {
         _                           => null,
     };
 
-    [Test]
-    public async Task Pre_mutation_gate_failure_returns_28_and_touches_nothing() {
+    // Contradictory evidence (query saw the unit; the read didn't) must classify
+    // evidence_unreadable, never directive_missing — that's reserved for genuine agreed-absence.
+    [Test, NotInParallel]
+    [Arguments(false, "directive_missing")]   // query and read agree the unit is absent
+    [Arguments(true, "evidence_unreadable")]  // query saw the unit but the read reports absent
+    public async Task Phase_a_absence_evidence_disambiguates_directive_missing_from_evidence_unreadable(
+        bool unitPresent, string expectedReason) {
         var dir = Directory.CreateTempSubdirectory().FullName;
         DaemonLockPaths.OverrideDirectoryForTesting(dir);
+        var originalErr = Console.Error;
+        var capturedErr = new StringWriter();
         try {
-            var manager = new FakeServiceManager();
+            var manager = new FakeServiceManager { UnitPresent = unitPresent };
 
             Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
                 Task.FromResult(new HelloProbeResult(true, 1, "1.2.3", "kcap-daemon"));
 
-            // The unit bakes nothing (readPlist "sees" no unit) while this invocation carries the
-            // consent-seed directive — Phase A's DirectiveMissing case — so the gate must fire
-            // before the fresh query's under-lock work does anything else.
             var sut = new ServiceVerify(manager, _ => 4242, Hello, TimeProvider.System,
                 readPlist: _ => null,
+                plistExists: _ => false,
                 gateEnv: k => k == "KCAP_CONSENT_SEED_DEFAULT" ? "prompt" : null);
 
+            Console.SetError(capturedErr);
             var exit = await sut.StartVerifiedAsync(Id);
+            Console.SetError(originalErr);
 
             await Assert.That(exit).IsEqualTo(VerifyExit.StartGate);
+            var lines = capturedErr.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+            await Assert.That(lines).Contains($"start_gate_reason={expectedReason}");
             await Assert.That(manager.Calls.Count).IsEqualTo(1);
             await Assert.That(manager.Calls.All(c => c == "query")).IsTrue();
             await Assert.That(ServiceTxnMarker.Exists(Id)).IsFalse();
-        } finally { DaemonLockPaths.OverrideDirectoryForTesting(null); }
+        } finally {
+            Console.SetError(originalErr);
+            DaemonLockPaths.OverrideDirectoryForTesting(null);
+        }
     }
 
     [Test]
@@ -707,6 +723,105 @@ public class ServiceVerifyStartTests {
             // pins), then Rollback's re-attempt, which is the one that actually confirms Absent.
             await Assert.That(manager.StopCalls).IsEqualTo(2);
             await Assert.That(ServiceTxnMarker.Exists(Id)).IsFalse();
+        } finally { DaemonLockPaths.OverrideDirectoryForTesting(null); }
+    }
+
+    /// <summary>The gated path re-checks the plist/digest once more after readiness is confirmed,
+    /// not just pre-bootstrap: content only drifts on the FIRST read taken after both readiness
+    /// probes already saw matching content.</summary>
+    [Test]
+    public async Task Post_readiness_recheck_detects_plist_drift_after_confirmed_ready_and_rolls_back_to_29() {
+        var dir = Directory.CreateTempSubdirectory().FullName;
+        DaemonLockPaths.OverrideDirectoryForTesting(dir);
+        try {
+            var manager = new FakeServiceManager();
+
+            Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
+                Task.FromResult(new HelloProbeResult(true, 1, "1.2.3", "kcap-daemon"));
+
+            var reads = 0;
+            string? ReadPlist(string _) {
+                reads++;
+                // Phase A (read 1) and Phase B's own pre-bootstrap recheck (read 2) both see the
+                // same passing content — readiness is then genuinely, twice confirmed. A foreign
+                // writer swaps the plist only AFTER that, so the post-readiness recheck (read 3)
+                // must be what catches it.
+                return reads <= 2
+                    ? MinimalPlist("/bin/kcap-daemon", "prompt", GatedServerUrl)
+                    : MinimalPlist("/bin/kcap-daemon-moved", "prompt", GatedServerUrl);
+            }
+
+            var sut = new ServiceVerify(manager, _ => 4242, Hello, TimeProvider.System,
+                readPlist: ReadPlist,
+                gateEnv: GatedEnvWithIdentity(),
+                digestMatches: _ => true);
+
+            var exit = await sut.StartVerifiedAsync(Id);
+
+            await Assert.That(exit).IsEqualTo(VerifyExit.StartGateDrift);
+            // Bootstrap DID run — this is a post-mutation catch, unlike the Phase A/B drift tests
+            // above, which never start at all.
+            await Assert.That(manager.StartCalls).IsEqualTo(1);
+            await Assert.That(ServiceTxnMarker.Exists(Id)).IsFalse();
+            await Assert.That(reads).IsGreaterThanOrEqualTo(3);
+        } finally { DaemonLockPaths.OverrideDirectoryForTesting(null); }
+    }
+
+    /// <summary>The post-readiness recheck also re-verifies the digest, independent of plist
+    /// content drift — a swapped binary at the SAME baked path must still roll back to 29.</summary>
+    [Test]
+    public async Task Post_readiness_recheck_detects_digest_drift_after_confirmed_ready_and_rolls_back_to_29() {
+        var dir = Directory.CreateTempSubdirectory().FullName;
+        DaemonLockPaths.OverrideDirectoryForTesting(dir);
+        try {
+            var manager = new FakeServiceManager();
+
+            Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
+                Task.FromResult(new HelloProbeResult(true, 1, "1.2.3", "kcap-daemon"));
+
+            var digestChecks = 0;
+            bool DigestMatches(string _) {
+                digestChecks++;
+                // Passes for Phase A and Phase B's pre-bootstrap recheck; fails from the third
+                // check onward — the post-readiness recheck.
+                return digestChecks <= 2;
+            }
+
+            var sut = new ServiceVerify(manager, _ => 4242, Hello, TimeProvider.System,
+                readPlist: _ => MinimalPlist("/bin/kcap-daemon", "prompt", GatedServerUrl),
+                gateEnv: GatedEnvWithIdentity(),
+                digestMatches: DigestMatches);
+
+            var exit = await sut.StartVerifiedAsync(Id);
+
+            await Assert.That(exit).IsEqualTo(VerifyExit.StartGateDrift);
+            await Assert.That(manager.StartCalls).IsEqualTo(1);
+            await Assert.That(ServiceTxnMarker.Exists(Id)).IsFalse();
+        } finally { DaemonLockPaths.OverrideDirectoryForTesting(null); }
+    }
+
+    /// <summary>The UNGATED path (no consent-seed directive carried by the invoker) must never run
+    /// the post-readiness recheck — start behavior for a bare terminal invocation is
+    /// unchanged.</summary>
+    [Test]
+    public async Task Ungated_start_never_runs_the_post_readiness_recheck() {
+        var dir = Directory.CreateTempSubdirectory().FullName;
+        DaemonLockPaths.OverrideDirectoryForTesting(dir);
+        try {
+            var manager = new FakeServiceManager();
+            var readPlistCalls = 0;
+
+            Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
+                Task.FromResult(new HelloProbeResult(true, 1, "1.2.3", "kcap-daemon"));
+
+            var sut = new ServiceVerify(manager, _ => 4242, Hello, TimeProvider.System,
+                readPlist: _ => { readPlistCalls++; return MinimalPlist("/bin/kcap-daemon", "prompt", GatedServerUrl); });
+            // no gateEnv — ungated
+
+            var exit = await sut.StartVerifiedAsync(Id);
+
+            await Assert.That(exit).IsEqualTo(VerifyExit.Ok);
+            await Assert.That(readPlistCalls).IsEqualTo(0);
         } finally { DaemonLockPaths.OverrideDirectoryForTesting(null); }
     }
 

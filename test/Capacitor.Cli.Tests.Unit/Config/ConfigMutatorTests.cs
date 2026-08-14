@@ -65,6 +65,26 @@ public class ConfigMutatorTests {
     }
 
     [Test]
+    public async Task Mutate_survives_a_transient_reader_holding_the_destination() {
+        await ConfigMutator.MutateAsync(c => c with { MachineId = "before" });
+
+        // Share-read only (no FILE_SHARE_DELETE): on Windows this blocks the replace-into-place
+        // until released, exercising Publish's retry; on Unix rename is unaffected.
+        var reader = new FileStream(ConfigPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        try {
+            var mutate = ConfigMutator.MutateAsync(c => c with { MachineId = "after" });
+            await Task.Delay(100);
+            reader.Dispose();
+            await mutate;
+        } finally {
+            reader.Dispose();
+        }
+
+        var final = await AppConfig.LoadProfileConfig();
+        await Assert.That(final.MachineId).IsEqualTo("after");
+    }
+
+    [Test]
     public async Task Legacy_v1_config_is_migrated_in_memory_and_persisted_through_the_mutation() {
         // minimal v1 flat config (no "version"/"profiles" — ConfigMigration's v1 shape)
         Directory.CreateDirectory(Path.GetDirectoryName(ConfigPath)!);
@@ -151,6 +171,84 @@ public class ConfigMutatorTests {
 
         var config = ConfigMutator.LoadPure(path);
 
+        await Assert.That(config.Profiles.ContainsKey("default")).IsTrue();
+    }
+
+    /// <summary>A non-not-found I/O failure, forced deterministically: the config path's PARENT
+    /// is a plain file rather than a directory, so opening through it fails structurally.</summary>
+    [Test]
+    public async Task TryLoadPure_parent_replaced_by_a_file_is_failure_not_absence() {
+        var root = Directory.CreateTempSubdirectory("kcap-trypure-").FullName;
+        var parentAsFile = Path.Combine(root, "not-a-directory");
+        await File.WriteAllTextAsync(parentAsFile, "i am a file, not a directory");
+        var path = Path.Combine(parentAsFile, "config.json");
+
+        var ok = ConfigMutator.TryLoadPure(path, out var config);
+
+        await Assert.That(ok).IsFalse();
+        await Assert.That(config.Profiles.ContainsKey("default")).IsTrue(); // still a usable default out param
+    }
+
+    /// <summary>The immediate parent alone isn't enough: a path nested TWO levels under a
+    /// planted file needs the ancestor walk to climb past the never-created child directory.</summary>
+    [Test]
+    public async Task TryLoadPure_grandparent_replaced_by_a_file_is_failure_not_absence() {
+        var root = Directory.CreateTempSubdirectory("kcap-trypure-").FullName;
+        var grandparentAsFile = Path.Combine(root, "not-a-directory");
+        await File.WriteAllTextAsync(grandparentAsFile, "i am a file, not a directory");
+        var path = Path.Combine(grandparentAsFile, "child", "config.json");
+
+        var ok = ConfigMutator.TryLoadPure(path, out var config);
+
+        await Assert.That(ok).IsFalse();
+        await Assert.That(config.Profiles.ContainsKey("default")).IsTrue(); // still a usable default out param
+    }
+
+    /// <summary>A dangling symlink segment (<c>File.Exists</c>/<c>Directory.Exists</c> both read
+    /// it as absent, since they follow to the missing target) must not let the ancestor walk skip
+    /// past it to a real directory further up.</summary>
+    [Test]
+    public async Task TryLoadPure_dangling_symlink_ancestor_is_failure_not_absence() {
+        Skip.When(OperatingSystem.IsWindows(), "symlink creation needs elevated privilege on Windows CI");
+
+        var root = Directory.CreateTempSubdirectory("kcap-trypure-").FullName;
+        var link = Path.Combine(root, "danglink");
+        Directory.CreateSymbolicLink(link, Path.Combine(root, "never-created-target"));
+        var path = Path.Combine(link, "config.json");
+
+        var ok = ConfigMutator.TryLoadPure(path, out var config);
+
+        await Assert.That(ok).IsFalse();
+        await Assert.That(config.Profiles.ContainsKey("default")).IsTrue(); // still a usable default out param
+    }
+
+    /// <summary>A dangling symlink AT the exact config path (not an ancestor) raises
+    /// <see cref="FileNotFoundException"/>, not <see cref="DirectoryNotFoundException"/> — must still
+    /// classify as unreadable, never the takeover-safe "nothing configured yet".</summary>
+    [Test]
+    public async Task TryLoadPure_dangling_symlink_at_exact_path_is_failure_not_absence() {
+        Skip.When(OperatingSystem.IsWindows(), "symlink creation needs elevated privilege on Windows CI");
+
+        var root = Directory.CreateTempSubdirectory("kcap-trypure-").FullName;
+        var path = Path.Combine(root, "config.json");
+        File.CreateSymbolicLink(path, Path.Combine(root, "never-created-target"));
+
+        var ok = ConfigMutator.TryLoadPure(path, out var config);
+
+        await Assert.That(ok).IsFalse();
+        await Assert.That(config.Profiles.ContainsKey("default")).IsTrue(); // still a usable default out param
+    }
+
+    /// <summary>A genuinely never-created parent chain must still read as absence — disambiguating
+    /// a blocked ancestor must not turn every missing directory level into a false failure.</summary>
+    [Test]
+    public async Task TryLoadPure_missing_parent_directory_is_still_absence() {
+        var root = Directory.CreateTempSubdirectory("kcap-trypure-").FullName;
+        var path = Path.Combine(root, "never-created", "config.json");
+
+        var ok = ConfigMutator.TryLoadPure(path, out var config);
+
+        await Assert.That(ok).IsTrue();
         await Assert.That(config.Profiles.ContainsKey("default")).IsTrue();
     }
 

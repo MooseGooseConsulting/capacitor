@@ -44,24 +44,29 @@ public static class ConfigMutator {
     /// silently treat it the same as absence (e.g. a gated identity check) use this instead of
     /// <see cref="LoadPure"/>.
     public static bool TryLoadPure(string path, out ProfileConfig config) {
-        // A directory sitting at the config path is NOT absence — File.Exists alone would say
-        // false and this would silently fall through to "nothing configured yet" for what is
-        // actually an unreadable/misconfigured location.
-        if (Directory.Exists(path)) {
-            config = new() { Profiles = new() { ["default"] = new() } };
-            return false;
-        }
-
-        if (!File.Exists(path)) {
-            config = new() { Profiles = new() { ["default"] = new() } };
-            return true;
-        }
-
+        // Attempt the read directly rather than probing Directory.Exists/File.Exists first: BOTH
+        // return false on a permission-denied path (or an unreadable ancestor directory), which
+        // would silently degrade "inaccessible" into "absent, defaults are fine" — exactly wrong
+        // for a caller (the start gate) that must fail closed on unreadable evidence rather than
+        // proceed as though nothing were configured.
         string json;
         try {
             json = File.ReadAllText(path);
-        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
-            config = new() { Profiles = new() { ["default"] = new() } };
+        } catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException) {
+            // A link at the exact path (dangling included), or a file/link ancestor, is
+            // structural evidence — unreadable, not absence.
+            if (PathEvidence.PathBlockedByFileOrLink(path)) {
+                config = FreshDefault();
+                return false;
+            }
+
+            config = FreshDefault();
+            return true;
+        } catch {
+            // A directory sitting at the config path (UnauthorizedAccessException on read), a
+            // permission error, or any other I/O failure — unreadable EVIDENCE, never silently
+            // folded into absence.
+            config = FreshDefault();
             return false;
         }
 
@@ -71,9 +76,9 @@ public static class ConfigMutator {
         // contract.
         try {
             using var doc = JsonDocument.Parse(json);
-            if (doc.RootElement.ValueKind != JsonValueKind.Object) throw new JsonException("config root is not a JSON object");
+            if (!doc.RootElement.IsObject) throw new JsonException("config root is not a JSON object");
         } catch (JsonException) {
-            config = new() { Profiles = new() { ["default"] = new() } };
+            config = FreshDefault();
             return false;
         }
 
@@ -81,15 +86,29 @@ public static class ConfigMutator {
             config = ConfigMigration.MigrateIfNeeded(json).Config;
             return true;
         } catch (JsonException) {
-            config = new() { Profiles = new() { ["default"] = new() } };
+            config = FreshDefault();
             return false;
         }
     }
+
+    static ProfileConfig FreshDefault() => new() { Profiles = new() { ["default"] = new() } };
 
     static void Publish(string path, ProfileConfig config) {
         var tmp = path + ".tmp-" + Guid.NewGuid().ToString("N")[..8];
         File.WriteAllBytes(tmp,
             JsonSerializer.SerializeToUtf8Bytes(config, ProfileConfigJsonContextIndented.Default.ProfileConfig));
-        File.Move(tmp, path, overwrite: true);
+        // Windows denies replace-into-place while any reader holds the destination without
+        // FILE_SHARE_DELETE; readers are short-lived, so retry briefly before surfacing.
+        for (var attempt = 0; ; attempt++) {
+            try {
+                File.Move(tmp, path, overwrite: true);
+                return;
+            } catch (Exception e) when (e is UnauthorizedAccessException or IOException && attempt < 49) {
+                Thread.Sleep(20);
+            } catch {
+                try { File.Delete(tmp); } catch { /* best effort */ }
+                throw;
+            }
+        }
     }
 }

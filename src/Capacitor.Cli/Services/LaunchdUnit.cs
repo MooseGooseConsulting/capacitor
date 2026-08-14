@@ -87,80 +87,97 @@ static class LaunchdUnit {
             : null;
     }
 
+    /// <summary>Distinguishes genuine absence from present-but-unreadable evidence.</summary>
+    internal enum PlistRead { Absent, Ok, Unreadable }
+
+    /// <summary>Discriminated read: a not-found blocked by structural evidence (a link at the exact
+    /// path, or a file/link ancestor) is <see cref="PlistRead.Unreadable"/>, never <see cref="PlistRead.Absent"/>.</summary>
+    internal static PlistRead TryReadPlist(string path, out string? content) {
+        try {
+            content = File.ReadAllText(path);
+            return PlistRead.Ok;
+        } catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException) {
+            content = null;
+            return PathEvidence.PathBlockedByFileOrLink(path) ? PlistRead.Unreadable : PlistRead.Absent;
+        } catch {
+            content = null;
+            return PlistRead.Unreadable;
+        }
+    }
+
+    /// <summary>Strict key/value walk: throws on any malformed key/value alternation.</summary>
+    static IEnumerable<(string Key, XElement Value)> KeyedElements(XElement dict, string context) {
+        string? pendingKey = null;
+        foreach (var el in dict.Elements()) {
+            if (el.Name == "key") {
+                if (pendingKey is not null)
+                    throw new InvalidDataException($"{context}consecutive <key> nodes ('{pendingKey}', '{el.Value}') in plist");
+                pendingKey = el.Value;
+                continue;
+            }
+
+            if (pendingKey is null)
+                throw new InvalidDataException($"{context}value with no preceding key in plist");
+
+            yield return (pendingKey, el);
+            pendingKey = null;
+        }
+
+        if (pendingKey is not null)
+            throw new InvalidDataException($"{context}dangling <key>{pendingKey}</key> with no value in plist");
+    }
+
+    /// <summary>The element paired with the top-level <c>&lt;key&gt;</c> named
+    /// <paramref name="key"/>, or null when that key never appears; a duplicate throws.</summary>
+    static XElement? TopLevelValue(XElement dict, string key) {
+        XElement? result = null;
+        var found = false;
+        foreach (var (k, value) in KeyedElements(dict, "")) {
+            if (k != key) continue;
+            if (found) throw new InvalidDataException($"duplicate {key} key in plist");
+            found  = true;
+            result = value;
+        }
+        return result;
+    }
+
     /// <summary>
     /// The daemon binary baked into a plist — the first <c>&lt;string&gt;</c> of the
-    /// <c>&lt;array&gt;</c> PAIRED WITH the top-level <c>&lt;key&gt;ProgramArguments&lt;/key&gt;</c>,
-    /// never just "the document's first <c>&lt;array&gt;</c>" — a decoy array planted anywhere
-    /// earlier in the document must not be read as the binary launchd will actually execute. Used
-    /// by <c>daemon doctor</c> to detect a moved binary. A DUPLICATE top-level
-    /// <c>ProgramArguments</c> key throws <see cref="InvalidDataException"/> rather than silently
-    /// picking one — this file is never hand-edited, so two occurrences means a foreign/corrupt
-    /// writer, and callers that gate on this value must see that as unreadable evidence, not a guess.
+    /// <c>&lt;array&gt;</c> paired with the top-level <c>&lt;key&gt;ProgramArguments&lt;/key&gt;</c>
+    /// (see <see cref="TopLevelValue"/>). Used by <c>daemon doctor</c> to detect a moved binary.
     /// </summary>
     public static string? BinaryFromPlist(string plistXml) {
         var topDict = XDocument.Parse(plistXml).Root?.Element("dict");
         if (topDict is null) return null;
 
-        string? result = null;
-        var found = false;
-        string? pendingKey = null;
-
-        foreach (var el in topDict.Elements()) {
-            if (el.Name == "key") { pendingKey = el.Value; continue; }
-
-            if (pendingKey == "ProgramArguments") {
-                if (found) throw new InvalidDataException("duplicate ProgramArguments key in plist");
-                found  = true;
-                result = el.Name == "array" ? el.Elements("string").FirstOrDefault()?.Value : null;
-            }
-
-            pendingKey = null;
-        }
-
-        return result;
+        var programArguments = TopLevelValue(topDict, "ProgramArguments");
+        return programArguments?.Name == "array" ? programArguments.Elements("string").FirstOrDefault()?.Value : null;
     }
 
     /// <summary>
-    /// The environment baked into a plist — the dict PAIRED WITH the top-level
-    /// <c>&lt;key&gt;EnvironmentVariables&lt;/key&gt;</c>, walking the top-level dict's own key/value
-    /// pairs rather than searching the whole document. Returns empty rather than throwing when the
-    /// block is absent or empty; used by <c>daemon service status --json</c> to surface the baked
-    /// profile/server/consent evidence as UX-only fields. A DUPLICATE top-level
-    /// <c>EnvironmentVariables</c> key, or a duplicate KEY within the one block, both throw
-    /// <see cref="InvalidDataException"/> rather than silently last-win — this file is never
-    /// hand-edited, so any of those means a foreign/corrupt writer, and the gate callers that read
-    /// identity evidence out of this map must see that as unreadable, not silently pick whichever
-    /// value happened to land last.
+    /// The environment baked into a plist — the dict paired with the top-level
+    /// <c>EnvironmentVariables</c> key, walked strictly (see <see cref="KeyedElements"/>). Empty
+    /// only when the block is genuinely absent; any other malformed shape throws
+    /// <see cref="InvalidDataException"/> rather than degrading silently — this file is never
+    /// hand-edited, so a gate caller reading identity evidence here must see ambiguous evidence
+    /// as unreadable, never guessed.
     /// </summary>
     public static IReadOnlyDictionary<string, string> EnvFromPlist(string plistXml) {
         var result = new Dictionary<string, string>(StringComparer.Ordinal);
         var topDict = XDocument.Parse(plistXml).Root?.Element("dict");
         if (topDict is null) return result;
 
-        var found = false;
-        string? pendingKey = null;
+        var envDict = TopLevelValue(topDict, "EnvironmentVariables");
+        if (envDict is null) return result; // genuinely absent — a legitimate "no baked env" shape
 
-        foreach (var el in topDict.Elements()) {
-            if (el.Name == "key") { pendingKey = el.Value; continue; }
+        if (envDict.Name != "dict")
+            throw new InvalidDataException("EnvironmentVariables is not a dict in plist");
 
-            if (pendingKey == "EnvironmentVariables") {
-                if (found) throw new InvalidDataException("duplicate EnvironmentVariables key in plist");
-                found = true;
-
-                if (el.Name == "dict") {
-                    string? key = null;
-                    foreach (var kv in el.Elements()) {
-                        if (kv.Name == "key") key = kv.Value;
-                        else if (kv.Name == "string" && key is not null) {
-                            if (!result.TryAdd(key, kv.Value))
-                                throw new InvalidDataException($"duplicate EnvironmentVariables key '{key}' in plist");
-                            key = null;
-                        }
-                    }
-                }
-            }
-
-            pendingKey = null;
+        foreach (var (key, value) in KeyedElements(envDict, "EnvironmentVariables has ")) {
+            if (value.Name != "string")
+                throw new InvalidDataException($"EnvironmentVariables key '{key}' is paired with a non-string value in plist");
+            if (!result.TryAdd(key, value.Value))
+                throw new InvalidDataException($"duplicate EnvironmentVariables key '{key}' in plist");
         }
 
         return result;
