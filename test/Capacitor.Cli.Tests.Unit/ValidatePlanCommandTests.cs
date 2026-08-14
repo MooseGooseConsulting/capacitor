@@ -524,7 +524,7 @@ public class ValidatePlanCommandTests : IDisposable {
 
         // The primary's content is rendered exactly once (not duplicated because it
         // also appears in the "artifacts" array).
-        var occurrences = System.Text.RegularExpressions.Regex.Matches(stdout, "PRIMARY-CONTENT").Count;
+        var occurrences = System.Text.RegularExpressions.Regex.Count(stdout, "PRIMARY-CONTENT");
         await Assert.That(occurrences).IsEqualTo(1);
     }
 }

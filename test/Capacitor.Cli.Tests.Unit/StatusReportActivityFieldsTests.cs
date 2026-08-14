@@ -165,7 +165,7 @@ public partial class AgentOrchestratorVendorTests {
         var oldShape = JsonSerializer.Deserialize<OldDaemonStatusReport>(json, oldServerOptions);
 
         await Assert.That(oldShape.ActiveCount).IsEqualTo(1);
-        await Assert.That(oldShape.LiveAgents).HasCount().EqualTo(1);
+        await Assert.That(oldShape.LiveAgents).Count().IsEqualTo(1);
         await Assert.That(oldShape.LiveAgents[0].Id).IsEqualTo("a1");
         await Assert.That(oldShape.LiveAgents[0].FlowRunId).IsEqualTo("flow-1");
         await Assert.That(oldShape.LiveAgents[0].FlowRole).IsEqualTo("reviewer");

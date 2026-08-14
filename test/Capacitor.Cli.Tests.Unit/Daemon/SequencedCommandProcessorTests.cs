@@ -146,7 +146,7 @@ public class SequencedCommandProcessorTests {
         // Two acks: [0] the proactive settle ack from the lane, [1] the duplicate-replay ack. Both are
         // Processed and carry the SAME cached outcome. Settlement lost-ack redelivery (D1): [1] is now the FROZEN ack [0] published
         // (get-or-freeze), not a fresh build — so it is byte-identical rather than merely equal-by-value.
-        await Assert.That(h.Acks).HasCount().EqualTo(2);
+        await Assert.That(h.Acks).Count().IsEqualTo(2);
         await Assert.That(h.Acks[0].State).IsEqualTo(CommandAckState.Processed);  // proactive
         var ack = h.Acks[1];                                                      // duplicate replay
         await Assert.That(ack.State).IsEqualTo(CommandAckState.Processed);
@@ -218,7 +218,7 @@ public class SequencedCommandProcessorTests {
 
         // [0] is the proactive settle ack, [1] the duplicate replay — BOTH must carry the wire token,
         // since they are built from the same cached outcome by the one shared builder.
-        await Assert.That(h.Acks).HasCount().EqualTo(2);
+        await Assert.That(h.Acks).Count().IsEqualTo(2);
         await Assert.That(h.Acks[0].RejectionReason).IsEqualTo("daemon_capacity");   // proactive
         var ack = h.Acks[1];                                                          // duplicate replay
         await Assert.That(ack.State).IsEqualTo(CommandAckState.Processed);
@@ -232,7 +232,7 @@ public class SequencedCommandProcessorTests {
         await p.SubmitAsync(item, () => Task.FromResult(
             new CommandOutcome(CommandOutcomeKind.LaunchRejected, "a", RejectReason: CommandRejectedReason.Semantic)));
         await p.SubmitAsync(item, () => Task.FromResult(new CommandOutcome(CommandOutcomeKind.LaunchExecuted)));
-        await Assert.That(h.Acks).HasCount().EqualTo(2);                              // proactive + duplicate replay
+        await Assert.That(h.Acks).Count().IsEqualTo(2);                              // proactive + duplicate replay
         await Assert.That(h.Acks[0].RejectionReason).IsEqualTo("semantic");
         await Assert.That(h.Acks[1].RejectionReason).IsEqualTo("semantic");
     }
@@ -472,7 +472,7 @@ public class SequencedCommandProcessorTests {
 
         // Liveness recovered: a re-delivery completes the freeze and sends (the success path logs nothing).
         p.RedeliverUnretiredProcessedAcks();
-        await Assert.That(acks).HasCount().EqualTo(1);
+        await Assert.That(acks).Count().IsEqualTo(1);
         await Assert.That(acks[0].State).IsEqualTo(CommandAckState.Processed);
     }
 
@@ -536,7 +536,7 @@ public class SequencedCommandProcessorTests {
         var item = h.Launch(1);
         await p.SubmitAsync(item, () => Task.FromResult(new CommandOutcome(CommandOutcomeKind.LaunchExecuted, "a", "sess")));
         await p.SubmitAsync(item, () => Task.FromResult(new CommandOutcome(CommandOutcomeKind.LaunchExecuted)));
-        await Assert.That(h.Acks).HasCount().EqualTo(2);                              // proactive + duplicate replay
+        await Assert.That(h.Acks).Count().IsEqualTo(2);                              // proactive + duplicate replay
         await Assert.That(h.Acks[0].RejectionReason).IsNull();
         await Assert.That(h.Acks[1].RejectionReason).IsNull();
     }
@@ -561,7 +561,7 @@ public class SequencedCommandProcessorTests {
         // reuses the winner, so Dead is never consumed.
         await p.SubmitAsync(item, () => Task.FromResult(new CommandOutcome(CommandOutcomeKind.LaunchExecuted)));
 
-        await Assert.That(acks).HasCount().EqualTo(2);
+        await Assert.That(acks).Count().IsEqualTo(2);
         await Assert.That(acks[0].CurrentState).IsEqualTo(AgentLiveness.Live);   // proactive freeze
         await Assert.That(acks[1].CurrentState).IsEqualTo(AgentLiveness.Live);   // duplicate: FROZEN, not Dead
         await Assert.That(acks[0]).IsEqualTo(acks[1]);                            // byte-identical DTO
@@ -589,13 +589,13 @@ public class SequencedCommandProcessorTests {
 
         // A later status tick / reconnect re-delivers: the freeze now succeeds and the ack goes out.
         p.RedeliverUnretiredProcessedAcks();
-        await Assert.That(acks).HasCount().EqualTo(1);
+        await Assert.That(acks).Count().IsEqualTo(1);
         await Assert.That(acks[0].State).IsEqualTo(CommandAckState.Processed);
         await Assert.That(acks[0].CurrentState).IsEqualTo(AgentLiveness.Live);
 
         // A subsequent re-delivery re-sends the SAME frozen value verbatim (no further liveness read).
         p.RedeliverUnretiredProcessedAcks();
-        await Assert.That(acks).HasCount().EqualTo(2);
+        await Assert.That(acks).Count().IsEqualTo(2);
         await Assert.That(acks[1]).IsEqualTo(acks[0]);
     }
 
@@ -606,22 +606,22 @@ public class SequencedCommandProcessorTests {
         var h = new Harness(); await using var p = h.P();
         await p.SubmitAsync(h.Launch(1), () => Task.FromResult(new CommandOutcome(CommandOutcomeKind.LaunchExecuted)));
         await p.SubmitAsync(h.Launch(2), () => Task.FromResult(new CommandOutcome(CommandOutcomeKind.LaunchExecuted)));
-        await Assert.That(h.Acks).HasCount().EqualTo(2);                 // two proactive settle acks
+        await Assert.That(h.Acks).Count().IsEqualTo(2);                 // two proactive settle acks
 
         // A re-delivery re-sends BOTH unretired terminal acks.
         p.RedeliverUnretiredProcessedAcks();
-        await Assert.That(h.Acks).HasCount().EqualTo(4);
+        await Assert.That(h.Acks).Count().IsEqualTo(4);
 
         // The server confirms the prefix up to 1 → seq 1 is retired (evicted); only seq 2 remains.
         p.AckPrefix(new AckProcessedPrefix("e1", 1));
         p.RedeliverUnretiredProcessedAcks();
-        await Assert.That(h.Acks).HasCount().EqualTo(5);                 // +1, only the unretired suffix
+        await Assert.That(h.Acks).Count().IsEqualTo(5);                 // +1, only the unretired suffix
         await Assert.That(h.Acks[4].Seq).IsEqualTo(2L);
 
         // Confirm the full prefix → nothing left to re-deliver.
         p.AckPrefix(new AckProcessedPrefix("e1", 2));
         p.RedeliverUnretiredProcessedAcks();
-        await Assert.That(h.Acks).HasCount().EqualTo(5);                 // no change
+        await Assert.That(h.Acks).Count().IsEqualTo(5);                 // no change
     }
 
     /// <summary>Task 7 (re-delivery never blocks the lane under a send fault): a throwing sendAck is
@@ -648,7 +648,7 @@ public class SequencedCommandProcessorTests {
         // Transport recovers; the next re-delivery lands the frozen ack.
         Volatile.Write(ref fail, false);
         p.RedeliverUnretiredProcessedAcks();
-        await Assert.That(acks).HasCount().EqualTo(1);
+        await Assert.That(acks).Count().IsEqualTo(1);
         await Assert.That(acks[0].State).IsEqualTo(CommandAckState.Processed);
     }
 }

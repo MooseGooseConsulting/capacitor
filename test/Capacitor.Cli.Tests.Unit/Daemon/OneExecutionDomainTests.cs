@@ -253,7 +253,7 @@ public partial class AgentOrchestratorVendorTests {
             await SpinUntilAsync(() => server.Acks.Count > 0, Bounded);
 
             await Assert.That(server.Rejects).IsEmpty();
-            await Assert.That(server.Acks).HasCount().EqualTo(1); // exactly one terminal answer
+            await Assert.That(server.Acks).Count().IsEqualTo(1); // exactly one terminal answer
             await Assert.That(server.Acks[0].State).IsEqualTo(CommandAckState.Processed);
             await Assert.That(server.Acks[0].OutcomeKind).IsEqualTo(CommandOutcomeKind.LaunchExecuted);
             await Assert.That(server.Acks[0].Seq).IsEqualTo(1L);
@@ -280,12 +280,12 @@ public partial class AgentOrchestratorVendorTests {
 
         await SpinUntilAsync(() => server.Acks.Count > 0, Bounded);
 
-        await Assert.That(server.Rejects).HasCount().EqualTo(1);           // exactly one terminal answer
+        await Assert.That(server.Rejects).Count().IsEqualTo(1);           // exactly one terminal answer
         await Assert.That(server.Rejects[0].Reason).IsEqualTo(CommandRejectedReason.Semantic);
-        await Assert.That(server.Acks).HasCount().EqualTo(1);
+        await Assert.That(server.Acks).Count().IsEqualTo(1);
         await Assert.That(server.Acks[0].OutcomeKind).IsEqualTo(CommandOutcomeKind.LaunchRejected);
         await Assert.That(server.Acks[0].RejectionReason).IsEqualTo("semantic");
-        await Assert.That(server.LaunchFaileds).HasCount().EqualTo(1);     // legacy LaunchFailed lane, unaffected
+        await Assert.That(server.LaunchFaileds).Count().IsEqualTo(1);     // legacy LaunchFailed lane, unaffected
 
         // Denied before any worktree/PTY side effects — the vendor path never runs.
         await Assert.That(claudeSpy.PrepareCalls).IsEqualTo(0);
@@ -314,10 +314,10 @@ public partial class AgentOrchestratorVendorTests {
 
         await SpinUntilAsync(() => server.Acks.Count > 0, Bounded);
 
-        await Assert.That(server.Acks).HasCount().EqualTo(1);  // exactly one terminal answer — no double answer
+        await Assert.That(server.Acks).Count().IsEqualTo(1);  // exactly one terminal answer — no double answer
         await Assert.That(server.Acks[0].State).IsEqualTo(CommandAckState.Processed);
         await Assert.That(server.Acks[0].OutcomeKind).IsEqualTo(CommandOutcomeKind.InternalError);
-        await Assert.That(server.Rejects).HasCount().EqualTo(1);
+        await Assert.That(server.Rejects).Count().IsEqualTo(1);
         await Assert.That(server.Rejects[0].Reason).IsEqualTo(CommandRejectedReason.InternalError);
     }
 

@@ -314,6 +314,7 @@ dotnet_diagnostic.ca1855.severity = warning
 dotnet_diagnostic.ca1856.severity = error
 dotnet_diagnostic.ca1857.severity = warning
 dotnet_diagnostic.ca1858.severity = warning
+dotnet_diagnostic.ca1873.severity = suggestion ; Expensive logging arguments
 
 dotnet_diagnostic.ca1018.severity = warning
 dotnet_diagnostic.ca1047.severity = warning

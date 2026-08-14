@@ -40,17 +40,12 @@
             CA1416<!-- Validate platform compatibility -->;
             CA1806<!-- Do not ignore method results -->;
             CA1822<!-- Mark members as static -->;
-            CA1826<!-- Do not use Enumerable methods on indexable collections -->;
             CA1827<!-- Do not use Count() when Any() can be used -->;
-            CA1829<!-- Use the Count property instead of Enumerable.Count() -->;
             CA1847<!-- Use string.Contains(char) for a single character -->;
-            CA1852<!-- Seal internal types -->;
             CA1859<!-- Use concrete types where possible for performance -->;
             CA1862<!-- Use the StringComparison overloads for case-insensitive comparison -->;
             CA1866<!-- Use the char overload for a single character -->;
             CA1869<!-- Cache and reuse JsonSerializerOptions instances -->;
-            CA1873<!-- Evaluation of this argument may be expensive if logging is disabled -->;
-            CA1875<!-- Use Regex.Count instead of Regex.Matches().Count -->;
             CA2008<!-- Do not create tasks without passing a TaskScheduler -->;
             CA2016<!-- Forward the CancellationToken parameter -->;
             CA2101<!-- Specify marshaling for P/Invoke string arguments -->;
@@ -58,8 +53,6 @@
             CA2215<!-- Dispose(bool) should call base.Dispose(bool) -->;
             CA2254<!-- The logging message template should not vary between calls -->;
 
-            CS0618<!-- Type or member is obsolete -->;
-            CS0649<!-- Field is never assigned and keeps its default value -->;
             CS8519<!-- The given expression never matches the provided pattern -->;
             CS8524<!-- Switch expression is not exhaustive over an unnamed enum value -->;
             CS8602<!-- Dereference of a possibly null reference -->;
