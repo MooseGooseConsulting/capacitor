@@ -214,7 +214,7 @@ public class RepoPathStoreTests {
 
         var entries = await RepoPathStore.LoadAsync();
         await Assert.That(entries.Length).IsEqualTo(2);
-        await Assert.That(entries.Any(e => e.Path.EndsWith("project-b"))).IsFalse();
+        await Assert.That(entries.Any(e => e.Path.EndsWith("project-b", StringComparison.Ordinal))).IsFalse();
     }
 
     [Test]

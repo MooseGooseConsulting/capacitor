@@ -950,7 +950,10 @@ public partial class AgentOrchestratorVendorTests {
         public override long Position { get => 0; set { } }
         public override long Seek(long o, SeekOrigin s) => throw new NotSupportedException();
         public override void SetLength(long v) => throw new NotSupportedException();
-        protected override void Dispose(bool disposing) { if (disposing) { readSide.Dispose(); writeSide.Dispose(); } }
+        protected override void Dispose(bool disposing) {
+            if (disposing) { readSide.Dispose(); writeSide.Dispose(); }
+            base.Dispose(disposing);
+        }
     }
 
     /// A no-op local sink used only as a stable key to seed AgentInstance.ClientDims in resize

@@ -1126,7 +1126,7 @@ public class CursorHookCommandTests {
                     var path = req.RequestUri!.AbsolutePath;
                     Sent.Add($"{path}|{body}");
 
-                    if (path.StartsWith("/hooks/")) {
+                    if (path.StartsWith("/hooks/", StringComparison.Ordinal)) {
                         RouteOrder.Add(path.Replace("/hooks/", ""));
                     }
 
@@ -1174,10 +1174,10 @@ public class CursorHookCommandTests {
             );
 
         public string SentToHook(string segment) =>
-            Sent.First(s => s.StartsWith($"/hooks/{segment}")).Split('|', 2)[1];
+            Sent.First(s => s.StartsWith($"/hooks/{segment}", StringComparison.Ordinal)).Split('|', 2)[1];
 
         public IEnumerable<string> AllSentTo(string segment) =>
-            Sent.Where(s => s.StartsWith($"/hooks/{segment}")).Select(s => s.Split('|', 2)[1]);
+            Sent.Where(s => s.StartsWith($"/hooks/{segment}", StringComparison.Ordinal)).Select(s => s.Split('|', 2)[1]);
 
         public void Dispose() {
             Client.Dispose();
@@ -1195,7 +1195,7 @@ public class CursorHookCommandTests {
     // (not the inner read noticing cancellation) can possibly account for a prompt return.
     sealed class NeverCompletingReader : TextReader {
         public override Task<string> ReadToEndAsync(CancellationToken cancellationToken) =>
-            Task.Delay(TimeSpan.FromSeconds(10)).ContinueWith(_ => "", TaskScheduler.Default);
+            Task.Delay(TimeSpan.FromSeconds(10), CancellationToken.None).ContinueWith(_ => "", TaskScheduler.Default);
     }
 
     // Honours the passed CancellationToken properly (unlike NeverCompletingReader above) —

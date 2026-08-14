@@ -61,7 +61,7 @@ public partial class AgentOrchestratorVendorTests {
 
             var registerIndex    = server.AcpCallOrder.IndexOf("register:agent-acp-bind");
             var bindIndex        = server.AcpCallOrder.IndexOf("bind:agent-acp-bind");
-            var firstEventsIndex = server.AcpCallOrder.FindIndex(e => e.StartsWith("events:agent-acp-bind:"));
+            var firstEventsIndex = server.AcpCallOrder.FindIndex(e => e.StartsWith("events:agent-acp-bind:", StringComparison.Ordinal));
 
             await Assert.That(registerIndex).IsGreaterThanOrEqualTo(0);
             await Assert.That(bindIndex).IsGreaterThan(registerIndex);
@@ -189,7 +189,7 @@ public partial class AgentOrchestratorVendorTests {
             await Assert.That(server.AcpEventsCalls.SelectMany(c => c.Envelopes).Any(e => e.Text == "final words")).IsTrue();
 
             // Ordering: every events call precedes EndAgentSession.
-            var lastEventsIndex = server.AcpCallOrder.FindLastIndex(e => e.StartsWith("events:"));
+            var lastEventsIndex = server.AcpCallOrder.FindLastIndex(e => e.StartsWith("events:", StringComparison.Ordinal));
             var endSessionIndex = server.AcpCallOrder.IndexOf($"endSession:{cmd.AgentId}");
 
             await Assert.That(lastEventsIndex).IsGreaterThanOrEqualTo(0);

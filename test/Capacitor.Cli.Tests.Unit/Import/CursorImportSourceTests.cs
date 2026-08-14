@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
@@ -509,8 +510,8 @@ public class CursorImportSourceTests {
         var startNode = JsonNode.Parse(posted.First(p => p.Path == "/hooks/session-start/cursor").Body)!;
         var endNode   = JsonNode.Parse(posted.First(p => p.Path == "/hooks/session-end/cursor").Body)!;
 
-        var startedAt = DateTimeOffset.Parse(startNode["started_at"]!.GetValue<string>());
-        var endedAt   = DateTimeOffset.Parse(endNode["ended_at"]!.GetValue<string>());
+        var startedAt = DateTimeOffset.Parse(startNode["started_at"]!.GetValue<string>(), CultureInfo.InvariantCulture);
+        var endedAt   = DateTimeOffset.Parse(endNode["ended_at"]!.GetValue<string>(), CultureInfo.InvariantCulture);
 
         await Assert.That(startedAt.UtcDateTime).IsEqualTo(created);
         await Assert.That(endedAt.UtcDateTime).IsEqualTo(modified);
@@ -1328,7 +1329,7 @@ public class CursorImportSourceTests {
         await Assert.That(stopNode["cwd"]).IsNotNull();
         await Assert.That(stopNode["transcript_path"]).IsNotNull();
         await Assert.That(stopNode["stop_hook_active"]).IsNotNull();
-        await Assert.That(stopNode["agent_transcript_path"]!.GetValue<string>().EndsWith(".jsonl")).IsTrue();
+        await Assert.That(stopNode["agent_transcript_path"]!.GetValue<string>().EndsWith(".jsonl", StringComparison.OrdinalIgnoreCase)).IsTrue();
         await Assert.That(stopNode["last_assistant_message"]).IsNotNull();
         await Assert.That(stopNode["strict"]!.GetValue<bool>()).IsTrue();
     }

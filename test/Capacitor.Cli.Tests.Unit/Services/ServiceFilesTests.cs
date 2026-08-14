@@ -228,8 +228,8 @@ public partial class ServiceFilesTests {
         mgr.WriteUnitFiles(Spec());
 
         await Assert.That(seen.Count).IsEqualTo(2);
-        await Assert.That(seen.Any(f => f.Path.EndsWith(".task.xml") && Equals(f.Encoding, Encoding.Unicode))).IsTrue();
-        await Assert.That(seen.Any(f => f.Path.EndsWith(".cmd") && Equals(f.Encoding, Encoding.UTF8))).IsTrue();
+        await Assert.That(seen.Any(f => f.Path.EndsWith(".task.xml", StringComparison.Ordinal) && Equals(f.Encoding, Encoding.Unicode))).IsTrue();
+        await Assert.That(seen.Any(f => f.Path.EndsWith(".cmd", StringComparison.Ordinal) && Equals(f.Encoding, Encoding.UTF8))).IsTrue();
     }
 
     static ServiceSpec Spec() => new(

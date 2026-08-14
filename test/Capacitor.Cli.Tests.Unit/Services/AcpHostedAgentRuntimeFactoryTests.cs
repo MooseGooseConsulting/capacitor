@@ -1477,7 +1477,7 @@ public class AcpHostedAgentRuntimeFactoryTests {
         // and every "does not contain create/edit/bash" check while handing the reviewer exactly the
         // surface this issue exists to withhold. Exclusivity IS the security boundary, so the test
         // has to pin the whole set.
-        var emitted = argv.Where(a => a.StartsWith("--available-tools=")).ToArray();
+        var emitted = argv.Where(a => a.StartsWith("--available-tools=", StringComparison.Ordinal)).ToArray();
 
         await Assert.That(emitted).IsEquivalentTo(ExpectedAvailableTools(
             allowlisted: ["kcap-review"], extra: CopilotBorrowedReviewPolicy.ReadToolIds));
@@ -1527,7 +1527,7 @@ public class AcpHostedAgentRuntimeFactoryTests {
         // path must still resolve, or the fail-closed guard fires for a reason unrelated to the argv.
         var emitted = AcpHostedAgentRuntimeFactory
             .BuildProcessStartInfo(AcpVendorDescriptors.Copilot, ResolvableConfig(), ctx)
-            .ArgumentList.Where(a => a.StartsWith("--available-tools=")).ToArray();
+            .ArgumentList.Where(a => a.StartsWith("--available-tools=", StringComparison.Ordinal)).ToArray();
 
         await Assert.That(emitted).IsEquivalentTo(ExpectedAvailableTools(
             allowlisted: ["kcap-review"], extra: host.ExtraBorrowedToolIds));
@@ -3135,8 +3135,10 @@ public class AcpHostedAgentRuntimeFactoryTests {
         public override long Seek(long offset, SeekOrigin origin) => 0;
         public override void SetLength(long value) { }
         public override void Write(byte[] buffer, int offset, int count) { }
-        protected override void Dispose(bool disposing) => throw new InvalidOperationException("stream-disposal-fault");
-        public override ValueTask DisposeAsync() => throw new InvalidOperationException("stream-disposal-fault");
+        protected override void Dispose(bool disposing) {
+            base.Dispose(disposing);
+            throw new InvalidOperationException("stream-disposal-fault");
+        }
     }
 
     /// <summary>Tracks Terminate/Dispose so a test can prove the process was disposed even when the

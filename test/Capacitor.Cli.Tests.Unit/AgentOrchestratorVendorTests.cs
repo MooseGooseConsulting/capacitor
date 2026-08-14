@@ -437,7 +437,7 @@ public partial class AgentOrchestratorVendorTests {
         await orch.HandleLaunchAgentForTest(
             PostureCmd("agent-posture-ok", new("read-only", "never")));
 
-        await Assert.That(server.LaunchFailedCalls.Any(c => c.Reason.StartsWith("codex_posture_"))).IsFalse();
+        await Assert.That(server.LaunchFailedCalls.Any(c => c.Reason.StartsWith("codex_posture_", StringComparison.Ordinal))).IsFalse();
     }
 
     // ── Applied-posture echo on registration ────────────────────────────────────────────────

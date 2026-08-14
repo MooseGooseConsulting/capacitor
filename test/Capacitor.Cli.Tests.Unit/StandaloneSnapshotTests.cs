@@ -730,7 +730,7 @@ public class StandaloneSnapshotTests {
                 .Because("only this invocation's EXACT marker name suppresses a directory");
 
             var worktreeRoot = Path.Combine(source, ".capacitor", "worktrees");
-            await Assert.That(EntryNames(worktreeRoot).Where(n => n.StartsWith(".kcap-"))).IsEmpty()
+            await Assert.That(EntryNames(worktreeRoot).Where(n => n.StartsWith(".kcap-", StringComparison.Ordinal))).IsEmpty()
                 .Because("marker and claim are both released once the snapshot is built");
         } finally {
             Cleanup(root);
@@ -749,7 +749,7 @@ public class StandaloneSnapshotTests {
                 .Throws<InvalidOperationException>();
 
             var worktreeRoot = Path.Combine(source, ".capacitor", "worktrees");
-            await Assert.That(EntryNames(worktreeRoot).Where(n => n.StartsWith(".kcap-"))).IsEmpty()
+            await Assert.That(EntryNames(worktreeRoot).Where(n => n.StartsWith(".kcap-", StringComparison.Ordinal))).IsEmpty()
                 .Because("a failed launch must not leak its marker or claim");
             await Assert.That(IsPresent(Path.Combine(worktreeRoot, "doomed"))).IsFalse()
                 .Because("the claimant's own partial tree is rolled back");

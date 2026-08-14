@@ -291,9 +291,10 @@ internal sealed class SequencedCommandProcessor : IAsyncDisposable {
         if (outcome is SubmitOutcome.DroppedUnknownTarget)
             // The processor owns this log: the caller has no reply surface for an un-sequenced command
             // (§1.8) and the drop is observably identical to the unknown-agent no-op it replaces.
-            LogQuietlyUnsequenced(null,
-                "dropping an un-sequenced stop for unknown target {AgentId} (payload {PayloadKey}) — neither registered nor an in-flight launch",
-                item.AgentId, item.PayloadKey);
+            LogQuietly(() => _logger.LogDebug(
+                    "SequencedCommandProcessor: dropping an un-sequenced stop for unknown target {AgentId} (payload {PayloadKey}) — neither registered nor an in-flight launch",
+                    item.AgentId,
+                    item.PayloadKey));
 
         if (alarmDepth > 0)
             try {
@@ -452,14 +453,6 @@ internal sealed class SequencedCommandProcessor : IAsyncDisposable {
         alarmHighWater = _queuedStopsHighWater;
     }
 
-    /// <summary>Diagnostics for the un-sequenced lane that cannot themselves become the failure — same
-    /// contract as <see cref="LogQuietly"/>, different argument shape.</summary>
-    void LogQuietlyUnsequenced(Exception? error, string template, string agentId, string payloadKey) {
-        try {
-            _logger.LogDebug(error, "SequencedCommandProcessor: " + template, agentId, payloadKey);
-        } catch { /* deliberately empty — see summary */ }
-    }
-
     /// <summary>Test seams for the §3.3 tracking state. Reading them takes <c>_lock</c>, so they observe
     /// exactly what admission and coalescing observe.</summary>
     internal bool IsActiveLaunchTargetForTest(string agentId) { lock (_lock) return _activeLaunches.ContainsKey(agentId); }
@@ -542,7 +535,7 @@ internal sealed class SequencedCommandProcessor : IAsyncDisposable {
             // diagnostic goes through LogQuietly because a throwing ILogger provider is a supported input
             // here — logging must not become the failure and let the exception escape the containment
             // (which would fault SubmitAsync into the hub, or fault a tick/reconnect re-delivery).
-            LogQuietly(ex, "{What} freeze for seq {Seq}: liveness read threw — deferred for re-delivery", "terminal-ack", seq);
+            LogQuietly(() => _logger.LogDebug(ex, "SequencedCommandProcessor: {What} freeze for seq {Seq}: liveness read threw — deferred for re-delivery", "terminal-ack", seq));
             return null;
         }
         lock (_lock) {
@@ -640,13 +633,13 @@ internal sealed class SequencedCommandProcessor : IAsyncDisposable {
                     // Guarded: an unguarded LogDebug here would fault this DISCARDED continuation on a
                     // throwing provider — recreating the very unobserved-task-failure this wrapper exists
                     // to prevent, in the code meant to report it.
-                    t => LogQuietly(t.Exception, "{What} for seq {Seq} failed to send", what, seq),
+                    t => LogQuietly(() => _logger.LogDebug(t.Exception, "SequencedCommandProcessor: {What} for seq {Seq} failed to send", what, seq)),
                     CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
         } catch (Exception ex) {
             // Guarded for the same reason, and a sharper one: the hub-side callers (stale epoch, gap,
             // duplicate collision, accepted/processed replay) have NO outer per-item catch, so a
             // transport throw followed by a logging throw escaped straight into the hub.
-            LogQuietly(ex, "{What} for seq {Seq} threw", what, seq);
+            LogQuietly(() => _logger.LogDebug(ex, "SequencedCommandProcessor: {What} for seq {Seq} threw", what, seq));
         }
     }
 
@@ -654,9 +647,9 @@ internal sealed class SequencedCommandProcessor : IAsyncDisposable {
     /// best-effort path routes through here — a throwing <c>ILogger</c> provider is a supported input,
     /// not a contract violation, and losing a Debug line is always preferable to losing the operation
     /// it was describing.</summary>
-    void LogQuietly(Exception? error, string template, string what, long seq) {
+    static void LogQuietly(Action logAction) {
         try {
-            _logger.LogDebug(error, "SequencedCommandProcessor: " + template, what, seq);
+            logAction();
         } catch { /* deliberately empty — see summary */ }
     }
 

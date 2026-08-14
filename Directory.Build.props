@@ -19,14 +19,7 @@
             CA1001<!-- Type owns disposable fields but is not disposable -->;
             CA1051<!-- Do not declare visible instance fields -->;
             CA1068<!-- CancellationToken parameters must come last -->;
-            CA1305<!-- Specify IFormatProvider -->;
-            CA1310<!-- Specify StringComparison for correctness -->;
             CA1822<!-- Mark members as static -->;
-            CA1859<!-- Use concrete types where possible for performance -->;
-            CA2016<!-- Forward the CancellationToken parameter -->;
-            CA2101<!-- Specify marshaling for P/Invoke string arguments -->;
-            CA2215<!-- Dispose(bool) should call base.Dispose(bool) -->;
-            CA2254<!-- The logging message template should not vary between calls -->;
 
             CS8519<!-- The given expression never matches the provided pattern -->;
             CS8524<!-- Switch expression is not exhaustive over an unnamed enum value -->;

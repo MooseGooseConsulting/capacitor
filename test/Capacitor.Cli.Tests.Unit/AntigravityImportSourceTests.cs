@@ -1,3 +1,4 @@
+using System.Globalization;
 using Capacitor.Cli.Commands;
 
 namespace Capacitor.Cli.Tests.Unit;
@@ -87,7 +88,7 @@ public class AntigravityImportSourceTests {
             var root = discovered[0];
             await Assert.That(root.SessionId).IsEqualTo(Dashless(Root));
             await Assert.That(root.Vendor).IsEqualTo("antigravity");
-            await Assert.That(root.FirstTimestamp).IsEqualTo(DateTimeOffset.Parse("2026-07-02T19:00:00Z"));
+            await Assert.That(root.FirstTimestamp).IsEqualTo(DateTimeOffset.Parse("2026-07-02T19:00:00Z", CultureInfo.InvariantCulture));
 
             var children = (List<string>)root.SourceMeta!["Children"]!;
             await Assert.That(children).Contains(Child);

@@ -194,7 +194,7 @@ public static class HttpClientExtensions {
             client.DefaultRequestHeaders.Add(CliVersionHeader, version);
         }
 
-        var profile = await AppConfig.GetActiveProfileAsync();
+        var profile = await AppConfig.GetActiveProfileAsync(ct);
 
         if (profile?.UpdateCheck == false) {
             client.DefaultRequestHeaders.Add(UpdateCheckHeader, UpdateCheckOffValue);
