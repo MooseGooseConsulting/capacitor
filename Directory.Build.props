@@ -37,26 +37,17 @@
             CA1068<!-- CancellationToken parameters must come last -->;
             CA1305<!-- Specify IFormatProvider -->;
             CA1310<!-- Specify StringComparison for correctness -->;
-            CA1416<!-- Validate platform compatibility -->;
             CA1822<!-- Mark members as static -->;
             CA1859<!-- Use concrete types where possible for performance -->;
-            CA2008<!-- Do not create tasks without passing a TaskScheduler -->;
             CA2016<!-- Forward the CancellationToken parameter -->;
             CA2101<!-- Specify marshaling for P/Invoke string arguments -->;
-            CA2201<!-- Exception type is not sufficiently specific -->;
             CA2215<!-- Dispose(bool) should call base.Dispose(bool) -->;
             CA2254<!-- The logging message template should not vary between calls -->;
 
             CS8519<!-- The given expression never matches the provided pattern -->;
             CS8524<!-- Switch expression is not exhaustive over an unnamed enum value -->;
-            CS8602<!-- Dereference of a possibly null reference -->;
             CS8604<!-- Possible null reference argument -->;
-            CS8625<!-- Cannot convert null literal to non-nullable reference type -->;
-            CS8631<!-- Nullability of type argument does not match constraint -->;
             CS8793<!-- The given expression always matches the provided pattern -->;
-            CS9124<!-- Parameter is captured into enclosing state and also initializes a field -->;
-
-            IDE0051<!-- Private member is unused -->;
 
             NU1510<!-- PackageReference will not be pruned -->;
         </WarningsNotAsErrors>

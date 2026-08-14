@@ -2618,7 +2618,7 @@ public class AcpHostedAgentRuntimeFactoryTests {
         var ex = await Assert.ThrowsAsync<AcpHostedAgentRuntimeFactory.AcpReviewerReapedException>(
             () => startTask.WaitAsync(HangGuard));
 
-        await Assert.That(ex.Message).StartsWith(ReapVerdictReason);
+        await Assert.That(ex!.Message).StartsWith(ReapVerdictReason);
         await Assert.That(ex.Message).Contains("(transport:");
         await Assert.That(ex.Message).Contains("read loop ended");
         await Assert.That(ex.Message).DoesNotContain("auth/subscription");
@@ -2681,7 +2681,7 @@ public class AcpHostedAgentRuntimeFactoryTests {
         var ex = await Assert.ThrowsAsync<AcpHostedAgentRuntimeFactory.AcpReviewerReapedException>(
             () => startTask.WaitAsync(HangGuard));
 
-        await Assert.That(ex.Message).StartsWith(ReapVerdictReason);
+        await Assert.That(ex!.Message).StartsWith(ReapVerdictReason);
         await Assert.That(ex.Message).Contains("(transport:");
         await Assert.That(ex.Message).Contains("read loop ended");
         await Assert.That(ex.Message).DoesNotContain("auth/subscription");
@@ -2723,7 +2723,7 @@ public class AcpHostedAgentRuntimeFactoryTests {
         var ex = await Assert.ThrowsAsync<AcpHostedAgentRuntimeFactory.AcpReviewerReapedException>(
             () => startTask.WaitAsync(HangGuard));
 
-        await Assert.That(ex.Message).StartsWith(ReapVerdictReason);
+        await Assert.That(ex!.Message).StartsWith(ReapVerdictReason);
         await Assert.That(ex.Message).Contains("(transport:");
         await Assert.That(ex.Message).DoesNotContain("auth/subscription");
 
@@ -2794,7 +2794,7 @@ public class AcpHostedAgentRuntimeFactoryTests {
         var ex = await Assert.ThrowsAsync<AcpHostedAgentRuntimeFactory.AcpReviewerReapedException>(
             () => startTask.WaitAsync(HangGuard));
 
-        await Assert.That(ex.Message).StartsWith(ReapVerdictReason);
+        await Assert.That(ex!.Message).StartsWith(ReapVerdictReason);
         await Assert.That(ex.Message).Contains("(transport:");
         await Assert.That(ex.Message).DoesNotContain("auth/subscription");
 
@@ -2858,7 +2858,7 @@ public class AcpHostedAgentRuntimeFactoryTests {
         var ex = await Assert.ThrowsAsync<AcpHostedAgentRuntimeFactory.AcpReviewerReapedException>(
             () => startTask.WaitAsync(HangGuard));
 
-        await Assert.That(ex.Message).StartsWith(ReapVerdictReason);
+        await Assert.That(ex!.Message).StartsWith(ReapVerdictReason);
         await Assert.That(ex.Message).DoesNotContain("auth/subscription");
 
         cts.Cancel();
@@ -2918,7 +2918,7 @@ public class AcpHostedAgentRuntimeFactoryTests {
         var ex = await Assert.ThrowsAsync<AcpHostedAgentRuntimeFactory.AcpReviewerReapedException>(
             () => startTask.WaitAsync(HangGuard));
 
-        await Assert.That(ex.Message).StartsWith(ReapVerdictReason);
+        await Assert.That(ex!.Message).StartsWith(ReapVerdictReason);
         await Assert.That(ex.Message).DoesNotContain("auth/subscription");
 
         cts.Cancel();
@@ -2949,7 +2949,7 @@ public class AcpHostedAgentRuntimeFactoryTests {
         var ex = await Assert.ThrowsAsync<AcpHostedAgentRuntime.AcpHandshakeFailedException>(
             () => factory.StartAsync(MakeContext("agent-1"), cts.Token).WaitAsync(HangGuard));
 
-        await Assert.That(ex.Message).IsEqualTo(
+        await Assert.That(ex!.Message).IsEqualTo(
             "ACP handshake (initialize/session-new) failed: not authenticated — if this is an "
           + "auth/subscription issue, run `cursor-agent login` and verify a Team-tier subscription.");
         await Assert.That(ex.TransportMessage).IsEqualTo("not authenticated");
@@ -3011,7 +3011,7 @@ public class AcpHostedAgentRuntimeFactoryTests {
         var ex = await Assert.ThrowsAsync<AcpHostedAgentRuntimeFactory.AcpReviewerReapedException>(
             () => startTask.WaitAsync(HangGuard));
 
-        await Assert.That(ex.Message).StartsWith(ReapVerdictReason);
+        await Assert.That(ex!.Message).StartsWith(ReapVerdictReason);
         await Assert.That(ex.Message).DoesNotContain("opencode_reviewer_launch_timeout");
         await Assert.That(ex.Message).DoesNotContain("auth/subscription");
 
@@ -3059,7 +3059,7 @@ public class AcpHostedAgentRuntimeFactoryTests {
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
             () => factory.StartAsync(MakeContext("agent-1"), CancellationToken.None).WaitAsync(HangGuard));
 
-        await Assert.That(ex.Message.Trim()).IsEmpty();
+        await Assert.That(ex!.Message.Trim()).IsEmpty();
         await Assert.That(AcpHostedAgentRuntimeFactory.DescribeLaunchFailure(ex))
             .IsEqualTo($"launch_failed:{nameof(InvalidOperationException)} — see daemon log");
     }
@@ -3112,7 +3112,7 @@ public class AcpHostedAgentRuntimeFactoryTests {
         var ex = await Assert.ThrowsAsync<AcpHostedAgentRuntimeFactory.AcpReviewerReapedException>(
             () => startTask.WaitAsync(HangGuard));
 
-        await Assert.That(ex.Message).StartsWith(ReapVerdictReason);
+        await Assert.That(ex!.Message).StartsWith(ReapVerdictReason);
         await Assert.That(ex.Message).DoesNotContain("teardown-fault"); // never the disposal exception
 
         cts.Cancel();

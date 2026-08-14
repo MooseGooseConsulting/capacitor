@@ -588,8 +588,8 @@ public class StandaloneSnapshotTests {
             var b = Task.Run(() => manager.CreateAsync(source, "raced"));
 
             var outcomes = await Task.WhenAll(
-                a.ContinueWith(t => t.IsCompletedSuccessfully ? null : Message(t)),
-                b.ContinueWith(t => t.IsCompletedSuccessfully ? null : Message(t)));
+                a.ContinueWith(t => t.IsCompletedSuccessfully ? null : Message(t), TaskScheduler.Default),
+                b.ContinueWith(t => t.IsCompletedSuccessfully ? null : Message(t), TaskScheduler.Default));
 
             await Assert.That(outcomes.Count(m => m is null)).IsEqualTo(1)
                 .Because("exactly one caller may own the destination");

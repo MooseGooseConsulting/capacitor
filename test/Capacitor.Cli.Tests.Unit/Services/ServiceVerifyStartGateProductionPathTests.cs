@@ -1,3 +1,4 @@
+using System.Runtime.Versioning;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Services;
 
@@ -89,6 +90,7 @@ public class ServiceVerifyStartGateProductionPathTests {
     /// absent unit gets. Here: a real plist file with its read permission stripped —
     /// <c>File.Exists</c> still reports it present, but the open throws.</summary>
     [Test, NotInParallel]
+    [UnsupportedOSPlatform("windows")]
     public async Task Present_but_unreadable_unit_is_evidence_unreadable_not_directive_missing() {
         Skip.When(OperatingSystem.IsWindows(), "launchd/HOME-based plist resolution and Unix file modes are POSIX-only");
 

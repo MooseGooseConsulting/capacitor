@@ -875,7 +875,7 @@ public partial class AgentOrchestratorVendorTests {
     /// observable while it is still live, rather than racing its cleanup.</summary>
     sealed class ParkedReadStream : Stream {
         public override ValueTask<int> ReadAsync(Memory<byte> b, CancellationToken ct = default) =>
-            new(Task.Delay(Timeout.Infinite, ct).ContinueWith(_ => 0, TaskContinuationOptions.ExecuteSynchronously));
+            new(Task.Delay(Timeout.Infinite, ct).ContinueWith(_ => 0, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default));
 
         public override int  Read(byte[] b, int o, int c) => throw new NotSupportedException();
         public override void Write(byte[] b, int o, int c) { }

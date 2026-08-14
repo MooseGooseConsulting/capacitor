@@ -411,7 +411,7 @@ public class AcpTranscriptAggregationTests {
         while (h.Runtime.Envelopes.TryRead(out var e)) drained.Add(e);
 
         await Assert.That(drained.Count).IsEqualTo(3);
-        await Assert.That(drained.Select(e => e.ToolCallId)).IsEquivalentTo(new[] { "call-3", "call-4", "call-5" });
+        await Assert.That(drained.Select(e => e.ToolCallId!)).IsEquivalentTo(new[] { "call-3", "call-4", "call-5" });
         await Assert.That(drained.All(e => e.Kind == AcpEventKind.ToolCall)).IsTrue();
 
         await Assert.That(logger.Entries).Contains(e => e.Level == LogLevel.Warning && e.Message.Contains("transcript", StringComparison.OrdinalIgnoreCase));

@@ -506,13 +506,11 @@ internal sealed class SequencedCommandProcessor : IAsyncDisposable {
     /// readLiveness delegate, which walks the orchestrator's lifecycle collections, and every settled
     /// command reaches this — holding the lock across it would put that read on the critical path of
     /// concurrent <see cref="SubmitAsync"/>/<see cref="AckPrefix"/> callers. Both callers commit the
-    /// outcome to the cache first, so an ack can never advertise an outcome the cache lacks.</para></summary>
-    CommandAck BuildProcessedAck(SequencedItem item, CommandOutcome outcome) =>
-        BuildProcessedAck(item.Seq, item.CommandId, item.AgentId, outcome);
-
-    /// <summary>Settlement lost-ack redelivery (D1): the primitive builder, so a re-delivery can rebuild an entry's terminal ack
-    /// from the cached identity (Seq/CommandId/AgentId + Outcome) without the original SequencedItem. Same
-    /// live <c>_readLiveness</c> read and lock-scope contract as the item overload.</summary>
+    /// outcome to the cache first, so an ack can never advertise an outcome the cache lacks.</para>
+    ///
+    /// <para>Settlement lost-ack redelivery (D1): the primitive form, so a re-delivery can rebuild an
+    /// entry's terminal ack from the cached identity (Seq/CommandId/AgentId + Outcome) without the
+    /// original SequencedItem.</para></summary>
     CommandAck BuildProcessedAck(long seq, string commandId, string agentId, CommandOutcome outcome) {
         var live   = _readLiveness(outcome.AgentId ?? agentId);
         var reason = outcome.RejectReason is { } r ? RejectReasonWireToken(r) : null;

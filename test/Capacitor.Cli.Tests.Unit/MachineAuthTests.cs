@@ -375,7 +375,7 @@ public class MachineAuthTests : IDisposable {
 
         // Two tokens in sequence from the mint endpoint, via a WireMock scenario state machine.
         _server.Given(Request.Create().WithPath("/oauth2/token").UsingPost())
-            .InScenario("mint").WhenStateIs(null).WillSetStateTo("second")
+            .InScenario("mint").WhenStateIs(null!).WillSetStateTo("second")
             .RespondWith(Response.Create().WithStatusCode(200)
                 .WithHeader("Content-Type", "application/json")
                 .WithBody("{\"access_token\":\"tok_1\",\"expires_in\":3600}"));

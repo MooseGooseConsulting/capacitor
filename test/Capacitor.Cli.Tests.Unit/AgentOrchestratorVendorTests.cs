@@ -2068,7 +2068,7 @@ public partial class AgentOrchestratorVendorTests {
             LastContext = ctx;
             if (StartThrow is not null) throw StartThrow;
 
-            var runtime = new FakeHostedAgentRuntime(vendor, EmitsTerminalOutput);
+            var runtime = new FakeHostedAgentRuntime(Vendor, EmitsTerminalOutput);
             LastRuntime = runtime;
 
             return Task.FromResult(new HostedRuntimeStart(runtime, McpConfigPath: null));

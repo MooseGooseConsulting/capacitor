@@ -33,8 +33,6 @@ public class AntigravityImportSourceTests {
     const string GuiSub = "antigravity";
     const string CliSub = "antigravity-cli";
 
-    static string BrainDir(string home, string convId) => BrainDirUnder(home, GuiSub, convId);
-
     static string BrainDirUnder(string home, string productSub, string convId) =>
         Path.Combine(home, ".gemini", productSub, "brain", convId);
 

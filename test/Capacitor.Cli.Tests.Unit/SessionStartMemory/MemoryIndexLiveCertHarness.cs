@@ -600,6 +600,7 @@ internal static class MemoryIndexLiveCertHarness {
     /// <c>kcap</c> shadow the binary.</para>
     /// </summary>
     static bool IsExecutableFile(string path) {
+        if (OperatingSystem.IsWindows()) return false;
         if (!File.Exists(path)) return false;
 
         try {
