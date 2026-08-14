@@ -58,7 +58,7 @@ public static class HttpClientExtensions {
     /// carrying the observation headers the server's update-notification pipeline reads (see
     /// <see cref="AttachObservationHeadersAsync"/>): this is the ONE choke point every authenticated
     /// CLI request flows through, so it is the one place that can promise every request the server
-    /// sees is tagged. <see cref="WhoamiCommand.ProbeAsync"/> deliberately bypasses this method (it
+    /// sees is tagged. <c>WhoamiCommand.ProbeAsync</c> deliberately bypasses this method (it
     /// must not mutate auth state) and attaches the same headers explicitly.</para>
     /// </summary>
     static async Task<(HttpClient Client, AuthStatus Status, TokenResolution? Resolution, string? MachineProblem)> CreateClientCoreAsync(
@@ -333,7 +333,7 @@ public static class HttpClientExtensions {
     /// an absolute http/https URL. Called by every <c>*WithRetryAsync</c>
     /// extension so a legacy scheme-less config produces a clean exit instead
     /// of an unhandled <see cref="InvalidOperationException"/> from
-    /// <see cref="HttpClient.PrepareRequestMessage"/>.
+    /// <c>HttpClient.PrepareRequestMessage</c>.
     /// </summary>
     static void EnsureAbsolute(string url) {
         if (IsAcceptableUrl(url)) return;

@@ -14,7 +14,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
-/// Covers the vendor-routing logic in <see cref="AgentOrchestrator.HandleLaunchAgent"/>
+/// Covers the vendor-routing logic in <c>AgentOrchestrator.HandleLaunchAgent</c>
 /// added in Task 14. Verifies that:
 ///   • Unknown vendors short-circuit with LaunchFailed before any worktree work.
 ///   • Claude/Codex commands route to the matching <see cref="IHostedAgentLauncher"/>.
@@ -2350,7 +2350,7 @@ public partial class AgentOrchestratorVendorTests {
         /// <summary>One-shot gate: when set, the NEXT raw AcpSessionStarted invoke awaits this task
         /// before returning (then the field is cleared) — models a bind call still in flight across
         /// a reconnect outage (reliability fix's stale-binding-race test), independent of
-        /// <paramref name="ct"/> so the test controls exactly when the "late bind" resolves.</summary>
+        /// <c>ct</c> so the test controls exactly when the "late bind" resolves.</summary>
         public TaskCompletionSource? PendingAcpBindGate { get; set; }
 
         internal override async Task InvokeAcpSessionStartedRawAsync(

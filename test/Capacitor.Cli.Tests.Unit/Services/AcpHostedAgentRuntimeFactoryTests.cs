@@ -2557,7 +2557,7 @@ public class AcpHostedAgentRuntimeFactoryTests {
     /// refuses it before <c>_connectionSource</c> even runs unless the operator has opted in AND the
     /// resolved build matches (or exceeds) what this daemon has affirmed. Mirrors the established
     /// <c>GeminiEnabledConfig</c> pattern: a real, per-test-unique StateDir backs a filesystem
-    /// <see cref="ReviewerVersionStore"/>, and <paramref name="launchTimeoutSeconds"/> lets a caller
+    /// <see cref="ReviewerVersionStore"/>, and <c>launchTimeoutSeconds</c> lets a caller
     /// override the 120s default when a test needs the deadline to actually fire.</summary>
     const string OpenCodeBuild = "1.0.0";
 

@@ -98,7 +98,7 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     /// <summary>The runtime phase with acquire semantics — the backing field is written only under
     /// <see cref="_reconnectLock"/>, but several readers (`HasExited`/`ExitCode`, the graceful-stop
     /// catch filter) run lock-free, and a plain enum field gives them no visibility guarantee
-    /// (Qodo review #2). Backed by an int because <c>volatile</c>/<see cref="Volatile.Read(ref int)"/>
+    /// (Qodo review #2). Backed by an int because <c>volatile</c>/<see cref="Volatile"/>
     /// don't apply to enum fields. Reads under the lock use this too — uniform and harmless.</summary>
     RuntimePhase Phase => (RuntimePhase)Volatile.Read(ref _phase);
     volatile bool _suppressNotifications;
@@ -530,7 +530,7 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     /// <summary>
     /// The initialize/session-new wrapper's failure, carrying the sanitized transport cause as a
     /// SEPARATE property from the composed, hint-decorated <see cref="Exception.Message"/> (design
-    /// spec §3.2). <see cref="Message"/> is composed exactly as the plain
+    /// spec §3.2). <see cref="Exception.Message"/> is composed exactly as the plain
     /// <see cref="InvalidOperationException"/> this replaces always was — byte-identical for the
     /// no-verdict path — but <see cref="TransportMessage"/> lets a caller (the factory's
     /// launch-failure reclassification) quote just the transport cause, so a reclassified suffix can

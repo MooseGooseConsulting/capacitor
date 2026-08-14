@@ -36,7 +36,7 @@ public interface IKcapCli {
     /// version string (CliResolver.ParseVersion).
     Task<string?> VersionAsync(CancellationToken ct);
 
-    /// Runs `daemon service status --name <name> --json`; null = unknown (non-zero exit, a
+    /// Runs <c>daemon service status --name &lt;name&gt; --json</c>; null = unknown (non-zero exit, a
     /// timeout, or a parse failure) — never a fabricated snapshot.
     Task<ServiceSnapshot?> ServiceStatusAsync(CancellationToken ct);
 
@@ -44,7 +44,7 @@ public interface IKcapCli {
 
     Task<ProcessResult> ServiceInstallVerifiedAsync(bool replace, CancellationToken ct);
 
-    /// `daemon start -d --name <name>`; AbandonWait, uncapped — a detached daemon must outlive an
+    /// <c>daemon start -d --name &lt;name&gt;</c>; AbandonWait, uncapped — a detached daemon must outlive an
     /// abandoned wait.
     Task<ProcessResult> DetachedStartAsync(CancellationToken ct);
 }

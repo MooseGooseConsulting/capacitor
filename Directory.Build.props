@@ -5,28 +5,12 @@
         <Nullable>enable</Nullable>
         <ImplicitUsings>enable</ImplicitUsings>
 
+        <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
         <AnalysisLevel>latest-recommended</AnalysisLevel>
         <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
-        <!-- Only on for IDE0005, which the compiler reports nowhere else. We ship no XML docs, so
-             the doc-markup warnings it drags in are suppressed below; worth revisiting later. -->
+        <!-- Only on for IDE0005, which the compiler reports nowhere else. -->
         <GenerateDocumentationFile>true</GenerateDocumentationFile>
-        <NoWarn>
-            IDE0055<!-- Fix formatting -->;
-            IDE1006<!-- Naming rule violation -->;
-            CS1591<!-- Missing XML comment -->;
-            CS1573<!-- Parameter has no matching param tag -->;
-            CS1574<!-- cref attribute could not be resolved -->;
-            CS0419<!-- Ambiguous reference in cref attribute -->;
-            CS1734<!-- paramref tag with no matching parameter -->;
-            CS1570<!-- Badly formed XML in comment -->;
-        </NoWarn>
-        <!-- CS8509: a switch expression that does not cover every named enum value. An error, not a
-             warning, because the alternative to exhaustiveness is a discard arm, and a discard that
-             maps to the permissive outcome makes the safe direction of a fail-closed gate whatever
-             nobody thought about. The reviewer version gate shipped exactly that bug. Measured before
-             enabling: zero CS8509 warnings across the daemon, Core, the CLI and the unit tests. -->
-        <WarningsAsErrors>$(WarningsAsErrors);CS8509;IDE0005</WarningsAsErrors>
-        <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+
         <!-- Temporary triage list: every code that was already warning when TreatWarningsAsErrors
              went on. Anything NEW is an error from now on; these stay warnings until fixed, and each
              is deleted from here as its last site goes. Add nothing to this list. -->
