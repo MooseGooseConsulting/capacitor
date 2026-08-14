@@ -178,7 +178,7 @@ public class BootRefusalAttributionTests {
 
             var time = new FakeTimeProvider();
 
-            Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
+            static Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
                 Task.FromResult(new HelloProbeResult(true, 1, "1.2.3", "kcap-daemon"));
 
             // Ownership never matches (validated pid always disagrees with the observed job pid), so
@@ -227,7 +227,7 @@ public class BootRefusalAttributionTests {
 
             var time = new FakeTimeProvider();
 
-            Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
+            static Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
                 Task.FromResult(new HelloProbeResult(false, null, null, null)); // never well-formed
 
             var sut = new ServiceVerify(manager, _ => -1, Hello, time,
@@ -266,7 +266,7 @@ public class BootRefusalAttributionTests {
 
             var manager = new FakeServiceManager { RunningPid = 4242 };
 
-            Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
+            static Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
                 Task.FromResult(new HelloProbeResult(true, 1, "1.2.3", "kcap-daemon"));
 
             var sut = new ServiceVerify(manager, _ => 4242, Hello, TimeProvider.System,

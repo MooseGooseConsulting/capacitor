@@ -161,8 +161,7 @@ public partial class AgentOrchestratorVendorTests {
             []);
         var json = JsonSerializer.Serialize(fullShapeReport, CapacitorJsonContext.Default.DaemonStatusReport);
 
-        var oldServerOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
-        var oldShape = JsonSerializer.Deserialize<OldDaemonStatusReport>(json, oldServerOptions);
+        var oldShape = JsonSerializer.Deserialize<OldDaemonStatusReport>(json, OldServerOptions);
 
         await Assert.That(oldShape.ActiveCount).IsEqualTo(1);
         await Assert.That(oldShape.LiveAgents).Count().IsEqualTo(1);
@@ -170,6 +169,8 @@ public partial class AgentOrchestratorVendorTests {
         await Assert.That(oldShape.LiveAgents[0].FlowRunId).IsEqualTo("flow-1");
         await Assert.That(oldShape.LiveAgents[0].FlowRole).IsEqualTo("reviewer");
     }
+
+    static readonly JsonSerializerOptions OldServerOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
 
     static readonly TimeSpan PollBound = TimeSpan.FromSeconds(5);
 

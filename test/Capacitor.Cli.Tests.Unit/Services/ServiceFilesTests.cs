@@ -106,7 +106,7 @@ public partial class ServiceFilesTests {
             // The property that actually matters to launchd: the owner can still read it.
             await Assert.That(await File.ReadAllTextAsync(path)).IsEqualTo("SECRET-COMMAND");
         } finally {
-            umask(previous);
+            _ = umask(previous);
             try { Directory.Delete(dir, true); } catch { /* best-effort */ }
         }
     }

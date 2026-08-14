@@ -198,7 +198,7 @@ public class ServiceVerifyInstallTests {
             ServiceTxnMarker.Write(Id, new TxnMarker(1, "install", "committed", "stale", "no-unit", "stale-fingerprint"));
 
             var manager = new FakeServiceManager();
-            Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
+            static Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
                 Task.FromResult(new HelloProbeResult(true, 1, ExpectedVersion, Id));
 
             var sut = new ServiceVerify(manager, _ => 4242, Hello, TimeProvider.System, readPlist: OwnPlist);
@@ -222,7 +222,7 @@ public class ServiceVerifyInstallTests {
             ServiceTxnMarker.Write(Id, new TxnMarker(1, "install", "written", "stale", "no-unit", matchingFingerprint));
 
             var manager = new FakeServiceManager();
-            Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
+            static Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
                 Task.FromResult(new HelloProbeResult(true, 1, ExpectedVersion, Id));
 
             var sut = new ServiceVerify(manager, _ => 4242, Hello, TimeProvider.System, readPlist: OwnPlist);
@@ -247,7 +247,7 @@ public class ServiceVerifyInstallTests {
             ServiceTxnMarker.Write(Id, new TxnMarker(1, "install", "captured", "stale", "no-unit", null));
 
             var manager = new FakeServiceManager();
-            Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
+            static Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
                 Task.FromResult(new HelloProbeResult(true, 1, ExpectedVersion, Id));
 
             var sut = new ServiceVerify(manager, _ => 4242, Hello, TimeProvider.System, readPlist: OwnPlist);
@@ -337,7 +337,7 @@ public class ServiceVerifyInstallTests {
             var manager = new FakeServiceManager();
             var time = new FakeTimeProvider();
 
-            Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
+            static Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
                 Task.FromResult(new HelloProbeResult(true, 1, "0.9.0", Id)); // version != ExpectedVersion; name/protocol right
 
             var sut = new ServiceVerify(manager, _ => 4242, Hello, time,
@@ -362,7 +362,7 @@ public class ServiceVerifyInstallTests {
             var manager = new FakeServiceManager();
             var time = new FakeTimeProvider();
 
-            Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
+            static Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
                 Task.FromResult(new HelloProbeResult(true, 1, ExpectedVersion, "someone-elses-daemon"));
 
             var sut = new ServiceVerify(manager, _ => 4242, Hello, time,
@@ -387,7 +387,7 @@ public class ServiceVerifyInstallTests {
             var manager = new FakeServiceManager();
             var time = new FakeTimeProvider();
 
-            Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
+            static Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
                 Task.FromResult(new HelloProbeResult(true, 2, ExpectedVersion, Id)); // protocol 2 != this build's 1
 
             var sut = new ServiceVerify(manager, _ => 4242, Hello, time,
@@ -412,7 +412,7 @@ public class ServiceVerifyInstallTests {
         try {
             var manager = new FakeServiceManager();
 
-            Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
+            static Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
                 Task.FromResult(new HelloProbeResult(true, 1, "whatever-version-nobody-checks", Id));
 
             var sut = new ServiceVerify(manager, _ => 4242, Hello, TimeProvider.System, readPlist: OwnPlist);
@@ -430,7 +430,7 @@ public class ServiceVerifyInstallTests {
         try {
             var manager = new FakeServiceManager();
 
-            Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
+            static Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
                 Task.FromResult(new HelloProbeResult(true, 1, ExpectedVersion, Id));
 
             // A different writer's plist text is on disk by the time the final recheck reads it —
@@ -523,7 +523,7 @@ public class ServiceVerifyInstallTests {
             var manager = new FakeServiceManager { RunningPid = 111, StayUnknownAfterUninstall = true }; // ownership never holds
             var time = new FakeTimeProvider();
 
-            Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
+            static Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
                 Task.FromResult(new HelloProbeResult(true, 1, ExpectedVersion, Id));
 
             var sut = new ServiceVerify(manager, _ => 222, Hello, time,
@@ -547,7 +547,7 @@ public class ServiceVerifyInstallTests {
             var manager = new FakeServiceManager { RunningPid = 111 }; // never matches the validated pid below
             var time = new FakeTimeProvider();
 
-            Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
+            static Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
                 Task.FromResult(new HelloProbeResult(true, 1, ExpectedVersion, Id));
 
             var sut = new ServiceVerify(manager, _ => 222, Hello, time,
@@ -659,7 +659,7 @@ public class ServiceVerifyInstallTests {
             Console.SetError(capturedErr);
 
             var manager = new FakeServiceManager();
-            Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
+            static Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
                 Task.FromResult(new HelloProbeResult(true, 1, ExpectedVersion, Id));
 
             var sut = new ServiceVerify(manager, _ => 4242, Hello, TimeProvider.System,
@@ -689,7 +689,7 @@ public class ServiceVerifyInstallTests {
         var (dir, daemonPath) = SetUpViableInstall();
         try {
             var manager = new FakeServiceManager();
-            Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
+            static Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
                 Task.FromResult(new HelloProbeResult(true, 1, ExpectedVersion, Id));
 
             var digestCalls = 0;
@@ -716,7 +716,7 @@ public class ServiceVerifyInstallTests {
         var (dir, daemonPath) = SetUpViableInstall();
         try {
             var manager = new FakeServiceManager();
-            Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
+            static Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
                 Task.FromResult(new HelloProbeResult(true, 1, ExpectedVersion, Id));
 
             var sut = new ServiceVerify(manager, _ => 4242, Hello, TimeProvider.System,
@@ -740,7 +740,7 @@ public class ServiceVerifyInstallTests {
         var (dir, daemonPath) = SetUpViableInstall();
         try {
             var manager = new FakeServiceManager();
-            Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
+            static Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
                 Task.FromResult(new HelloProbeResult(true, 1, ExpectedVersion, Id));
 
             var sut = new ServiceVerify(manager, _ => 4242, Hello, TimeProvider.System,
@@ -772,7 +772,7 @@ public class ServiceVerifyInstallTests {
             // Loaded and owned (RunningPid matches the validated pid below) — exactly the shape
             // that would otherwise drive ApplyReplaceMatrixAsync's owning-label bootout branch.
             var manager = new FakeServiceManager { InitialProbe = LabelProbe.Loaded, RunningPid = 4242 };
-            Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
+            static Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
                 Task.FromResult(new HelloProbeResult(true, 1, ExpectedVersion, Id));
 
             var sut = new ServiceVerify(manager, _ => 4242, Hello, TimeProvider.System,
@@ -809,7 +809,7 @@ public class ServiceVerifyInstallTests {
         var (dir, daemonPath) = SetUpViableInstall();
         try {
             var manager = new FakeServiceManager();
-            Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
+            static Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
                 Task.FromResult(new HelloProbeResult(true, 1, ExpectedVersion, Id));
 
             var digestCalls = 0;
@@ -874,7 +874,7 @@ public class ServiceVerifyInstallTests {
                     "server_expectation_mismatch");
             };
 
-            Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
+            static Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
                 Task.FromResult(new HelloProbeResult(true, 1, ExpectedVersion, Id));
 
             var time = new FakeTimeProvider();
@@ -921,7 +921,7 @@ public class ServiceVerifyInstallTests {
                     "server_expectation_mismatch");
             };
 
-            Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
+            static Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
                 Task.FromResult(new HelloProbeResult(true, 1, ExpectedVersion, Id));
 
             var time = new FakeTimeProvider();

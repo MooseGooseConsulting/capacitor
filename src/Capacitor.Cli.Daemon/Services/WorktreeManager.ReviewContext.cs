@@ -341,7 +341,7 @@ public partial class WorktreeManager {
             }
             if (entry.IndexMode is not ("100644" or "100755") ||
                 content.LongLength != entry.ByteCount ||
-                entry.Sha256 != Convert.ToHexString(SHA256.HashData(content)).ToLowerInvariant() ||
+                !string.Equals(entry.Sha256, Convert.ToHexString(SHA256.HashData(content)), StringComparison.OrdinalIgnoreCase) ||
                 entry.Text is not null && !StrictUtf8.GetBytes(entry.Text).AsSpan().SequenceEqual(content))
                 throw new InvalidOperationException(
                     "borrowed_snapshot_review_context_invalid_manifest");

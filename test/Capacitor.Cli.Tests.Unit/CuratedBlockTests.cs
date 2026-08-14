@@ -85,7 +85,7 @@ public class CuratedBlockTests {
 
         // After appending a block the result ends with exactly one newline.
         var appended = CuratedBlock.Splice(content, block);
-        await Assert.That(appended.EndsWith("\n")).IsTrue();
+        await Assert.That(appended.EndsWith('\n')).IsTrue();
         await Assert.That(appended.EndsWith("\n\n")).IsFalse();
 
         // Byte-idempotent: second splice produces same output.
@@ -93,7 +93,7 @@ public class CuratedBlockTests {
 
         // After removing the block the result ends with exactly one newline.
         var removed = CuratedBlock.Splice(appended, null);
-        await Assert.That(removed.EndsWith("\n")).IsTrue();
+        await Assert.That(removed.EndsWith('\n')).IsTrue();
         await Assert.That(removed.EndsWith("\n\n")).IsFalse();
     }
 

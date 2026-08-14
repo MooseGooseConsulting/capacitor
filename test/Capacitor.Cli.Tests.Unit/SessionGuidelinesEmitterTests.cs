@@ -135,7 +135,7 @@ public class SessionGuidelinesEmitterTests {
         };
         var fragment = SessionGuidelinesEmitter.BuildFragment(body, disabled: false);
         await Assert.That(fragment).IsNotNull();
-        await Assert.That(fragment!.TrimStart().StartsWith("{")).IsFalse();
+        await Assert.That(fragment!.TrimStart().StartsWith('{')).IsFalse();
         await Assert.That(fragment).DoesNotContain("hookSpecificOutput");
         await Assert.That(fragment).DoesNotContain("hookEventName");
     }
