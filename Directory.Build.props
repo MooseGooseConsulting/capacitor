@@ -35,12 +35,9 @@
             CA1001<!-- Type owns disposable fields but is not disposable -->;
             CA1051<!-- Do not declare visible instance fields -->;
             CA1068<!-- CancellationToken parameters must come last -->;
-            CA1200<!-- Avoid using cref tags with a prefix -->;
             CA1305<!-- Specify IFormatProvider -->;
-            CA1309<!-- Use ordinal string comparison -->;
             CA1310<!-- Specify StringComparison for correctness -->;
             CA1416<!-- Validate platform compatibility -->;
-            CA1513<!-- Use ObjectDisposedException.ThrowIf -->;
             CA1806<!-- Do not ignore method results -->;
             CA1822<!-- Mark members as static -->;
             CA1826<!-- Do not use Enumerable methods on indexable collections -->;
@@ -59,8 +56,6 @@
             CA2101<!-- Specify marshaling for P/Invoke string arguments -->;
             CA2201<!-- Exception type is not sufficiently specific -->;
             CA2215<!-- Dispose(bool) should call base.Dispose(bool) -->;
-            CA2249<!-- Use string.Contains instead of string.IndexOf -->;
-            CA2250<!-- Use ThrowIfCancellationRequested -->;
             CA2254<!-- The logging message template should not vary between calls -->;
 
             CS0618<!-- Type or member is obsolete -->;
@@ -76,7 +71,6 @@
             CS9124<!-- Parameter is captured into enclosing state and also initializes a field -->;
 
             IDE0031<!-- Null check can be simplified -->;
-            IDE0044<!-- Make field readonly -->;
             IDE0051<!-- Private member is unused -->;
             IDE0059<!-- Unnecessary assignment of a value -->;
             IDE0062<!-- Local function can be made static -->;

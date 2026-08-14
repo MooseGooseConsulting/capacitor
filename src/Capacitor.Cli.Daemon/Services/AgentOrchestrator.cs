@@ -344,15 +344,15 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     // Phase B (D4): durable PID records + this daemon's logical identity/epoch for
     // crash-survivor reaping. Initialized in the ctor from config.
-    AgentPidRecordStore? _pidRecords;
-    AgentKillQuarantine? _quarantine;
-    OrphanReaper?        _orphanReaper;
+    readonly AgentPidRecordStore? _pidRecords;
+    readonly AgentKillQuarantine? _quarantine;
+    readonly OrphanReaper?        _orphanReaper;
 
     // Tail-of-PTY capture for a FAILED launch, under the same per-daemon record root as the PID
     // records ({state}/{name}/agents/failed/) — survives worktree teardown for post-mortem.
-    FailedLaunchLog?     _failedLaunchLog;
-    string               _daemonId    = "";
-    string               _daemonEpoch = "";
+    readonly FailedLaunchLog?     _failedLaunchLog;
+    readonly string               _daemonId    = "";
+    readonly string               _daemonEpoch = "";
 
     // Phase B2-b (sequenced-settlement design §4.2.4): the durable positive-death-evidence outbox.
     // Fed at every CONFIRMED-gone seam — the OrphanReaper record pass (Hook A), the quarantine drain
