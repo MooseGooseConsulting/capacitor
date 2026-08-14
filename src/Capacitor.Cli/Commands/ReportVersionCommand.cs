@@ -1,5 +1,4 @@
 using Capacitor.Cli.Core;
-using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 
 namespace Capacitor.Cli.Commands;

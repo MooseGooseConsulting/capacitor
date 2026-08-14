@@ -1,6 +1,4 @@
 // test/Capacitor.Cli.Tests.Unit/AcpLaunchStageTests.cs
-using Capacitor.Cli.Core;
-using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Daemon;
 using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Services;

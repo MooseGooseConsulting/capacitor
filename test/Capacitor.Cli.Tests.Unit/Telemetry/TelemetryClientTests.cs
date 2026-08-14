@@ -1,9 +1,6 @@
 using System.Net;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core.Telemetry;
-using TUnit.Assertions;
-using TUnit.Assertions.Extensions;
-using TUnit.Core;
 
 namespace Capacitor.Cli.Tests.Unit.Telemetry;
 

@@ -1,5 +1,4 @@
 using System.Text.Json;
-using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Acp;
 using Capacitor.Cli.Daemon;
 using Capacitor.Cli.Daemon.Acp;

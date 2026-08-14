@@ -1,7 +1,5 @@
-using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using Avalonia.Threading;
-using Capacitor.App;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.Cli.Core.LocalIpc;

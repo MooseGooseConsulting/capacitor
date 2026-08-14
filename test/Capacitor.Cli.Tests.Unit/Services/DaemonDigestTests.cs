@@ -1,5 +1,3 @@
-using Capacitor.Cli;
-
 namespace Capacitor.Cli.Tests.Unit.Services;
 
 /// <summary>Covers the runtime accessor only (<see cref="DaemonDigest"/>) — the build-time

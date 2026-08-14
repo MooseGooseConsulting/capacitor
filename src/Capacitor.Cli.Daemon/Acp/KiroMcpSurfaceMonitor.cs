@@ -1,4 +1,3 @@
-using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Acp;
 
 namespace Capacitor.Cli.Daemon.Acp;

@@ -1,6 +1,5 @@
 // test/Capacitor.Cli.Tests.Unit/Services/AntigravityReviewerLiveCertTests.cs
 using System.Diagnostics;
-using Capacitor.Cli.Core;
 using Capacitor.Cli.Daemon;
 using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Services;

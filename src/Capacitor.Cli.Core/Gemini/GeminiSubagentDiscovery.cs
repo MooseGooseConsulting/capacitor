@@ -1,7 +1,5 @@
-using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using Capacitor.Cli.Core; // JsonElement Str/Obj/Arr extensions
 
 namespace Capacitor.Cli.Core.Gemini;
 

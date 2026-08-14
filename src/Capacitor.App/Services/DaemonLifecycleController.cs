@@ -1,4 +1,3 @@
-using System.Reactive.Linq;
 using Capacitor.Cli.Core.LocalIpc;
 
 namespace Capacitor.App.Services;

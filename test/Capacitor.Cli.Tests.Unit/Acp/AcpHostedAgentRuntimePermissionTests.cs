@@ -1,5 +1,4 @@
 // test/Capacitor.Cli.Tests.Unit/Acp/AcpHostedAgentRuntimePermissionTests.cs
-using System.Text.Json;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Services;

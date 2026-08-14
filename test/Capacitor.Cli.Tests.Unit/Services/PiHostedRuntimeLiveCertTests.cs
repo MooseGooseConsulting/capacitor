@@ -1,13 +1,10 @@
 using System.Diagnostics;
-using System.Text;
 using System.Threading.Channels;
 using Capacitor.Cli.Core;
-using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Daemon;
 using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Capacitor.Cli.Tests.Unit.Services;
 

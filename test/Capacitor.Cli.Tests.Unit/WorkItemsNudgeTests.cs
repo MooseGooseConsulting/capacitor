@@ -1,4 +1,3 @@
-using Capacitor.Cli;
 using Capacitor.Cli.Core.Cursor;
 using Capacitor.Cli.Core.OpenCode;
 using Capacitor.Cli.Core.Pi;

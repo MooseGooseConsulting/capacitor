@@ -1,4 +1,3 @@
-using System.Reactive.Linq;
 using ReactiveUnit = System.Reactive.Unit;
 using System.Reactive.Threading.Tasks;
 using Avalonia.Threading;

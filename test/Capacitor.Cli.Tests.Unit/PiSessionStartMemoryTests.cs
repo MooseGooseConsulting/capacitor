@@ -1,4 +1,3 @@
-using Capacitor.Cli;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.SessionStartMemory;
 

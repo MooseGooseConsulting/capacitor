@@ -1,6 +1,5 @@
 using System.Text;
 using Capacitor.Cli.Commands;
-using System.Linq;
 
 namespace Capacitor.Cli.Tests.Unit;
 
