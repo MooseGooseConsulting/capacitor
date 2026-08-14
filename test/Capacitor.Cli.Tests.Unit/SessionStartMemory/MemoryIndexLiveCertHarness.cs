@@ -1,9 +1,6 @@
 using System.Diagnostics;
-using System.Net.Http.Json;
 using System.Runtime.InteropServices;
 using System.Text.Json.Nodes;
-using Capacitor.Cli.Commands;
-using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
 
 namespace Capacitor.Cli.Tests.Unit.SessionStartMemory;

@@ -2,8 +2,6 @@ using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
-using Capacitor.Cli.Daemon;
-using Capacitor.Cli.Daemon.Pty;
 using Microsoft.Win32.SafeHandles;
 using static Capacitor.Cli.Daemon.Pty.Windows.ConPtyInterop;
 

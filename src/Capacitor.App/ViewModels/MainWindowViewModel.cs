@@ -1,11 +1,9 @@
 using System.Collections.ObjectModel;
 using System.Reactive;
-using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
 using Avalonia.Media;
 using Capacitor.App.Services;
-using Capacitor.Cli.Core.LocalIpc;
 using DynamicData;
 using DynamicData.Binding;
 using ReactiveUI;

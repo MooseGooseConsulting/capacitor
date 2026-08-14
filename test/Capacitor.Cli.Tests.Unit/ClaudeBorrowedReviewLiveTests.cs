@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Daemon;
 using Capacitor.Cli.Daemon.Services;

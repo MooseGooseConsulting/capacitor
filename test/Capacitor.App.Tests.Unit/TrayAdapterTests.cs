@@ -3,7 +3,6 @@ using Avalonia.Controls;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.App.Views;
-using Capacitor.Cli.Core.LocalIpc;
 
 namespace Capacitor.App.Tests.Unit;
 

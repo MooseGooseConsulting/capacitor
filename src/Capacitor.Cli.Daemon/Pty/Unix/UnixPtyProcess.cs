@@ -1,7 +1,5 @@
 using System.Diagnostics;
 using System.Text;
-using Capacitor.Cli.Daemon;
-using Capacitor.Cli.Daemon.Pty;
 
 namespace Capacitor.Cli.Daemon.Pty.Unix;
 

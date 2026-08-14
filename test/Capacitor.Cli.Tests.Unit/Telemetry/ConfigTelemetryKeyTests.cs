@@ -1,9 +1,6 @@
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core.Config;   // Profile, for the not-a-profile-key guard
 using Capacitor.Cli.Core.Telemetry;
-using TUnit.Assertions;
-using TUnit.Assertions.Extensions;
-using TUnit.Core;
 
 namespace Capacitor.Cli.Tests.Unit.Telemetry;
 

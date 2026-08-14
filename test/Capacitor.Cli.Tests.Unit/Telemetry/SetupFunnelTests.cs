@@ -1,10 +1,7 @@
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Telemetry;
 using NSubstitute;
-using TUnit.Assertions;
 using TUnit.Assertions.Enums;
-using TUnit.Assertions.Extensions;
-using TUnit.Core;
 using DiscoveryResult = Capacitor.Cli.Core.Auth.DiscoveryResult;
 
 namespace Capacitor.Cli.Tests.Unit.Telemetry;

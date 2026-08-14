@@ -4,7 +4,6 @@ using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
-using Capacitor.Cli.Core.Cursor;
 using Capacitor.Cli.SessionStartMemory;
 
 namespace Capacitor.Cli.Tests.Unit.Cursor;

@@ -1,6 +1,5 @@
 using Capacitor.Cli.Daemon;
 using Capacitor.Cli.Daemon.Services;
-using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Capacitor.Cli.Tests.Unit.Daemon;
 

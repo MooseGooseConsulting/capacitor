@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
-using Capacitor.Cli.Core.Config;
 
 namespace Capacitor.Cli.Tests.Unit.Http;
 

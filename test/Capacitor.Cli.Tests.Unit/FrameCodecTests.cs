@@ -1,4 +1,3 @@
-using System.IO;
 using Capacitor.Cli.Core.LocalIpc;
 
 namespace Capacitor.Cli.Tests.Unit;

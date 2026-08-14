@@ -1,5 +1,4 @@
 // test/Capacitor.Cli.Tests.Unit/Acp/AcpHostedAgentRuntimeTests.cs
-using System.Threading.Channels;
 using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging.Abstractions;

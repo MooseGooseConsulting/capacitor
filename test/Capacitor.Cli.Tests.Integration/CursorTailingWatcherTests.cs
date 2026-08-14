@@ -1,4 +1,3 @@
-using System.Net;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using WireMock.RequestBuilders;
