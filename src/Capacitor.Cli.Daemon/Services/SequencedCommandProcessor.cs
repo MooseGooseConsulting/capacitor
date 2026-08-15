@@ -470,7 +470,7 @@ internal sealed class SequencedCommandProcessor : IAsyncDisposable {
     /// cached outcome. A DIFFERENT CommandId at an already-accepted Seq is a protocol-invariant violation →
     /// <c>duplicate_collision</c>. Called under <c>_lock</c>; the processed arm only CAPTURES the cached
     /// outcome, leaving the ack for <see cref="SubmitAsync"/> to build outside the lock.</summary>
-    Task HandleDuplicateLocked(SequencedItem item, CacheEntry existing,
+    static Task HandleDuplicateLocked(SequencedItem item, CacheEntry existing,
             out CommandOutcome? replay, out bool acceptedReplay, out CommandRejected? rejection) {
         replay = null;
         acceptedReplay = false;
@@ -605,11 +605,11 @@ internal sealed class SequencedCommandProcessor : IAsyncDisposable {
     /// <summary>Phase B2-b (sequenced-settlement design): a non-next Seq (a gap — Seq &gt; HighestAcceptedSeq+1,
     /// or a too-low already-retired Seq below the frontier) is NEVER accepted out of order. Emit wrong_next so
     /// the server's transport sequencer resyncs (nudge → observe → retransmit); accept path + watermark untouched.</summary>
-    Task HandleNonNextLocked(SequencedItem item, out CommandRejected? rejection) =>
+    static Task HandleNonNextLocked(SequencedItem item, out CommandRejected? rejection) =>
         RejectLocked(item, CommandRejectedReason.WrongNext, out rejection);
 
     /// <summary>Records WHICH rejection is owed; the caller sends it after releasing <c>_lock</c>.</summary>
-    Task RejectLocked(SequencedItem item, CommandRejectedReason reason, out CommandRejected? rejection) {
+    static Task RejectLocked(SequencedItem item, CommandRejectedReason reason, out CommandRejected? rejection) {
         rejection = new CommandRejected(item.Epoch, item.Seq, item.CommandId, reason, item.AgentId);
         return Task.CompletedTask;
     }

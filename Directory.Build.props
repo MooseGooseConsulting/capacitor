@@ -17,14 +17,7 @@
         <WarningsNotAsErrors>
             $(WarningsNotAsErrors);
             CA1001<!-- Type owns disposable fields but is not disposable -->;
-            CA1051<!-- Do not declare visible instance fields -->;
             CA1068<!-- CancellationToken parameters must come last -->;
-            CA1822<!-- Mark members as static -->;
-
-            CS8519<!-- The given expression never matches the provided pattern -->;
-            CS8524<!-- Switch expression is not exhaustive over an unnamed enum value -->;
-            CS8604<!-- Possible null reference argument -->;
-            CS8793<!-- The given expression always matches the provided pattern -->;
 
             NU1510<!-- PackageReference will not be pruned -->;
         </WarningsNotAsErrors>

@@ -446,7 +446,7 @@ public partial class AgentOrchestratorVendorTests {
     // daemon-owned worktree; every other launch shape reports nulls, which is what lets a consumer
     // render it without any launch-kind discriminator.
 
-    async Task<(CaptureServerConnection Server, SpyHostedAgentRuntimeFactory Codex)> LaunchForEchoAsync(
+    static async Task<(CaptureServerConnection Server, SpyHostedAgentRuntimeFactory Codex)> LaunchForEchoAsync(
             string repoPath,
             string agentId,
             CodexLaunchPosture? posture,

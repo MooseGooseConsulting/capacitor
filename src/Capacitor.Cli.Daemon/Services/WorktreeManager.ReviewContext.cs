@@ -99,7 +99,7 @@ public partial class WorktreeManager {
         return generation with { StoragePath = published };
     }
 
-    async Task<BorrowedReviewContextGeneration> CreateReviewContextGenerationAsync(
+    static async Task<BorrowedReviewContextGeneration> CreateReviewContextGenerationAsync(
             string source, string reviewContextRoot, string sourceHead,
             byte[] listing, bool caseSensitive, SnapshotExclusionPlan plan, CancellationToken ct) {
         CreateOwnerOnlyDirectory(reviewContextRoot);

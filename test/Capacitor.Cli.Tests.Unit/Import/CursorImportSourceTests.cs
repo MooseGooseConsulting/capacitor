@@ -1249,7 +1249,7 @@ public class CursorImportSourceTests {
 
     // Builds a parent (Task prompt) + child (first user_query == prompt) session pair in the
     // same workspace and returns their (parentId, childId, discovered, classified).
-    async Task<(string ParentId, string ChildId, IReadOnlyList<ImportCommand.SessionClassification> Classified, CursorImportSource Src)> SetupParentChildAsync(ProjectsDirFixture fx) {
+    static async Task<(string ParentId, string ChildId, IReadOnlyList<ImportCommand.SessionClassification> Classified, CursorImportSource Src)> SetupParentChildAsync(ProjectsDirFixture fx) {
         const string prompt = "EXPLORE the repo and report back";
         var childUserText = System.Text.Json.JsonSerializer.Serialize("<user_query>\n" + prompt + "\n</user_query>");
         var taskPrompt    = System.Text.Json.JsonSerializer.Serialize(prompt);

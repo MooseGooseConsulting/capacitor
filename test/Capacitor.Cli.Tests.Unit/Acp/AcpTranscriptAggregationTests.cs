@@ -78,7 +78,7 @@ public class AcpTranscriptAggregationTests {
             await Task.Delay(10);
     }
 
-    async Task<AcpEventEnvelope> ReadEnvelopeAsync(AcpHostedAgentRuntime runtime) =>
+    static async Task<AcpEventEnvelope> ReadEnvelopeAsync(AcpHostedAgentRuntime runtime) =>
         await runtime.Envelopes.ReadAsync().AsTask().WaitAsync(HangGuard);
 
     // ── Aggregation ──────────────────────────────────────────────────────────────────────────────

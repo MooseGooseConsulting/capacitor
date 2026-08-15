@@ -33,7 +33,7 @@ public class AcpTranscriptForwarderTests {
     static Channel<AcpEventEnvelope> NewChannel() =>
         Channel.CreateUnbounded<AcpEventEnvelope>();
 
-    AcpTranscriptForwarder NewForwarder(
+    static AcpTranscriptForwarder NewForwarder(
             Func<AcpEventEnvelope[], CancellationToken, Task<AcpBatchAck>> send,
             ChannelReader<AcpEventEnvelope>                                envelopes
         ) => new(send, InitialEnvelope, envelopes, NullLogger.Instance, FastRetryDelay, FastRetryDelay);

@@ -2299,7 +2299,7 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
         return candidate;
     }
 
-    async Task InitializeCandidateAsync(Incarnation candidate, CancellationToken ct) {
+    static async Task InitializeCandidateAsync(Incarnation candidate, CancellationToken ct) {
         // Must advertise the SAME capability set as StartAsync's initialize — a reconnect
         // candidate that silently dropped the elicitation advertisement would flip the agent
         // back to never asking, mid-session.
