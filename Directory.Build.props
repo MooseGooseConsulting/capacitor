@@ -11,10 +11,11 @@
         <!-- Only on for IDE0005, which the compiler reports nowhere else. -->
         <GenerateDocumentationFile>true</GenerateDocumentationFile>
 
-        <!-- The only exemption: the NuGet audit's advisory database updates independently of this
-             repo, so a clean tree can start failing overnight on code nobody touched. The fix for
-             one is a package bump. Currently Scriban.Signed 5.5.0. Every other warning is an error. -->
-        <WarningsNotAsErrors>$(WarningsNotAsErrors);NU1902;NU1903;NU1904</WarningsNotAsErrors>
+        <!-- The exemption is for low/moderate: the NuGet audit's advisory database updates independently
+             of this repo, so a clean tree can start failing overnight on code nobody touched.
+              High (NU1903) and critical (NU1904) are worth that interruption. -->
+        <WarningsNotAsErrors>$(WarningsNotAsErrors);NU1901;NU1902</WarningsNotAsErrors>
+
         <MinVerTagPrefix>v</MinVerTagPrefix>
     </PropertyGroup>
     <ItemGroup>

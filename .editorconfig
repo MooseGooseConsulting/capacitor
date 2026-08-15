@@ -349,10 +349,15 @@ dotnet_diagnostic.ca2245.severity = warning
 dotnet_diagnostic.ca2246.severity = warning
 dotnet_diagnostic.ca2249.severity = warning
 
-; Avalonia owns these lifetimes, so CA1001's fix is a Dispose nobody calls: 
+; Avalonia owns lifetimes, so CA1001's fix is a Dispose nobody calls:
 ; the app's real teardown is OnShutdownRequested.
 [{src/Capacitor.App,test/Capacitor.App.Tests.Unit}/**.cs]
-dotnet_diagnostic.ca1001.severity = suggestion
+dotnet_diagnostic.ca1001.severity = suggestion ; Types that own disposable fields should be disposable
+
+[test/**.cs]
+dotnet_diagnostic.ca1707.severity = none       ; Identifiers should not contain underscores
+dotnet_diagnostic.ca1816.severity = none       ; Dispose methods should call SuppressFinalize
+dotnet_diagnostic.ca1861.severity = none       ; Avoid constant arrays as arguments
 
 ; =============================================================================
 ; Native PTY shim
