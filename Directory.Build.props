@@ -11,17 +11,9 @@
         <!-- Only on for IDE0005, which the compiler reports nowhere else. -->
         <GenerateDocumentationFile>true</GenerateDocumentationFile>
 
-        <!-- Temporary triage list: every code that was already warning when TreatWarningsAsErrors
-             went on. Anything NEW is an error from now on; these stay warnings until fixed, and each
-             is deleted from here as its last site goes. Add nothing to this list. -->
-        <WarningsNotAsErrors>
-            $(WarningsNotAsErrors);
-            CA1001<!-- Type owns disposable fields but is not disposable -->;
-        </WarningsNotAsErrors>
-        <!-- NOT part of the triage list above: the NuGet audit warns from an advisory database that
-             updates independently of this repo, so a clean tree can start failing overnight on code
-             nobody touched. These stay warnings permanently; the fix for one is a package bump, not
-             a deletion from here. Currently: Scriban.Signed 5.5.0 (NU1904, critical). -->
+        <!-- The only exemption: the NuGet audit's advisory database updates independently of this
+             repo, so a clean tree can start failing overnight on code nobody touched. The fix for
+             one is a package bump. Currently Scriban.Signed 5.5.0. Every other warning is an error. -->
         <WarningsNotAsErrors>$(WarningsNotAsErrors);NU1902;NU1903;NU1904</WarningsNotAsErrors>
         <MinVerTagPrefix>v</MinVerTagPrefix>
     </PropertyGroup>

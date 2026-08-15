@@ -98,12 +98,13 @@ public partial class AgentOrchestratorVendorTests {
     /// <see cref="CancellationTokenSource.CreateLinkedTokenSource(CancellationToken)"/>, which is a LIVE link
     /// (a registered callback, not a snapshot), so cancelling after a launch was submitted still cancels the
     /// token threaded into the consent gate.</summary>
-    sealed class CancellableHostLifetime : IHostApplicationLifetime {
+    sealed class CancellableHostLifetime : IHostApplicationLifetime, IDisposable {
         public readonly CancellationTokenSource Cts = new();
         public CancellationToken ApplicationStarted  => CancellationToken.None;
         public CancellationToken ApplicationStopping => Cts.Token;
         public CancellationToken ApplicationStopped  => CancellationToken.None;
         public void StopApplication() => Cts.Cancel();
+        public void Dispose() => Cts.Dispose();
     }
 
     /// <summary>A pty double backed by a real, test-owned child process whose TerminateAsync actually kills
@@ -302,8 +303,9 @@ public partial class AgentOrchestratorVendorTests {
         var gate = new LaunchConsentGate(store, new LaunchConsentDecisionLog(dir, NullLogger.Instance),
             new CancelingPrompter(), new FakeTimeProvider(), NullLogger<LaunchConsentGate>.Instance);
 
-        var lifetime = new CancellableHostLifetime();
-        var server   = new SeqCaptureServerConnection();
+        // Declared before orch, so orch — which holds a live linked registration — disposes first.
+        using var lifetime = new CancellableHostLifetime();
+        var server         = new SeqCaptureServerConnection();
         await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher>(), consentGate: gate, lifetime: lifetime);
         var epoch = orch.DaemonEpochForTest;

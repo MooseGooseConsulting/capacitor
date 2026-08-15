@@ -349,6 +349,11 @@ dotnet_diagnostic.ca2245.severity = warning
 dotnet_diagnostic.ca2246.severity = warning
 dotnet_diagnostic.ca2249.severity = warning
 
+; Avalonia owns these lifetimes, so CA1001's fix is a Dispose nobody calls: 
+; the app's real teardown is OnShutdownRequested.
+[{src/Capacitor.App,test/Capacitor.App.Tests.Unit}/**.cs]
+dotnet_diagnostic.ca1001.severity = suggestion
+
 ; =============================================================================
 ; Native PTY shim
 ; =============================================================================

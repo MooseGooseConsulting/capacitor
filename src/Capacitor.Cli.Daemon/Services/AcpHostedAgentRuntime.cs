@@ -81,12 +81,16 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     /// the router races against the bridge, so a blocked cancellation callback can never strand the
     /// response or the entry's removal; <see cref="Cts"/> is signalled last, as the best-effort
     /// tail that runs foreign callbacks.</summary>
+    // CA1001: disposing Cts on removal severs the sweep's tail (see RouteServerRequestAsync's
+    // finally); disposing in the sweep races that method's read of Cts.Token.
+#pragma warning disable CA1001
     sealed class PendingInteraction(long incarnationId) {
         public long IncarnationId { get; } = incarnationId;
         public bool Cancelled; // mutated under the reconnect lock only
         public readonly CancellationTokenSource    Cts             = new();
         public readonly TaskCompletionSource       CancelledSignal = new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
+#pragma warning restore CA1001
 
     readonly object _reconnectLock = new();
     readonly AcpReconnectSupport? _reconnect;
