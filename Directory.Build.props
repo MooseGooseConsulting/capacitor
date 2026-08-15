@@ -17,9 +17,6 @@
         <WarningsNotAsErrors>
             $(WarningsNotAsErrors);
             CA1001<!-- Type owns disposable fields but is not disposable -->;
-            CA1068<!-- CancellationToken parameters must come last -->;
-
-            NU1510<!-- PackageReference will not be pruned -->;
         </WarningsNotAsErrors>
         <!-- NOT part of the triage list above: the NuGet audit warns from an advisory database that
              updates independently of this repo, so a clean tree can start failing overnight on code

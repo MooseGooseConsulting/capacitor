@@ -327,6 +327,7 @@ dotnet_diagnostic.ca1873.severity = suggestion ; Expensive logging arguments
 
 dotnet_diagnostic.ca1018.severity = warning
 dotnet_diagnostic.ca1047.severity = warning
+dotnet_diagnostic.ca1068.severity = suggestion ; CancellationToken parameters must come last
 dotnet_diagnostic.ca1507.severity = warning
 dotnet_diagnostic.ca1510.severity = warning
 dotnet_diagnostic.ca1511.severity = warning
