@@ -452,7 +452,7 @@ public class LoginShellProbeTests {
         await probe.KcapPathAsync(CancellationToken.None);
         await probe.KcapPathAsync(CancellationToken.None);
 
-        await Assert.That(runner.Calls).HasCount().EqualTo(1);
+        await Assert.That(runner.Calls).Count().IsEqualTo(1);
     }
 
     [Test]
@@ -467,16 +467,16 @@ public class LoginShellProbeTests {
 
         var cached = await probe.KcapPathAsync(CancellationToken.None);
         await Assert.That(cached).IsNull();
-        await Assert.That(runner.Calls).HasCount().EqualTo(1);
+        await Assert.That(runner.Calls).Count().IsEqualTo(1);
 
         var fresh = await probe.KcapPathAsync(CancellationToken.None, forceRefresh: true);
         await Assert.That(fresh).IsEqualTo(target);
-        await Assert.That(runner.Calls).HasCount().EqualTo(2); // a real second runner invocation
+        await Assert.That(runner.Calls).Count().IsEqualTo(2); // a real second runner invocation
 
         // Repopulated: a later non-forced call reads the fresh value without re-running.
         var second = await probe.KcapPathAsync(CancellationToken.None);
         await Assert.That(second).IsEqualTo(target);
-        await Assert.That(runner.Calls).HasCount().EqualTo(2);
+        await Assert.That(runner.Calls).Count().IsEqualTo(2);
     }
 
     [Test]
@@ -491,12 +491,12 @@ public class LoginShellProbeTests {
 
         var first = await probe.KcapPathAsync(CancellationToken.None);
         await Assert.That(first).IsNull();
-        await Assert.That(runner.Calls).HasCount().EqualTo(2);
+        await Assert.That(runner.Calls).Count().IsEqualTo(2);
 
         runner.Enqueue(new ProcessResult(0, Wrap(target), "", false));
         var second = await probe.KcapPathAsync(CancellationToken.None);
 
         await Assert.That(second).IsEqualTo(target);
-        await Assert.That(runner.Calls).HasCount().EqualTo(3);
+        await Assert.That(runner.Calls).Count().IsEqualTo(3);
     }
 }
