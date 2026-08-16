@@ -1,5 +1,5 @@
 using Capacitor.Cli.Daemon;
-using Capacitor.Cli.Daemon.Acp;
+using Capacitor.Cli.Daemon.Harness.Antigravity;
 
 namespace Capacitor.Cli.Tests.Unit.Acp;
 

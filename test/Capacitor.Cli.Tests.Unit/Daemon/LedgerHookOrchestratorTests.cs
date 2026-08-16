@@ -1,8 +1,7 @@
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Daemon.Services;
-using Capacitor.Cli.Tests.Unit.Daemon;
 
-namespace Capacitor.Cli.Tests.Unit;
+namespace Capacitor.Cli.Tests.Unit.Daemon;
 
 // Phase B2-b (sequenced-settlement design §4.2.4): orchestrator-level proof that the quarantine-drain
 // hook emits positive per-id death evidence into the real ResolvedCandidatesLedger owned by the
@@ -11,7 +10,7 @@ namespace Capacitor.Cli.Tests.Unit;
 public partial class AgentOrchestratorVendorTests {
     [Test]
     public async Task Quarantine_drain_via_orchestrator_emits_resolved_evidence_before_deleting_the_record() {
-        await using var orch = BuildOrchestrator(
+        await using var orch = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(
             new CaptureServerConnection(), new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher>());
 

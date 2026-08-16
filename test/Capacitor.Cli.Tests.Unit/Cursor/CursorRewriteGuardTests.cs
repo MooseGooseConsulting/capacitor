@@ -1,6 +1,6 @@
 using System.Text;
-using Capacitor.Cli.Commands;
-using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Harness.Cursor;
+using Capacitor.Cli.Harness.Cursor;
 
 namespace Capacitor.Cli.Tests.Unit.Cursor;
 

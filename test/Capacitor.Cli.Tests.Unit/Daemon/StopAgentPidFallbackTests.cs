@@ -1,8 +1,7 @@
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Daemon.Services;
-using Capacitor.Cli.Tests.Unit.Daemon;
 
-namespace Capacitor.Cli.Tests.Unit;
+namespace Capacitor.Cli.Tests.Unit.Daemon;
 
 /// <summary>
 /// Phase B (D4 §6.4(3)): <c>HandleStopAgent</c> for an id not in the registry falls back to the
@@ -15,7 +14,7 @@ namespace Capacitor.Cli.Tests.Unit;
 public partial class AgentOrchestratorVendorTests {
     [Test]
     public async Task HandleStopAgent_unknown_id_reaps_by_pid_record_where_env_is_readable() {
-        await using var orch = BuildOrchestrator(
+        await using var orch = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(
             new CaptureServerConnection(), new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         using var dummy = DummyProcess.StartSleep(30, new Dictionary<string, string> { ["KCAP_AGENT_ID"] = "ghost" });
@@ -48,7 +47,7 @@ public partial class AgentOrchestratorVendorTests {
 
     [Test]
     public async Task HandleStopAgent_unknown_id_with_no_record_is_a_noop() {
-        await using var orch = BuildOrchestrator(
+        await using var orch = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(
             new CaptureServerConnection(), new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         // No record, no in-memory agent → must not throw.

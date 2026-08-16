@@ -1,5 +1,5 @@
 using System.Text.Json;
-using Capacitor.Cli.Commands;
+using Capacitor.Cli.Commands.Harness;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;

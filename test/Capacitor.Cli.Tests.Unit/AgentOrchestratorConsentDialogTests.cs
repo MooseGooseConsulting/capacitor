@@ -14,7 +14,7 @@ namespace Capacitor.Cli.Tests.Unit;
 /// retained tail-of-PTY capture on disk. Also proves an interactive (Default) agent is NOT
 /// failed-fast on the same output — its human viewer can dismiss the prompt.
 ///
-/// Partial of <see cref="AgentOrchestratorVendorTests"/> to reuse its BuildOrchestrator /
+/// Partial of <see cref="Daemon.AgentOrchestratorVendorTests"/> to reuse its BuildOrchestrator /
 /// CaptureServerConnection / SpyPtyProcessFactory harness.
 /// </summary>
 public partial class AgentOrchestratorVendorTests {

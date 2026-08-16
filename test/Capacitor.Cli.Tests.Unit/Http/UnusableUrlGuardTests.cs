@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Capacitor.Cli.Commands;
+using Capacitor.Cli.Commands.Harness;
 using Capacitor.Cli.Core;
 using Capacitor.Tests.Helpers;
 

@@ -1,4 +1,4 @@
-using Capacitor.Cli.Commands;
+using Capacitor.Cli.Harness.OpenCode;
 
 namespace Capacitor.Cli.Tests.Unit;
 

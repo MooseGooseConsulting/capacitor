@@ -1,4 +1,7 @@
 // test/Capacitor.Cli.Tests.Unit/Daemon/ReviewerModelResolutionTests.cs
+
+using Capacitor.Cli.Daemon.Harness.Claude;
+using Capacitor.Cli.Daemon.Harness.Codex;
 using Capacitor.Cli.Daemon.Services;
 
 namespace Capacitor.Cli.Tests.Unit.Daemon;

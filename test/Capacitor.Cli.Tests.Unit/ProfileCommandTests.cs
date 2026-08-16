@@ -1,8 +1,6 @@
 using System.Text.Json;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core.Config;
-using ProfileConfigJsonContext = Capacitor.Cli.Core.Config.ProfileConfigJsonContext;
-using ProfileConfigJsonContextIndented = Capacitor.Cli.Core.Config.ProfileConfigJsonContextIndented;
 
 namespace Capacitor.Cli.Tests.Unit;
 

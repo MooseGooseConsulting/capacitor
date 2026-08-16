@@ -1,4 +1,4 @@
-using Capacitor.Cli.Core.Gemini;
+using Capacitor.Cli.Core.Harness.Gemini;
 
 namespace Capacitor.Cli.Tests.Unit;
 

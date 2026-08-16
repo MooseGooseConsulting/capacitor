@@ -1,6 +1,6 @@
 // test/Capacitor.Cli.Tests.Unit/Cursor/CursorHooksParserTests.cs
 using System.Text.Json.Nodes;
-using Capacitor.Cli.Core.Cursor;
+using Capacitor.Cli.Core.Harness.Cursor;
 
 namespace Capacitor.Cli.Tests.Unit.Cursor;
 

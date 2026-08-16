@@ -1,4 +1,4 @@
-using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Core.Mcp;
 using Capacitor.Cli.Core.Instructions;
 using static Capacitor.Cli.Commands.CodingAgentsStep;

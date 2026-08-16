@@ -1,7 +1,7 @@
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Daemon.Services;
 
-namespace Capacitor.Cli.Tests.Unit;
+namespace Capacitor.Cli.Tests.Unit.Daemon;
 
 /// <summary>
 /// Phase B (D2): <see cref="AgentOrchestrator.BuildStatusReport"/> reports the daemon's
@@ -11,7 +11,7 @@ namespace Capacitor.Cli.Tests.Unit;
 public partial class AgentOrchestratorVendorTests {
     [Test]
     public async Task BuildStatusReport_reports_active_count_and_live_agents() {
-        await using var orch = BuildOrchestrator(
+        await using var orch = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(
             new CaptureServerConnection(), new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         orch.SeedAgentForTest("a1", LaunchKind.ReviewFlow, status: "Running", flowRunId: "f1", flowRole: "reviewer");

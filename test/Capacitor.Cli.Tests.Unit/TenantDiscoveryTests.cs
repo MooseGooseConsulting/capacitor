@@ -1,8 +1,6 @@
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using NSubstitute;
-using Profile = Capacitor.Cli.Core.Config.Profile;
-using DiscoveryResult = Capacitor.Cli.Core.Auth.DiscoveryResult;
 
 namespace Capacitor.Cli.Tests.Unit;
 
@@ -11,7 +9,7 @@ public class TenantDiscoveryTests {
     public async Task RunAsync_auto_picks_single_tenant() {
         var proxy = Substitute.For<IAuthProxyClient>();
         proxy.DiscoverTenantsAsync(Arg.Any<string>(), Arg.Any<string>())
-             .Returns(Task.FromResult(new DiscoveryResult(
+             .Returns(Task.FromResult(new Cli.Core.Auth.DiscoveryResult(
                  [new DiscoveredTenant { OrgId = 1, OrgLogin = "solo", Origin = "https://solo.example" }],
                  DiscoveryError.None)));
 
@@ -33,7 +31,7 @@ public class TenantDiscoveryTests {
         ];
         var proxy = Substitute.For<IAuthProxyClient>();
         proxy.DiscoverTenantsAsync(Arg.Any<string>(), Arg.Any<string>())
-             .Returns(Task.FromResult(new DiscoveryResult(list, DiscoveryError.None)));
+             .Returns(Task.FromResult(new Cli.Core.Auth.DiscoveryResult(list, DiscoveryError.None)));
 
         var picker = Substitute.For<ITenantPicker>();
         picker.Pick(list).Returns(list[1]);
@@ -48,7 +46,7 @@ public class TenantDiscoveryTests {
     public async Task RunAsync_returns_empty_tenant_error_message() {
         var proxy = Substitute.For<IAuthProxyClient>();
         proxy.DiscoverTenantsAsync(Arg.Any<string>(), Arg.Any<string>())
-             .Returns(Task.FromResult(new DiscoveryResult([], DiscoveryError.None)));
+             .Returns(Task.FromResult(new Cli.Core.Auth.DiscoveryResult([], DiscoveryError.None)));
 
         var discovery = new TenantDiscovery(proxy, Substitute.For<ITenantPicker>());
 
@@ -65,7 +63,7 @@ public class TenantDiscoveryTests {
     public async Task RunAsync_returns_proxy_unreachable_error() {
         var proxy = Substitute.For<IAuthProxyClient>();
         proxy.DiscoverTenantsAsync(Arg.Any<string>(), Arg.Any<string>())
-             .Returns(Task.FromResult(new DiscoveryResult([], DiscoveryError.ProxyUnreachable)));
+             .Returns(Task.FromResult(new Cli.Core.Auth.DiscoveryResult([], DiscoveryError.ProxyUnreachable)));
 
         var discovery = new TenantDiscovery(proxy, Substitute.For<ITenantPicker>());
         var outcome = await discovery.RunAsync("https://proxy", "gh");
@@ -81,7 +79,7 @@ public class TenantDiscoveryTests {
     public async Task RunAsync_returns_token_rejected_error() {
         var proxy = Substitute.For<IAuthProxyClient>();
         proxy.DiscoverTenantsAsync(Arg.Any<string>(), Arg.Any<string>())
-             .Returns(Task.FromResult(new DiscoveryResult([], DiscoveryError.TokenRejected)));
+             .Returns(Task.FromResult(new Cli.Core.Auth.DiscoveryResult([], DiscoveryError.TokenRejected)));
 
         var discovery = new TenantDiscovery(proxy, Substitute.For<ITenantPicker>());
         var outcome = await discovery.RunAsync("https://proxy", "gh");
@@ -94,7 +92,7 @@ public class TenantDiscoveryTests {
     public async Task RunAsync_returns_upstream_error_message() {
         var proxy = Substitute.For<IAuthProxyClient>();
         proxy.DiscoverTenantsAsync(Arg.Any<string>(), Arg.Any<string>())
-             .Returns(Task.FromResult(new DiscoveryResult([], DiscoveryError.UpstreamError)));
+             .Returns(Task.FromResult(new Cli.Core.Auth.DiscoveryResult([], DiscoveryError.UpstreamError)));
 
         var discovery = new TenantDiscovery(proxy, Substitute.For<ITenantPicker>());
         var outcome = await discovery.RunAsync("https://proxy", "gh");
@@ -111,7 +109,7 @@ public class TenantDiscoveryTests {
         ];
         var proxy = Substitute.For<IAuthProxyClient>();
         proxy.DiscoverTenantsAsync(Arg.Any<string>(), Arg.Any<string>())
-             .Returns(Task.FromResult(new DiscoveryResult(list, DiscoveryError.None)));
+             .Returns(Task.FromResult(new Cli.Core.Auth.DiscoveryResult(list, DiscoveryError.None)));
 
         var picker = Substitute.For<ITenantPicker>();
         picker.Pick(list).Returns((DiscoveredTenant?)null);

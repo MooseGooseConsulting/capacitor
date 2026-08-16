@@ -1,5 +1,5 @@
 using System.Runtime.CompilerServices;
-using Capacitor.Cli.Commands;
+using Capacitor.Cli.Commands.Harness;
 
 namespace Capacitor.Cli.Tests.Unit;
 
@@ -133,7 +133,7 @@ public class CodexSessionStartMemoryTests {
     [Test]
     public async Task the_production_memory_client_factory_routes_through_the_authenticated_helper() {
         var source = await File.ReadAllTextAsync(
-            Path.Combine(RepoRoot(), "src", "Capacitor.Cli", "Commands", "CodexHookCommand.cs"));
+            Path.Combine(RepoRoot(), "src", "Capacitor.Cli", "Commands", "Harness", "CodexHookCommand.cs"));
 
         // The memory path must be wired to the named production factory, not an inline client.
         await Assert.That(source).Contains("memoryClientFactory ?? DefaultMemoryClientFactory(baseUrl)");

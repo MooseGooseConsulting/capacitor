@@ -17,7 +17,7 @@ namespace Capacitor.Cli.Tests.Unit;
 /// failure-contained, and forces terminal Failed regardless of the child's exit code. Post-window
 /// reaps are deliberately excluded: today's teardown for that case must stay byte-identical.
 ///
-/// Partial of <see cref="AgentOrchestratorVendorTests"/> to reuse its BuildOrchestrator /
+/// Partial of <see cref="Daemon.AgentOrchestratorVendorTests"/> to reuse its BuildOrchestrator /
 /// CaptureServerConnection / CreateGitRepo / SpyHostedAgentRuntimeFactory harness.
 /// </summary>
 public partial class AgentOrchestratorVendorTests {

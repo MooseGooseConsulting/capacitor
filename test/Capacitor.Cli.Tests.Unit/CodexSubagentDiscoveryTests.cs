@@ -1,5 +1,6 @@
 using Capacitor.Cli.Commands;
-using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Harness.Codex;
+using Capacitor.Cli.Harness.Codex;
 
 namespace Capacitor.Cli.Tests.Unit;
 

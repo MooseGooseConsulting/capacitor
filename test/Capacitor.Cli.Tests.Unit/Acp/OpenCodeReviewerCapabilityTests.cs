@@ -1,4 +1,4 @@
-using Capacitor.Cli.Daemon.Acp;
+using Capacitor.Cli.Daemon.Harness.OpenCode;
 
 namespace Capacitor.Cli.Tests.Unit.Acp;
 

@@ -2,6 +2,8 @@ using System.Diagnostics;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Daemon;
+using Capacitor.Cli.Daemon.Harness.Claude;
+using Capacitor.Cli.Daemon.Harness.Codex;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -16,7 +18,7 @@ namespace Capacitor.Cli.Tests.Unit;
 /// removed / <c>git worktree remove</c>d / branch-deleted on ANY path (normal stop, failed
 /// launch, anywhere). These tests lock that in behaviourally.
 ///
-/// Reuses the <c>partial</c> harness in <see cref="AgentOrchestratorVendorTests"/>
+/// Reuses the <c>partial</c> harness in <see cref="Daemon.AgentOrchestratorVendorTests"/>
 /// (<c>BuildOrchestrator</c>, <c>CreateGitRepo</c>, <c>CaptureServerConnection</c>,
 /// <c>SpyPtyProcessFactory</c>, <c>FixedPtyProcessFactory</c>, <c>OneChunkThenBlockPtyProcess</c>,
 /// <c>SpyHostedAgentLauncher</c>).

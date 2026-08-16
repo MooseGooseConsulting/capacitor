@@ -16,7 +16,7 @@ namespace Capacitor.Cli.Tests.Unit;
 /// Liveness-supervision spec §0/§1: <see cref="AgentActivityClock"/>'s own semantics (this class),
 /// plus proof that each of the four daemon-local sources — PTY output chunk, ACP transcript envelope,
 /// ACP turn transition, and <see cref="LocalPermissionBridge"/> reviewer tool-call hit — independently
-/// advances a launch's clock (the partial <see cref="AgentOrchestratorVendorTests"/> extension below,
+/// advances a launch's clock (the partial <see cref="Daemon.AgentOrchestratorVendorTests"/> extension below,
 /// and <see cref="ActivityClockTurnAndEnvelopeWiringTests"/>, and the standalone
 /// <see cref="LocalPermissionBridgeActivityWiringTests"/>).
 ///
@@ -120,7 +120,7 @@ public class AgentActivityClockTests {
 }
 
 /// <summary>
-/// PTY-source wiring (liveness-supervision spec §1): partial of <see cref="AgentOrchestratorVendorTests"/>
+/// PTY-source wiring (liveness-supervision spec §1): partial of <see cref="Daemon.AgentOrchestratorVendorTests"/>
 /// to reuse its <c>BuildOrchestrator</c>/<c>SeedAgentForTest</c>/<c>ReadAgentOutputForTest</c> harness —
 /// same pattern as <c>AgentOrchestratorConsentDialogTests</c>/<c>AgentOrchestratorBracketedPasteTests</c>.
 /// </summary>

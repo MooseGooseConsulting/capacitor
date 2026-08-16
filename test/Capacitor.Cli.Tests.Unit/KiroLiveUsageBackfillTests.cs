@@ -1,6 +1,7 @@
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using System.Text.Json.Nodes;
+using Capacitor.Cli.Core.Harness.Kiro;
 
 namespace Capacitor.Cli.Tests.Unit;
 
@@ -8,7 +9,7 @@ namespace Capacitor.Cli.Tests.Unit;
 /// Covers the live-watch Kiro usage-backfill synthetic line:
 /// <see cref="WatchCommand.BuildKiroUsageBackfillLine"/> builds the JSONL the server
 /// recognizes, and <see cref="WatchCommand.AppendKiroUsageBackfillLines"/> reads the
-/// sidecar <c>{id}.json</c> via <see cref="Capacitor.Cli.Core.Kiro.KiroUsage.AnchorMap"/>
+/// sidecar <c>{id}.json</c> via <see cref="KiroUsage.AnchorMap"/>
 /// and emits one line per NOT-yet-emitted anchor, tracked on
 /// <see cref="WatchState.KiroUsageEmittedAnchors"/> so a live drain never double-emits.
 /// </summary>

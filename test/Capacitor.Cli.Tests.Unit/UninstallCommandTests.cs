@@ -1,9 +1,12 @@
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
-using Capacitor.Cli.Core.Gemini;
-using Capacitor.Cli.Core.Kiro;
 using Capacitor.Cli.Core.Mcp;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Harness.Claude;
+using Capacitor.Cli.Core.Harness.Codex;
+using Capacitor.Cli.Core.Harness.Cursor;
+using Capacitor.Cli.Core.Harness.Gemini;
+using Capacitor.Cli.Core.Harness.Kiro;
 using Capacitor.Tests.Helpers;
 
 namespace Capacitor.Cli.Tests.Unit;

@@ -1,5 +1,5 @@
 using System.Text.Json;
-using Capacitor.Cli.Commands;
+using Capacitor.Cli.Harness.Cursor;
 
 namespace Capacitor.Cli.Tests.Unit.Import;
 

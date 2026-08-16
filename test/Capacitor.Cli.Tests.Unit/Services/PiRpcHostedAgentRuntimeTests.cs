@@ -1,6 +1,7 @@
 // test/Capacitor.Cli.Tests.Unit/Services/PiRpcHostedAgentRuntimeTests.cs
 using System.Threading.Channels;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Daemon.Harness.Pi;
 using Capacitor.Cli.Daemon.Services;
 using static Capacitor.Cli.Tests.Unit.Services.PiRpcRuntimeFakes;
 

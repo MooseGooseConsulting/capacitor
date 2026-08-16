@@ -1,6 +1,6 @@
 // test/Capacitor.Cli.Tests.Unit/Acp/AntigravityNdjsonTests.cs
 using Capacitor.Cli.Core;
-using Capacitor.Cli.Daemon.Acp;
+using Capacitor.Cli.Daemon.Harness.Antigravity;
 
 namespace Capacitor.Cli.Tests.Unit.Acp;
 

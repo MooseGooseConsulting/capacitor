@@ -1,13 +1,13 @@
 using System.Text.Json.Nodes;
-using Capacitor.Cli.Daemon.Services;
+using Capacitor.Cli.Daemon.Harness.Claude;
 
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
-/// Pins that <see cref="ClaudeLauncher.WriteMcpConfig"/> reads the source repo's
+/// Pins that <see cref="Cli.Daemon.Harness.Claude.ClaudeLauncher.WriteMcpConfig"/> reads the source repo's
 /// MCP servers from <c>~/.claude.json</c> under Claude Code's normalised
 /// <c>projects[]</c> key (forward slashes on Windows — see
-/// <see cref="ClaudeLauncher.NormalizeClaudeProjectKey"/>), with a raw-path
+/// <see cref="Cli.Daemon.Harness.Claude.ClaudeLauncher.NormalizeClaudeProjectKey"/>), with a raw-path
 /// fallback for entries written by older builds or by hand. Before the fix the
 /// lookup used the raw Windows backslash path, missed the normalised entry, and
 /// silently skipped copying the user's MCP servers into the hosted worktree.

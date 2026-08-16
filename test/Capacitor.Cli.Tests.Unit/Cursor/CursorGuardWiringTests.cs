@@ -1,5 +1,7 @@
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Harness.Cursor;
+using Capacitor.Cli.Harness.Cursor;
 using Microsoft.AspNetCore.SignalR.Client;
 
 namespace Capacitor.Cli.Tests.Unit.Cursor;

@@ -1,4 +1,4 @@
-using Capacitor.Cli.Core.Copilot;
+using Capacitor.Cli.Core.Harness.Copilot;
 
 namespace Capacitor.Cli.Tests.Unit;
 

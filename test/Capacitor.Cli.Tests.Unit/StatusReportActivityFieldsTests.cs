@@ -12,7 +12,7 @@ namespace Capacitor.Cli.Tests.Unit;
 /// <see cref="AgentOrchestrator.BuildLiveAgents"/>'s entries, and a genuine
 /// <c>AgentActivityClock.SetLaunchStage</c> transition fires an immediate out-of-cycle
 /// <c>DaemonStatusReport</c> alongside the unchanged 60s periodic loop. Reuses the
-/// <see cref="AgentOrchestratorVendorTests"/> harness (BuildOrchestrator/SeedAgentForTest/
+/// <see cref="Daemon.AgentOrchestratorVendorTests"/> harness (BuildOrchestrator/SeedAgentForTest/
 /// SpyPtyProcessFactory) — see HealBarrierReportTests.cs for the precedent of a second
 /// partial-class file doing the same.
 /// </summary>

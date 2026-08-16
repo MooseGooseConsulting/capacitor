@@ -20,7 +20,7 @@ namespace Capacitor.Cli.Tests.Unit;
 /// specifically to prove it does nothing — they are the regression fence for the
 /// reviewer-reaped-between-rounds defect.</para>
 ///
-/// Partial of <see cref="AgentOrchestratorVendorTests"/> to reuse its <c>BuildOrchestrator</c>/
+/// Partial of <see cref="Daemon.AgentOrchestratorVendorTests"/> to reuse its <c>BuildOrchestrator</c>/
 /// <c>SeedAgentForTest</c>/<c>CaptureServerConnection</c>/<c>SpyPtyProcessFactory</c> test doubles —
 /// same pattern as <c>ReviewerTtlTests.cs</c>/<c>OneExecutionDomainTests.cs</c>.
 /// </summary>
@@ -29,7 +29,7 @@ public partial class AgentOrchestratorVendorTests {
     /// RULE that fired; the rest of <see cref="AgentOrchestrator.ReapCandidate"/> is claim evidence
     /// (the captured activity generation and whether the rule is activity-fenced), which the claim
     /// tests at the bottom of this file pin instead.</summary>
-    static IEnumerable<(string Id, string Reason)> Verdicts(
+    internal static IEnumerable<(string Id, string Reason)> Verdicts(
             IEnumerable<AgentOrchestrator.ReapCandidate> selection) =>
         selection.Select(c => (c.Id, c.Reason));
 

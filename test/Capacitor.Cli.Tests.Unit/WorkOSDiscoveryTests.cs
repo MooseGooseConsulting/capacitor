@@ -3,7 +3,6 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using NSubstitute;
-using DiscoveryResult = Capacitor.Cli.Core.Auth.DiscoveryResult;
 
 namespace Capacitor.Cli.Tests.Unit;
 
@@ -35,7 +34,7 @@ public class WorkOSDiscoveryTests {
             new() { Provider = "WorkOS", OrganizationId = "org_b", Slug = "contoso",   DisplayName = "Contoso",   Origin = "https://contoso.kcap.ai" }
         ];
         proxy.DiscoverWorkOSTenantsAsync(Arg.Any<string>(), Arg.Any<string>())
-             .Returns(Task.FromResult(new DiscoveryResult(tenants, DiscoveryError.None)));
+             .Returns(Task.FromResult(new Cli.Core.Auth.DiscoveryResult(tenants, DiscoveryError.None)));
 
         var picker = Substitute.For<ITenantPicker>();
         picker.Pick(tenants).Returns(tenants[0]); // eventuous
@@ -78,7 +77,7 @@ public class WorkOSDiscoveryTests {
             new() { Provider = "WorkOS", Slug = "eventuous", DisplayName = "Eventuous", Origin = "https://eventuous.kcap.ai" } // no OrganizationId
         ];
         proxy.DiscoverWorkOSTenantsAsync(Arg.Any<string>(), Arg.Any<string>())
-             .Returns(Task.FromResult(new DiscoveryResult(tenants, DiscoveryError.None)));
+             .Returns(Task.FromResult(new Cli.Core.Auth.DiscoveryResult(tenants, DiscoveryError.None)));
 
         var switchCalled = false;
         var outcome = await WorkOSDiscovery.RunAsync(
@@ -95,7 +94,7 @@ public class WorkOSDiscoveryTests {
     public async Task RunAsync_errors_when_no_tenants() {
         var proxy = Substitute.For<IAuthProxyClient>();
         proxy.DiscoverWorkOSTenantsAsync(Arg.Any<string>(), Arg.Any<string>())
-             .Returns(Task.FromResult(new DiscoveryResult([], DiscoveryError.None)));
+             .Returns(Task.FromResult(new Cli.Core.Auth.DiscoveryResult([], DiscoveryError.None)));
 
         var outcome = await WorkOSDiscovery.RunAsync(
             "https://auth.kcap.ai", new ProxyConfigResponse { WorkOSClientId = "client_d" },
@@ -111,7 +110,7 @@ public class WorkOSDiscoveryTests {
         var proxyConfig = new ProxyConfigResponse { WorkOSClientId = "client_d" };
         var proxy = Substitute.For<IAuthProxyClient>();
         proxy.DiscoverWorkOSTenantsAsync(Arg.Any<string>(), Arg.Any<string>())
-             .Returns(Task.FromResult(new DiscoveryResult([], DiscoveryError.None)));
+             .Returns(Task.FromResult(new Cli.Core.Auth.DiscoveryResult([], DiscoveryError.None)));
 
         WorkOSTokenSource? handedTokens = null;
         var provisioner = Substitute.For<ITenantProvisioner>();
@@ -148,7 +147,7 @@ public class WorkOSDiscoveryTests {
         var proxyConfig = new ProxyConfigResponse { WorkOSClientId = "client_d" };
         var proxy = Substitute.For<IAuthProxyClient>();
         proxy.DiscoverWorkOSTenantsAsync(Arg.Any<string>(), Arg.Any<string>())
-             .Returns(Task.FromResult(new DiscoveryResult([], DiscoveryError.None)));
+             .Returns(Task.FromResult(new Cli.Core.Auth.DiscoveryResult([], DiscoveryError.None)));
 
         // Login-time access token is already near expiry, so the provisioner's first token pull
         // forces a refresh — exactly the long-provisioning case that consumes the org-less token.
@@ -180,7 +179,7 @@ public class WorkOSDiscoveryTests {
     public async Task RunAsync_hands_back_the_workspace_the_user_already_has_instead_of_provisioning() {
         var proxy = Substitute.For<IAuthProxyClient>();
         proxy.DiscoverWorkOSTenantsAsync(Arg.Any<string>(), Arg.Any<string>())
-             .Returns(Task.FromResult(new DiscoveryResult([], DiscoveryError.None)));
+             .Returns(Task.FromResult(new Cli.Core.Auth.DiscoveryResult([], DiscoveryError.None)));
 
         var provisioner = Substitute.For<ITenantProvisioner>();
         provisioner.OfferCreateAsync(Arg.Any<WorkOSTokenSource>(), Arg.Any<CancellationToken>())
@@ -211,7 +210,7 @@ public class WorkOSDiscoveryTests {
     public async Task RunAsync_treats_a_blank_existing_workspace_input_as_no_retarget() {
         var proxy = Substitute.For<IAuthProxyClient>();
         proxy.DiscoverWorkOSTenantsAsync(Arg.Any<string>(), Arg.Any<string>())
-             .Returns(Task.FromResult(new DiscoveryResult([], DiscoveryError.None)));
+             .Returns(Task.FromResult(new Cli.Core.Auth.DiscoveryResult([], DiscoveryError.None)));
 
         var provisioner = Substitute.For<ITenantProvisioner>();
         provisioner.OfferCreateAsync(Arg.Any<WorkOSTokenSource>(), Arg.Any<CancellationToken>())
@@ -234,7 +233,7 @@ public class WorkOSDiscoveryTests {
     public async Task RunAsync_returns_1_without_legacy_error_when_provisioner_declines() {
         var proxy = Substitute.For<IAuthProxyClient>();
         proxy.DiscoverWorkOSTenantsAsync(Arg.Any<string>(), Arg.Any<string>())
-             .Returns(Task.FromResult(new DiscoveryResult([], DiscoveryError.None)));
+             .Returns(Task.FromResult(new Cli.Core.Auth.DiscoveryResult([], DiscoveryError.None)));
 
         var provisioner = Substitute.For<ITenantProvisioner>();
         provisioner.OfferCreateAsync(Arg.Any<WorkOSTokenSource>(), Arg.Any<CancellationToken>())

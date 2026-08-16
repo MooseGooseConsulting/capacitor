@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using Capacitor.Cli.Commands.Harness;
 
 namespace Capacitor.Cli.Tests.Integration;
 
@@ -7,7 +8,7 @@ namespace Capacitor.Cli.Tests.Integration;
 /// temp directory before any in-process test code triggers the
 /// <c>PathHelpers</c> static initializer. <c>PathHelpers.ConfigDir</c> is
 /// <c>static readonly</c> and captured once per process from the
-/// environment, so any test that calls into <see cref="Capacitor.Cli.Commands.ClaudeHookCommand"/>
+/// environment, so any test that calls into <see cref="ClaudeHookCommand"/>
 /// (or anything else that reads <c>AppConfig</c>, profile state, repo
 /// exclusions, token store, …) would otherwise read the developer's real
 /// <c>~/.config/kcap</c>. A user-side exclusion (e.g. <c>excluded_paths</c>

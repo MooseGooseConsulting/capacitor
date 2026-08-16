@@ -1,6 +1,6 @@
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Daemon;
-using Capacitor.Cli.Daemon.Acp;
+using Capacitor.Cli.Daemon.Harness.Pi;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;

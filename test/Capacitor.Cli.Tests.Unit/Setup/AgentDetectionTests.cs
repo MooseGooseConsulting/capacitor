@@ -1,4 +1,4 @@
-using Capacitor.Cli.Core.Cursor;
+using Capacitor.Cli.Core.Harness.Cursor;
 using Capacitor.Cli.Core.Setup;
 
 namespace Capacitor.Cli.Tests.Unit.Setup;

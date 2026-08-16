@@ -1,7 +1,6 @@
 // test/Capacitor.Cli.Tests.Unit/Services/AntigravityRuntimeFakes.cs
 using System.Runtime.CompilerServices;
-using Capacitor.Cli.Daemon.Acp;
-using Capacitor.Cli.Daemon.Services;
+using Capacitor.Cli.Daemon.Harness.Antigravity;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Capacitor.Cli.Tests.Unit.Services;

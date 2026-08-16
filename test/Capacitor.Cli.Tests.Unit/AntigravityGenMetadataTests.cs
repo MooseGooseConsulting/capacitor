@@ -1,6 +1,6 @@
 using System.Text;
 using System.Text.Json;
-using Capacitor.Cli.Core.Antigravity;
+using Capacitor.Cli.Core.Harness.Antigravity;
 
 namespace Capacitor.Cli.Tests.Unit;
 

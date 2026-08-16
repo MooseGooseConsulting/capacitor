@@ -1,5 +1,5 @@
 using Capacitor.Cli.Core;
-using Capacitor.Cli.Daemon.Acp;
+using Capacitor.Cli.Daemon.Harness.Gemini;
 
 namespace Capacitor.Cli.Tests.Unit.Acp;
 

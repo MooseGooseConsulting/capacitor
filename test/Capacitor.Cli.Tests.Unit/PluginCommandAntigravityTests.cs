@@ -1,6 +1,6 @@
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
-using Capacitor.Cli.Core.Antigravity;
+using Capacitor.Cli.Core.Harness.Antigravity;
 using Capacitor.Cli.Core.Instructions;
 using Capacitor.Cli.Core.Mcp;
 

@@ -1,6 +1,6 @@
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
-using Capacitor.Cli.Core.Gemini;
+using Capacitor.Cli.Core.Harness.Gemini;
 
 namespace Capacitor.Cli.Tests.Unit;
 

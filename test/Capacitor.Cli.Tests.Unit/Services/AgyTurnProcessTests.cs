@@ -1,6 +1,6 @@
 // test/Capacitor.Cli.Tests.Unit/Services/AgyTurnProcessTests.cs
 using System.Diagnostics;
-using Capacitor.Cli.Daemon.Services;
+using Capacitor.Cli.Daemon.Harness.Antigravity;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Capacitor.Cli.Tests.Unit.Services;

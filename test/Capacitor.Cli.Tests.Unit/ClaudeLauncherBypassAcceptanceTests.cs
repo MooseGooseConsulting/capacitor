@@ -1,10 +1,10 @@
 using System.Text.Json.Nodes;
-using Capacitor.Cli.Daemon.Services;
+using Capacitor.Cli.Daemon.Harness.Claude;
 
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
-/// Tests <see cref="ClaudeLauncher.AcceptBypassPermissionsMode(string)"/> — the pre-accept that
+/// Tests <see cref="Cli.Daemon.Harness.Claude.ClaudeLauncher.AcceptBypassPermissionsMode(string)"/> — the pre-accept that
 /// stops an unattended review-flow reviewer wedging on Claude's Bypass-Permissions consent dialog.
 ///
 /// The consent flag Claude 2.1.x actually reads is <c>skipDangerousModePermissionPrompt</c> in the

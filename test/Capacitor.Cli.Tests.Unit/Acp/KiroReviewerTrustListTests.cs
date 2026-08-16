@@ -1,6 +1,7 @@
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Acp;
 using Capacitor.Cli.Daemon.Acp;
+using Capacitor.Cli.Daemon.Harness.Kiro;
 
 namespace Capacitor.Cli.Tests.Unit.Acp;
 

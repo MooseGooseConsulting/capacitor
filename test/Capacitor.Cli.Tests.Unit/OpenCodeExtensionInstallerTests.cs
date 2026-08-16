@@ -1,5 +1,5 @@
 using Capacitor.Cli.Core;
-using Capacitor.Cli.Core.OpenCode;
+using Capacitor.Cli.Core.Harness.OpenCode;
 
 namespace Capacitor.Cli.Tests.Unit;
 

@@ -1,6 +1,6 @@
 using Capacitor.Cli.Commands;
+using Capacitor.Cli.Core.Harness.Pi;
 using Capacitor.Cli.Core.Instructions;
-using Capacitor.Cli.Core.Pi;
 
 namespace Capacitor.Cli.Tests.Unit;
 

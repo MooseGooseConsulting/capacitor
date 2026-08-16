@@ -1,6 +1,6 @@
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
-using Capacitor.Cli.Daemon.Services;
+using Capacitor.Cli.Daemon.Harness.Codex;
 
 namespace Capacitor.Cli.Tests.Unit.Codex;
 

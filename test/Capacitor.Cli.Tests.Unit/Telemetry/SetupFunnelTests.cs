@@ -2,7 +2,6 @@ using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Telemetry;
 using NSubstitute;
 using TUnit.Assertions.Enums;
-using DiscoveryResult = Capacitor.Cli.Core.Auth.DiscoveryResult;
 
 namespace Capacitor.Cli.Tests.Unit.Telemetry;
 
@@ -150,7 +149,7 @@ public class SetupFunnelTests {
 
         var proxy = Substitute.For<IAuthProxyClient>();
         proxy.DiscoverWorkOSTenantsAsync(Arg.Any<string>(), Arg.Any<string>())
-             .Returns(Task.FromResult(new DiscoveryResult([], DiscoveryError.None)));
+             .Returns(Task.FromResult(new Cli.Core.Auth.DiscoveryResult([], DiscoveryError.None)));
 
         var outcome = await WorkOSDiscovery.RunAsync(
             "https://auth.kcap.ai", new ProxyConfigResponse { WorkOSClientId = "client_d" },

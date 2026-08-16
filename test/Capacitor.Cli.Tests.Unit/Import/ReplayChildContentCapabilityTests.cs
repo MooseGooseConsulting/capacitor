@@ -1,6 +1,15 @@
 using Capacitor.Cli.Commands;
+using Capacitor.Cli.Harness.Antigravity;
+using Capacitor.Cli.Harness.Claude;
+using Capacitor.Cli.Harness.Codex;
+using Capacitor.Cli.Harness.Copilot;
+using Capacitor.Cli.Harness.Cursor;
+using Capacitor.Cli.Harness.Gemini;
+using Capacitor.Cli.Harness.Kiro;
+using Capacitor.Cli.Harness.OpenCode;
+using Capacitor.Cli.Harness.Pi;
 
-namespace Capacitor.Cli.Tests.Unit;
+namespace Capacitor.Cli.Tests.Unit.Import;
 
 /// <summary>
 /// Pins <see cref="IImportSource.AttachesChildContentOnReplay"/> for every source. That flag is

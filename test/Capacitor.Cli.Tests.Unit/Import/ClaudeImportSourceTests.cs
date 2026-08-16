@@ -1,5 +1,6 @@
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Harness.Claude;
 
 namespace Capacitor.Cli.Tests.Unit.Import;
 

@@ -1,5 +1,4 @@
 using Capacitor.Cli.Core.Config;
-using RemoteMatcher = Capacitor.Cli.Core.Config.RemoteMatcher;
 
 namespace Capacitor.Cli.Tests.Unit;
 

@@ -1,5 +1,5 @@
 using Capacitor.Cli.Core;
-using Capacitor.Cli.Core.Pi;
+using Capacitor.Cli.Core.Harness.Pi;
 
 namespace Capacitor.Cli.Tests.Unit;
 

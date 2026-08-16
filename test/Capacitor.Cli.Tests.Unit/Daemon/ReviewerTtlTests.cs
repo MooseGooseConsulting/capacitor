@@ -2,7 +2,7 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Time.Testing;
 
-namespace Capacitor.Cli.Tests.Unit;
+namespace Capacitor.Cli.Tests.Unit.Daemon;
 
 /// <summary>
 /// Task 12 (unified reviewer reaping, liveness-supervision spec §0/§1): the NO-SERVER-BOUND legacy
@@ -18,7 +18,7 @@ namespace Capacitor.Cli.Tests.Unit;
 public partial class AgentOrchestratorVendorTests {
     [Test]
     public async Task FindReviewersToReap_flags_lifetime_and_idle_but_not_interactive() {
-        await using var orch = BuildOrchestrator(
+        await using var orch = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(
             new CaptureServerConnection(), new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
         // defaults: 6h lifetime / 2h idle, no server-sent bound on any of these agents.
 
@@ -50,15 +50,15 @@ public partial class AgentOrchestratorVendorTests {
 
         var reap = orch.FindReviewersToReap();
 
-        await Assert.That(Verdicts(reap)).Contains(("rev-old", "reviewer_ttl_expired"));
-        await Assert.That(Verdicts(reap)).Contains(("rev-idle", "reviewer_idle_expired"));
+        await Assert.That(Unit.AgentOrchestratorVendorTests.Verdicts(reap)).Contains(("rev-old", "reviewer_ttl_expired"));
+        await Assert.That(Unit.AgentOrchestratorVendorTests.Verdicts(reap)).Contains(("rev-idle", "reviewer_idle_expired"));
         await Assert.That(reap.Select(r => r.Id)).DoesNotContain("interactive");
         await Assert.That(reap.Select(r => r.Id)).DoesNotContain("rev-fresh");
     }
 
     [Test]
     public async Task FindReviewersToReap_disabled_when_bounds_are_zero() {
-        await using var orch = BuildOrchestrator(
+        await using var orch = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(
             new CaptureServerConnection(), new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>(),
             configure: c => { c.ReviewerMaxLifetime = TimeSpan.Zero; c.ReviewerIdleTimeout = TimeSpan.Zero; });
 

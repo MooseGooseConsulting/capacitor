@@ -1,6 +1,6 @@
 // test/Capacitor.Cli.Tests.Unit/AntigravityReviewerReapingTests.cs
 using Capacitor.Cli.Core;
-using Capacitor.Cli.Daemon.Acp;
+using Capacitor.Cli.Daemon.Harness.Antigravity;
 using Capacitor.Cli.Daemon.Services;
 using Capacitor.Cli.Tests.Unit.Services;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -20,7 +20,7 @@ namespace Capacitor.Cli.Tests.Unit;
 /// keepalive: <c>TurnInFlight</c> is false, so <c>ReviewerIdleTimeout</c> governs exactly as it does
 /// for any ACP reviewer waiting on the next round.</para>
 ///
-/// Partial of <see cref="AgentOrchestratorVendorTests"/> to reuse its <c>BuildOrchestrator</c> /
+/// Partial of <see cref="Daemon.AgentOrchestratorVendorTests"/> to reuse its <c>BuildOrchestrator</c> /
 /// <c>CaptureServerConnection</c> / <c>SpyPtyProcessFactory</c> doubles — the same pattern
 /// <c>ReviewerReapingTests.cs</c> follows.
 /// </summary>

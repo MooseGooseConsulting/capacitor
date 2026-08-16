@@ -1,5 +1,6 @@
 using System.Globalization;
 using Capacitor.Cli.Commands;
+using Capacitor.Cli.Harness.Antigravity;
 
 namespace Capacitor.Cli.Tests.Unit;
 

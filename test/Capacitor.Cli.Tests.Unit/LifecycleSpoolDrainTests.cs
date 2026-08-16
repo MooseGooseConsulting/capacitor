@@ -1,5 +1,6 @@
 using System.Net;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Harness.Cursor;
 
 namespace Capacitor.Cli.Tests.Unit;
 

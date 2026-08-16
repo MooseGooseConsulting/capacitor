@@ -1,5 +1,5 @@
-using Capacitor.Cli.Commands;
-using Capacitor.Cli.Core.OpenCode;
+using Capacitor.Cli.Commands.Harness;
+using Capacitor.Cli.Core.Harness.OpenCode;
 using Capacitor.Cli.SessionStartMemory;
 
 namespace Capacitor.Cli.Tests.Unit;

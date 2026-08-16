@@ -1,5 +1,5 @@
 using System.Text.Json.Nodes;
-using Capacitor.Cli.Core.Antigravity;
+using Capacitor.Cli.Core.Harness.Antigravity;
 
 namespace Capacitor.Cli.Tests.Unit;
 

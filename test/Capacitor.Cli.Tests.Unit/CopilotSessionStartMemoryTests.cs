@@ -1,4 +1,4 @@
-using Capacitor.Cli.Commands;
+using Capacitor.Cli.Commands.Harness;
 using Capacitor.Cli.SessionStartMemory;
 
 namespace Capacitor.Cli.Tests.Unit;
@@ -150,7 +150,7 @@ public class CopilotSessionStartMemoryTests {
     [Test]
     public async Task the_memory_opt_out_is_read_from_the_effective_profile_not_the_resolved_one() {
         var source = await File.ReadAllTextAsync(
-            Path.Combine(RepoRoot(), "src", "Capacitor.Cli", "Commands", "CopilotHookCommand.cs"));
+            Path.Combine(RepoRoot(), "src", "Capacitor.Cli", "Commands", "Harness", "CopilotHookCommand.cs"));
 
         var start = source.IndexOf("var memoryTask = StartMemoryIndexTask(", StringComparison.Ordinal);
         await Assert.That(start).IsGreaterThan(-1);

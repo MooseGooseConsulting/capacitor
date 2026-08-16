@@ -1,7 +1,7 @@
 // test/Capacitor.Cli.Tests.Unit/Services/AntigravityReviewerLiveCertTests.cs
 using System.Diagnostics;
 using Capacitor.Cli.Daemon;
-using Capacitor.Cli.Daemon.Acp;
+using Capacitor.Cli.Daemon.Harness.Antigravity;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging.Abstractions;
 

@@ -356,7 +356,7 @@ public class AcpLaunchStageTests {
 
 /// <summary>
 /// Orchestrator-level integration for Task 13: reuses the shared
-/// <see cref="AgentOrchestratorVendorTests"/> harness (<c>BuildOrchestrator</c>, <c>CreateGitRepo</c>,
+/// <see cref="Daemon.AgentOrchestratorVendorTests"/> harness (<c>BuildOrchestrator</c>, <c>CreateGitRepo</c>,
 /// <c>CaptureServerConnection</c>) to prove two things the factory-level <see cref="AcpLaunchStageTests"/>
 /// suite cannot reach on its own: (1) a stage timeout surfaces through
 /// <c>AgentOrchestrator.HandleLaunchAgentCore</c>'s ordinary catch-all as a real

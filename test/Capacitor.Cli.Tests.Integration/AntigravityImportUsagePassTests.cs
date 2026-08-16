@@ -1,4 +1,5 @@
 using Capacitor.Cli.Commands;
+using Capacitor.Cli.Harness.Antigravity;
 using Microsoft.Data.Sqlite;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;

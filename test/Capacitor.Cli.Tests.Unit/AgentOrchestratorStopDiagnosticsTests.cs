@@ -9,7 +9,7 @@ namespace Capacitor.Cli.Tests.Unit;
 /// it used to say "claude" unconditionally, which mislabelled a Cursor (or Codex, or Copilot)
 /// reviewer in the one log line an operator reads to work out which reviewer wedged.
 ///
-/// Partial of <see cref="AgentOrchestratorVendorTests"/> to reuse its orchestrator builder,
+/// Partial of <see cref="Daemon.AgentOrchestratorVendorTests"/> to reuse its orchestrator builder,
 /// server-connection capture, and no-op runtime double.
 /// </summary>
 public partial class AgentOrchestratorVendorTests {

@@ -1,4 +1,4 @@
-using Capacitor.Cli.Core.Kiro;
+using Capacitor.Cli.Core.Harness.Kiro;
 
 namespace Capacitor.Cli.Tests.Unit;
 

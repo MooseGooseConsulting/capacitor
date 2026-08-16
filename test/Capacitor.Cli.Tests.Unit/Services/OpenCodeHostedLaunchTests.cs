@@ -1,5 +1,6 @@
 using Capacitor.Cli.Daemon;
 using Capacitor.Cli.Daemon.Acp;
+using Capacitor.Cli.Daemon.Harness.OpenCode;
 using Capacitor.Cli.Daemon.Services;
 
 namespace Capacitor.Cli.Tests.Unit.Services;

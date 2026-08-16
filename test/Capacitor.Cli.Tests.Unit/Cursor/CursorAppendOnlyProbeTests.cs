@@ -1,5 +1,6 @@
 using System.Text;
-using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Harness.Cursor;
+
 namespace Capacitor.Cli.Tests.Unit.Cursor;
 
 public class CursorAppendOnlyProbeTests {

@@ -2,7 +2,7 @@ using System.Diagnostics;
 using System.Threading.Channels;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Daemon;
-using Capacitor.Cli.Daemon.Acp;
+using Capacitor.Cli.Daemon.Harness.Pi;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging;
 

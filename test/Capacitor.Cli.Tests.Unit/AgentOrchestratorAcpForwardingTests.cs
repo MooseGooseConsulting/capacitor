@@ -10,7 +10,7 @@ namespace Capacitor.Cli.Tests.Unit;
 /// Option B task 4: covers the orchestrator wiring that ties tasks 1–3 into the launch/
 /// teardown lifecycle — <c>AgentOrchestrator.HandleLaunchAgent</c>'s post-registration ACP
 /// bind + forwarder start, and <see cref="AgentOrchestrator"/>'s teardown path's bounded final-drain
-/// before <c>EndAgentSession</c>. Reuses the shared <see cref="AgentOrchestratorVendorTests"/> test
+/// before <c>EndAgentSession</c>. Reuses the shared <see cref="Daemon.AgentOrchestratorVendorTests"/> test
 /// seam (<c>BuildOrchestrator</c>, <c>CaptureServerConnection</c>) — the ACP-specific capture fields
 /// added there (<c>AcpCallOrder</c>, <c>AcpSessionStartedCalls</c>, <c>AcpEventsCalls</c>,
 /// <c>AcpEventsCallSignal</c>) let these tests assert exact call order deterministically instead of

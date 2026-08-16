@@ -1,7 +1,7 @@
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Daemon.Services;
 
-namespace Capacitor.Cli.Tests.Unit;
+namespace Capacitor.Cli.Tests.Unit.Daemon;
 
 // Phase B2-b (sequenced-settlement design): the orchestrator surfaces the durable coverage
 // boot-chain verdict (DaemonConfig.RecordlessSurvivorsImpossible, folded in DaemonRunner before
@@ -10,7 +10,7 @@ namespace Capacitor.Cli.Tests.Unit;
 public partial class AgentOrchestratorVendorTests {
     [Test]
     public async Task Status_report_advertises_recordless_survivors_impossible_from_config() {
-        await using var orch = BuildOrchestrator(
+        await using var orch = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(
             new CaptureServerConnection(), new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher>(),
             configure: c => c.RecordlessSurvivorsImpossible = true);
@@ -23,7 +23,7 @@ public partial class AgentOrchestratorVendorTests {
     // clean env-marker-scan pass. A clean boot with no candidates completes the pass on the first reap.
     [Test]
     public async Task Startup_discovery_is_not_applicable_off_linux_and_pending_before_a_scan() {
-        await using var orch = BuildOrchestrator(new CaptureServerConnection(), new SpyPtyProcessFactory(),
+        await using var orch = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(new CaptureServerConnection(), new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher>());
         // A clean boot with no candidates: after ReapOrphansOnceAsync the Linux scan is complete.
         await orch.ReapOrphansOnceAsync();
@@ -38,7 +38,7 @@ public partial class AgentOrchestratorVendorTests {
     [Test]
     public async Task Pending_marker_candidate_blocks_completion_and_surfaces_reason() {
         if (!OperatingSystem.IsLinux()) return;
-        await using var orch = BuildOrchestrator(new CaptureServerConnection(), new SpyPtyProcessFactory(),
+        await using var orch = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(new CaptureServerConnection(), new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher>());
         orch.SeedPendingMarkerCandidateForTest("blocked", "old"); // occupant with no matching triple
         var report = orch.BuildStatusReport();
@@ -55,7 +55,7 @@ public partial class AgentOrchestratorVendorTests {
     // directly with a dead pid (so the macOS legacy-live arm can't catch it) — the else arm must.
     [Test]
     public async Task Spared_prior_epoch_present_record_blocks_completion_as_identity_unresolvable() {
-        await using var orch = BuildOrchestrator(new CaptureServerConnection(), new SpyPtyProcessFactory(),
+        await using var orch = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(new CaptureServerConnection(), new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher>());
         orch.WritePidRecordForTest(new AgentPidRecord(
             "spared", 999_999, "mac:boot:uid", PidIdentityKind.Present, "ReviewFlow", "codex",
@@ -76,7 +76,7 @@ public partial class AgentOrchestratorVendorTests {
     [Test]
     public async Task Status_report_carries_resolved_candidates_and_ack_prunes_them() {
         var server = new CaptureServerConnection();
-        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(),
+        await using var orch = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(server, new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher>());
 
         var g = orch.SeedResolvedCandidateForTest("a1", "old-epoch");   // test seam over the ledger

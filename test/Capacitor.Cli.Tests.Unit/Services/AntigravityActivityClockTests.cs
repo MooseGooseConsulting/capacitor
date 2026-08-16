@@ -1,5 +1,6 @@
 // test/Capacitor.Cli.Tests.Unit/Services/AntigravityActivityClockTests.cs
-using Capacitor.Cli.Daemon.Acp;
+
+using Capacitor.Cli.Daemon.Harness.Antigravity;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;

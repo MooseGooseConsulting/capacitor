@@ -8,7 +8,7 @@ namespace Capacitor.Cli.Tests.Unit;
 /// An unattended review-flow launch mints a per-reviewer LocalPermissionBridge token (bound to its
 /// read-only allowlist) and revokes it on teardown — but ONLY for Codex reviewers (Claude runs via
 /// bypassPermissions and needs none). An allowlist with a non-auto-approvable server fails the launch
-/// fast. Reuses the harness in <see cref="AgentOrchestratorVendorTests"/>. The bridge's request
+/// fast. Reuses the harness in <see cref="Daemon.AgentOrchestratorVendorTests"/>. The bridge's request
 /// classification is covered exhaustively by <see cref="LocalPermissionBridgeTests"/>; these assert
 /// the orchestrator WIRING via <c>ReviewerTokenCountForTest</c> so they needn't do real HTTP.
 /// </summary>

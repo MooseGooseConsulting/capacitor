@@ -1,6 +1,6 @@
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
-using Capacitor.Cli.Core.Kiro;
+using Capacitor.Cli.Core.Harness.Kiro;
 
 namespace Capacitor.Cli.Tests.Unit;
 

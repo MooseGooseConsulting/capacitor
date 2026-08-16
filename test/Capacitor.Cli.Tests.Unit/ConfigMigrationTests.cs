@@ -1,6 +1,5 @@
 using System.Text.Json;
 using Capacitor.Cli.Core.Config;
-using ProfileConfigJsonContext = Capacitor.Cli.Core.Config.ProfileConfigJsonContext;
 
 namespace Capacitor.Cli.Tests.Unit;
 

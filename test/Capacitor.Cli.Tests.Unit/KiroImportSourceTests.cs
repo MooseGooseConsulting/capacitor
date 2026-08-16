@@ -1,4 +1,5 @@
 using Capacitor.Cli.Commands;
+using Capacitor.Cli.Harness.Kiro;
 
 namespace Capacitor.Cli.Tests.Unit;
 

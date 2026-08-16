@@ -1,7 +1,7 @@
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Daemon.Services;
 
-namespace Capacitor.Cli.Tests.Unit;
+namespace Capacitor.Cli.Tests.Unit.Daemon;
 
 // Settlement lost-ack redelivery (D1) (Task 7 wiring): the orchestrator re-delivers unretired terminal acks on a status-report
 // tick AND on reconnect (re-registration). The freeze + re-delivery MECHANISM is pinned at the processor
@@ -14,7 +14,7 @@ public partial class AgentOrchestratorVendorTests {
     static async Task<(AgentOrchestrator Orch, SeqCaptureServerConnection Server, int ProactiveAcks)>
         OrchestratorWithOneSettledCommandAsync() {
         var server = new SeqCaptureServerConnection();
-        var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(),
+        var orch = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(server, new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher>());
         orch.PublishSequencedProcessorForTest();
         await orch.ProcessorForTest!.SubmitAsync(

@@ -1,10 +1,9 @@
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Daemon.Pty;
 using Capacitor.Cli.Daemon.Services;
-using Capacitor.Cli.Tests.Unit.Daemon;
 using Microsoft.Extensions.Logging.Abstractions;
 
-namespace Capacitor.Cli.Tests.Unit;
+namespace Capacitor.Cli.Tests.Unit.Daemon;
 
 // Phase B2-b (sequenced-settlement design): the orchestrator now owns an epoch-scoped
 // SequencedCommandProcessor, advertises its Epoch/HighestAcceptedSeq/LastProcessedSeq counters on the
@@ -14,7 +13,7 @@ namespace Capacitor.Cli.Tests.Unit;
 public partial class AgentOrchestratorVendorTests {
     [Test]
     public async Task Report_advertises_sequencing_capability_and_counters() {
-        await using var orch = BuildOrchestrator(new CaptureServerConnection(), new SpyPtyProcessFactory(),
+        await using var orch = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(new CaptureServerConnection(), new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher>());
         var report = orch.BuildStatusReport();
         await Assert.That(report.Epoch).IsNotNull();
@@ -24,7 +23,7 @@ public partial class AgentOrchestratorVendorTests {
 
     [Test]
     public async Task ReadLiveness_follows_confirmed_death_precedence() {
-        await using var orch = BuildOrchestrator(new CaptureServerConnection(), new SpyPtyProcessFactory(),
+        await using var orch = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(new CaptureServerConnection(), new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher>());
         orch.SeedAgentForTest("live", LaunchKind.ReviewFlow, status: "Running");
         await Assert.That(orch.ReadLiveness("live")).IsEqualTo(AgentLiveness.Live);
@@ -39,7 +38,7 @@ public partial class AgentOrchestratorVendorTests {
         // invariant (CleanupAgentAsync adds to _quarantine BEFORE removing from _agents) keeps the id
         // continuously in _agents ∪ _quarantine until the drain, so deadness is monotonic.
         var server = new CaptureServerConnection();
-        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(),
+        await using var orch = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(server, new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher>());
         using var dummy = DummyProcess.StartSleep(30);
         orch.SeedAgentForTest("rev", LaunchKind.ReviewFlow, status: "Running", flowRunId: "f", flowRole: "reviewer",
@@ -70,7 +69,7 @@ public partial class AgentOrchestratorVendorTests {
     [Test]
     public async Task Sequenced_launch_over_capacity_emits_daemon_capacity_rejection() {
         var server = new SeqCaptureServerConnection();
-        await using var orch = BuildOrchestrator(
+        await using var orch = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(
             server, new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher> { ["claude"] = new SpyHostedAgentLauncher("claude", cliPath: "spy-claude") },
             configure: c => c.MaxConcurrentAgents = 0);
@@ -102,7 +101,7 @@ public partial class AgentOrchestratorVendorTests {
     [Test]
     public async Task Stop_via_v2_advances_watermark_and_a_later_report_omits_the_confirmed_dead_id() {
         var server = new CaptureServerConnection();
-        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(),
+        await using var orch = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(server, new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher>());
         var agent = orch.SeedAgentForTest("rev", LaunchKind.ReviewFlow, status: "Running", flowRunId: "f", flowRole: "reviewer");
         var epoch = orch.DaemonEpochForTest;
@@ -120,7 +119,7 @@ public partial class AgentOrchestratorVendorTests {
     [Test]
     public async Task Legacy_unsequenced_launch_never_advances_the_watermark() {
         var server = new CaptureServerConnection();
-        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(),
+        await using var orch = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(server, new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher>());
         // No Epoch/Seq/CommandId -> legacy lane.
         await orch.HandleLaunchAgentForTest(new LaunchAgentCommand("x", "hi", "opus", null, "/tmp", null, null, "bogus"));
@@ -137,7 +136,7 @@ public partial class AgentOrchestratorVendorTests {
         var server = new SeqCaptureServerConnection();
         // A VALID vendor so the fail-closed reason can ONLY be the malformed-tuple route, not the legacy
         // lane's unknown-vendor rejection (which would mask a missing fix).
-        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(),
+        await using var orch = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(server, new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher> { ["claude"] = new SpyHostedAgentLauncher("claude", cliPath: "spy-claude") });
 
         // Epoch + Seq present, CommandId ABSENT -> malformed.

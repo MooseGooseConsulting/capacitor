@@ -4,6 +4,7 @@ using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Daemon;
 using System.Runtime.InteropServices;
 using Capacitor.Cli.Daemon.Acp;
+using Capacitor.Cli.Daemon.Harness.Cursor;
 using Capacitor.Cli.Daemon.Services;
 using Capacitor.Cli.Tests.Unit.Acp;
 using Microsoft.Extensions.Logging;

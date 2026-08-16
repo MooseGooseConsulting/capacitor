@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Harness.Cursor;
 using Capacitor.Cli.Core.Mcp;
 
 namespace Capacitor.Cli.Tests.Unit;

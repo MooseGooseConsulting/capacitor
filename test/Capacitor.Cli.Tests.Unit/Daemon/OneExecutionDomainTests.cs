@@ -2,13 +2,12 @@ using System.Collections.Concurrent;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Daemon.Pty;
 using Capacitor.Cli.Daemon.Services;
-using Capacitor.Cli.Tests.Unit.Daemon;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 
-namespace Capacitor.Cli.Tests.Unit;
+namespace Capacitor.Cli.Tests.Unit.Daemon;
 
 // Spec §3.3 (ONE execution domain), orchestrator level: how the launch/stop HANDLERS route, what the pump
 // is free to do while a launch parks on consent, the publication/transition barrier, the internal-reaping
@@ -92,7 +91,7 @@ public partial class AgentOrchestratorVendorTests {
     }
 
     /// <summary>An <see cref="IHostApplicationLifetime"/> whose <see cref="ApplicationStopping"/> is a REAL,
-    /// test-controlled token — <see cref="StubHostLifetime"/> (every other test's default) is fixed at
+    /// test-controlled token — <see cref="Unit.AgentOrchestratorVendorTests.StubHostLifetime"/> (every other test's default) is fixed at
     /// <see cref="CancellationToken.None"/> and can never fire. AgentOrchestrator links its internal
     /// <c>_shutdownCts</c> to this token AT CONSTRUCTION via
     /// <see cref="CancellationTokenSource.CreateLinkedTokenSource(CancellationToken)"/>, which is a LIVE link
@@ -184,7 +183,7 @@ public partial class AgentOrchestratorVendorTests {
         var dir = Directory.CreateTempSubdirectory("kcap-domain-pump-").FullName;
         var (gate, prompter) = PromptGateWithParkingPrompter(dir);
         var server = new SeqCaptureServerConnection();
-        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(),
+        await using var orch = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(server, new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher>(), consentGate: gate);
         var epoch = orch.DaemonEpochForTest;
 
@@ -217,7 +216,7 @@ public partial class AgentOrchestratorVendorTests {
         var dir = Directory.CreateTempSubdirectory("kcap-domain-order-").FullName;
         var (gate, prompter) = PromptGateWithParkingPrompter(dir);
         var server = new SeqCaptureServerConnection();
-        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(),
+        await using var orch = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(server, new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher>(), consentGate: gate);
         var epoch = orch.DaemonEpochForTest;
 
@@ -236,15 +235,15 @@ public partial class AgentOrchestratorVendorTests {
     // Exactly one terminal answer per accepted item — outcome (a) success.
     [Test]
     public async Task Settlement_success_is_accepted_before_terminal_with_exactly_one_ack() {
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = Unit.AgentOrchestratorVendorTests.CreateGitRepo();
 
         try {
-            var server     = new SeqCaptureServerConnection();
-            var ptyFactory = new SpyPtyProcessFactory();
-            var claudeSpy  = new SpyHostedAgentLauncher("claude", cliPath: "spy-claude");
-            var launchers  = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = claudeSpy };
-            await using var orch = BuildOrchestrator(server, ptyFactory, launchers, allowedRepoPath: repoPath);
-            var epoch = orch.DaemonEpochForTest;
+            var             server     = new SeqCaptureServerConnection();
+            var             ptyFactory = new SpyPtyProcessFactory();
+            var             claudeSpy  = new SpyHostedAgentLauncher("claude", cliPath: "spy-claude");
+            var             launchers  = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = claudeSpy };
+            await using var orch       = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(server, ptyFactory, launchers, allowedRepoPath: repoPath);
+            var             epoch      = orch.DaemonEpochForTest;
 
             await orch.SubmitLaunchAgentForTest(new LaunchAgentCommand(
                 AgentId: "succ", Prompt: "hi", Model: "opus", Effort: null,
@@ -270,8 +269,8 @@ public partial class AgentOrchestratorVendorTests {
         var server    = new SeqCaptureServerConnection();
         var claudeSpy = new SpyHostedAgentLauncher("claude", cliPath: "spy-claude");
         var launchers = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = claudeSpy };
-        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), launchers,
-            consentGate: DenyDefaultGate(dir));
+        await using var orch = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(server, new SpyPtyProcessFactory(), launchers,
+            consentGate: Unit.AgentOrchestratorVendorTests.DenyDefaultGate(dir));
         var epoch = orch.DaemonEpochForTest;
 
         await orch.SubmitLaunchAgentForTest(new LaunchAgentCommand(
@@ -306,7 +305,7 @@ public partial class AgentOrchestratorVendorTests {
         // Declared before orch, so orch — which holds a live linked registration — disposes first.
         using var lifetime = new CancellableHostLifetime();
         var server         = new SeqCaptureServerConnection();
-        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(),
+        await using var orch = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(server, new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher>(), consentGate: gate, lifetime: lifetime);
         var epoch = orch.DaemonEpochForTest;
 
@@ -333,7 +332,7 @@ public partial class AgentOrchestratorVendorTests {
         var (gate, prompter) = PromptGateWithParkingPrompter(dir);
         var server = new SeqCaptureServerConnection();
         var logger = new CapturingLogger<AgentOrchestrator>();
-        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(),
+        await using var orch = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(server, new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher>(), consentGate: gate, logger: logger);
 
         // An un-seq'd launch, committed to the lane and parked at the gate.
@@ -364,7 +363,7 @@ public partial class AgentOrchestratorVendorTests {
         var dir = Directory.CreateTempSubdirectory("kcap-domain-bypass-").FullName;
         var (gate, prompter) = PromptGateWithParkingPrompter(dir);
         var server = new SeqCaptureServerConnection();
-        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(),
+        await using var orch = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(server, new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher>(), consentGate: gate);
 
         await WaitBoundedAsync(orch.SubmitLaunchAgentForTest(UnsequencedLaunch("parked")),
@@ -389,7 +388,7 @@ public partial class AgentOrchestratorVendorTests {
         var dir = Directory.CreateTempSubdirectory("kcap-domain-exists-").FullName;
         var (gate, prompter) = PromptGateWithParkingPrompter(dir);
         var server = new SeqCaptureServerConnection();
-        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(),
+        await using var orch = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(server, new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher>(), consentGate: gate);
 
         await WaitBoundedAsync(orch.SubmitLaunchAgentForTest(UnsequencedLaunch("parked")),
@@ -412,14 +411,14 @@ public partial class AgentOrchestratorVendorTests {
     // population; nothing about §3.3 may change it.
     [Test]
     public async Task With_no_processor_an_unsequenced_launch_executes_inline_before_the_handler_returns() {
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = Unit.AgentOrchestratorVendorTests.CreateGitRepo();
 
         try {
             var server     = new SeqCaptureServerConnection();
             var ptyFactory = new SpyPtyProcessFactory();
             var claudeSpy  = new SpyHostedAgentLauncher("claude", cliPath: "spy-claude");
             var launchers  = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = claudeSpy };
-            await using var orch = BuildOrchestrator(server, ptyFactory, launchers, allowedRepoPath: repoPath,
+            await using var orch = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(server, ptyFactory, launchers, allowedRepoPath: repoPath,
                 deferProcessorPublication: true);
             await Assert.That(orch.ProcessorForTest).IsNull();
 
@@ -449,7 +448,7 @@ public partial class AgentOrchestratorVendorTests {
         var dir = Directory.CreateTempSubdirectory("kcap-domain-barrier-").FullName;
         var (gate, prompter) = PromptGateWithParkingPrompter(dir);
         var server = new SeqCaptureServerConnection();
-        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(),
+        await using var orch = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(server, new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher>(), consentGate: gate, deferProcessorPublication: true);
 
         // Inline (pre-publication) un-seq'd launch, paused inside the core on the consent prompt.
@@ -483,7 +482,7 @@ public partial class AgentOrchestratorVendorTests {
     // survivor, which is NOT the no-op that justifies dropping unknown ids.
     [Test]
     public async Task Unknown_stop_targets_are_dropped_but_registry_and_pid_record_targets_are_admitted() {
-        await using var orch = BuildOrchestrator(new SeqCaptureServerConnection(), new SpyPtyProcessFactory(),
+        await using var orch = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(new SeqCaptureServerConnection(), new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher>());
 
         await Assert.That(orch.IsKnownStopTargetForTest("nobody")).IsFalse();
@@ -515,7 +514,7 @@ public partial class AgentOrchestratorVendorTests {
         var (gate, prompter) = PromptGateWithParkingPrompter(dir);
         var server = new SeqCaptureServerConnection();
         var logger = new CapturingLogger<AgentOrchestrator>();
-        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(),
+        await using var orch = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(server, new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher>(), consentGate: gate, logger: logger);
 
         await WaitBoundedAsync(orch.SubmitLaunchAgentForTest(UnsequencedLaunch("in-flight")),
@@ -554,7 +553,7 @@ public partial class AgentOrchestratorVendorTests {
         var (gate, prompter) = PromptGateWithParkingPrompter(dir);
         var server = new SeqCaptureServerConnection();
         var logger = new CapturingLogger<AgentOrchestrator>();
-        var orch   = BuildOrchestrator(server, new SpyPtyProcessFactory(),
+        var orch   = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(server, new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher>(), consentGate: gate, logger: logger);
 
         using var childA = DummyProcess.StartSleep(60);
@@ -604,7 +603,7 @@ public partial class AgentOrchestratorVendorTests {
     [Test]
     public async Task A_child_surviving_shutdown_is_reaped_by_the_next_boots_scan_and_a_pid_reused_process_is_not() {
         var server = new SeqCaptureServerConnection();
-        var orch   = BuildOrchestrator(server, new SpyPtyProcessFactory(),
+        var orch   = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(server, new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher>());
 
         // A child started AFTER the teardown snapshot: it exists and has a durable record, but the

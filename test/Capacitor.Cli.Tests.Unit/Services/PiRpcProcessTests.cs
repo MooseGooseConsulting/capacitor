@@ -1,6 +1,6 @@
 // test/Capacitor.Cli.Tests.Unit/Services/PiRpcProcessTests.cs
 using System.Diagnostics;
-using Capacitor.Cli.Daemon.Acp;
+using Capacitor.Cli.Daemon.Harness.Pi;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Capacitor.Cli.Tests.Unit.Services;

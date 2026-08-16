@@ -1,4 +1,4 @@
-using Capacitor.Cli.Daemon.Services;
+using Capacitor.Cli.Daemon.Harness.Claude;
 
 namespace Capacitor.Cli.Tests.Unit;
 

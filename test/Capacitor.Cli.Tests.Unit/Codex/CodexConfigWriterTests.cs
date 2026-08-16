@@ -1,5 +1,5 @@
-using Capacitor.Cli.Core;
-using Capacitor.Cli.Daemon.Services;
+using Capacitor.Cli.Core.Harness.Codex;
+using Capacitor.Cli.Daemon.Harness.Codex;
 using Microsoft.Extensions.Logging.Abstractions;
 using Tomlyn;
 using Tomlyn.Model;

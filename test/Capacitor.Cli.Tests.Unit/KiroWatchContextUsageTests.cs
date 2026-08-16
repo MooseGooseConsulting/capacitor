@@ -1,4 +1,5 @@
 using Capacitor.Cli.Commands;
+using Capacitor.Cli.Core.Harness.Kiro;
 
 namespace Capacitor.Cli.Tests.Unit;
 
@@ -6,7 +7,7 @@ namespace Capacitor.Cli.Tests.Unit;
 /// The live-watcher side of Kiro context-%: <see cref="WatchCommand.EnrichKiroContextUsage"/>
 /// reads the sibling <c>{id}.json</c> (derived from the TRANSCRIPT path, not the dashless session id)
 /// and stamps <c>data._kcap_usage.context_usage_percentage</c> onto AssistantMessage lines at flush,
-/// reusing the import path's <see cref="Capacitor.Cli.Core.Kiro.KiroUsage"/>. Best-effort + order-preserving.
+/// reusing the import path's <see cref="KiroUsage"/>. Best-effort + order-preserving.
 /// </summary>
 public class KiroWatchContextUsageTests {
     // One turn, anchor message id "a2", context% 5.2612 (mirrors KiroUsageTests).

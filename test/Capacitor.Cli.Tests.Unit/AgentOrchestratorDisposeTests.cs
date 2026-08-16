@@ -11,7 +11,7 @@ namespace Capacitor.Cli.Tests.Unit;
 /// that Dispose without a run-once guard would recreate the crash exactly, so these contracts
 /// pin body-ran-once AND cts-ends-cancelled-and-disposed durably.
 ///
-/// Partial of <see cref="AgentOrchestratorVendorTests"/> to reuse its orchestrator builder and
+/// Partial of <see cref="Daemon.AgentOrchestratorVendorTests"/> to reuse its orchestrator builder and
 /// server-connection capture.
 /// </summary>
 public partial class AgentOrchestratorVendorTests {

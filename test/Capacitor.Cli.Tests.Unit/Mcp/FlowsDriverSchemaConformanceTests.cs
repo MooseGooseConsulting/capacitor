@@ -1,12 +1,12 @@
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Harness.Antigravity;
+using Capacitor.Cli.Core.Harness.Copilot;
+using Capacitor.Cli.Core.Harness.Gemini;
+using Capacitor.Cli.Core.Harness.Kiro;
+using Capacitor.Cli.Core.Harness.Pi;
 using Capacitor.Cli.Core.Mcp;
-using Capacitor.Cli.Core.Antigravity;
-using Capacitor.Cli.Core.Copilot;
-using Capacitor.Cli.Core.Gemini;
-using Capacitor.Cli.Core.Kiro;
-using Capacitor.Cli.Core.Pi;
 using TUnit.Assertions.Enums;
 using Tomlyn;
 using Tomlyn.Model;

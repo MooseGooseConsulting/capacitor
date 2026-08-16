@@ -1,4 +1,5 @@
 using Capacitor.Cli.Commands;
+using Capacitor.Cli.Commands.Harness;
 
 namespace Capacitor.Cli.Tests.Unit;
 

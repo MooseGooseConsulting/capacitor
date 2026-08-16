@@ -1,5 +1,5 @@
 using System.Text.Json;
-using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Harness.Claude;
 
 namespace Capacitor.Cli.Tests.Unit;
 

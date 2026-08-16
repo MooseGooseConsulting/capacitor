@@ -1,7 +1,7 @@
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Daemon.Services;
 
-namespace Capacitor.Cli.Tests.Unit;
+namespace Capacitor.Cli.Tests.Unit.Daemon;
 
 /// <summary>
 /// Phase B (D2): <see cref="AgentOrchestrator.BuildLiveAgents"/> reflects each live agent's
@@ -12,7 +12,7 @@ namespace Capacitor.Cli.Tests.Unit;
 public partial class AgentOrchestratorVendorTests {
     [Test]
     public async Task BuildLiveAgents_carries_reviewflow_identity_and_excludes_stopped_and_private() {
-        await using var orch = BuildOrchestrator(
+        await using var orch = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(
             new CaptureServerConnection(), new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         orch.SeedAgentForTest("a1", LaunchKind.ReviewFlow, status: "Running", flowRunId: "flow-1", flowRole: "reviewer");

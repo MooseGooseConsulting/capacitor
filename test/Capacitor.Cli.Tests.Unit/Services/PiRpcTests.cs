@@ -1,6 +1,6 @@
 // test/Capacitor.Cli.Tests.Unit/Services/PiRpcTests.cs
 using Capacitor.Cli.Core;
-using Capacitor.Cli.Daemon.Acp;
+using Capacitor.Cli.Daemon.Harness.Pi;
 
 namespace Capacitor.Cli.Tests.Unit.Services;
 

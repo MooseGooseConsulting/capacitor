@@ -16,7 +16,7 @@ namespace Capacitor.Cli.Tests.Unit;
 /// <c>EffectiveCount</c>, and reported in <c>QuarantineSnapshot()</c> — so a stuck-kill mode fails
 /// closed rather than minting unbounded processes.</item>
 /// </list>
-/// Partial of <see cref="AgentOrchestratorVendorTests"/> to reuse its BuildOrchestrator/CreateGitRepo/
+/// Partial of <see cref="Daemon.AgentOrchestratorVendorTests"/> to reuse its BuildOrchestrator/CreateGitRepo/
 /// CaptureServerConnection/SpyPtyProcessFactory harness.
 /// </summary>
 public partial class AgentOrchestratorVendorTests {

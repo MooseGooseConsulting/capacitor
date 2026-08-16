@@ -24,7 +24,7 @@ namespace Capacitor.Cli.Tests.Unit;
 /// assertion below is therefore about reports observed DURING the handshake, or about the presence of
 /// an entry rather than its absence.</para>
 ///
-/// Partial of <see cref="AgentOrchestratorVendorTests"/> to reuse BuildOrchestrator/CreateGitRepo/
+/// Partial of <see cref="Daemon.AgentOrchestratorVendorTests"/> to reuse BuildOrchestrator/CreateGitRepo/
 /// SeedAgentForTest/FakeAcpRuntime, same as AcpLaunchStageTests.cs and StatusReportActivityFieldsTests.cs.
 /// </summary>
 public partial class AgentOrchestratorVendorTests {
