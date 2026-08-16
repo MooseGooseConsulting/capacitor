@@ -19,7 +19,7 @@ public class AppNotifierTests {
     public async Task Two_sequential_notifies_deliver_in_order_to_both_channels() {
         var notifier = new AppNotifier();
         var received = new List<string>();
-        using var subscription = notifier.Messages.Subscribe(m => received.Add(m));
+        using var subscription = notifier.Messages.Subscribe(received.Add);
 
         var originalError = Console.Error;
         var stderrWriter = new StringWriter();

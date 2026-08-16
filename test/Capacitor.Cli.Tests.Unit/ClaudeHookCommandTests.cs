@@ -368,7 +368,7 @@ public class ClaudeHookCommandTests {
             using var fx = new Fixture();
             await fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","cwd":"{{nested.Replace("\\", "\\\\")}}"}""");
 
-            var posted = fx.Sent.Single(s => s.StartsWith("/hooks/session-start|"));
+            var posted = fx.Sent.Single(s => s.StartsWith("/hooks/session-start|", StringComparison.Ordinal));
             var body   = JsonNode.Parse(posted[(posted.IndexOf('|') + 1)..]);
             await Assert.That(body!["workspace_root"]?.GetValue<string>()).IsEqualTo(tmp.FullName);
         } finally {
@@ -396,7 +396,7 @@ public class ClaudeHookCommandTests {
         using var fx = new Fixture();
         await fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","cwd":"/tmp"}""");
 
-        var posted = fx.Sent.Single(s => s.StartsWith("/hooks/session-start|"));
+        var posted = fx.Sent.Single(s => s.StartsWith("/hooks/session-start|", StringComparison.Ordinal));
         var body   = JsonNode.Parse(posted[(posted.IndexOf('|') + 1)..]);
         await Assert.That(body!["workspace_root"]).IsNull();
     }
@@ -829,10 +829,10 @@ public class ClaudeHookCommandTests {
             _postStatus = postStatus;
             Spool = new HookSpool(_spoolPath);
             Client = new HttpClient(new StubHandler(async (req, ct) => {
-                var body = req.Content is null ? "" : await req.Content.ReadAsStringAsync();
+                var body = req.Content is null ? "" : await req.Content.ReadAsStringAsync(ct);
                 var path = req.RequestUri!.AbsolutePath;
                 Sent.Add($"{path}|{body}");
-                if (path.StartsWith("/hooks/")) RouteOrder.Add(path.Replace("/hooks/", ""));
+                if (path.StartsWith("/hooks/", StringComparison.Ordinal)) RouteOrder.Add(path.Replace("/hooks/", ""));
                 if (path == "/api/memories/index") {
                     MemoryIndexRequestCount++;
                     if (MemoryIndexDelay > TimeSpan.Zero) await Task.Delay(MemoryIndexDelay, ct);

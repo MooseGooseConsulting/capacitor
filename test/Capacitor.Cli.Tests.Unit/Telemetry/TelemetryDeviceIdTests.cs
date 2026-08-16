@@ -5,7 +5,7 @@ namespace Capacitor.Cli.Tests.Unit.Telemetry;
 /// <summary>
 /// Tests for <see cref="TelemetryDeviceId"/> — the anonymous device id, split out of
 /// <c>telemetry.json</c> into its own lock-free file (see that type's doc comment for why). Mirrors
-/// <c>MachineIdFileTests</c>' shape, since the on-disk pattern is lifted from <see cref="MachineId"/>.
+/// <c>MachineIdFileTests</c>' shape, since the on-disk pattern is lifted from <see cref="Capacitor.Cli.Core.MachineId"/>.
 ///
 /// A few tests here (the SetEnabled/re-enable ones) are inherently cross-cutting: they exercise
 /// <see cref="TelemetryState.SetEnabled"/>'s documented side effect of deleting the device id file,

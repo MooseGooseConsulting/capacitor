@@ -70,7 +70,7 @@ public class ProcessStartTokenTests {
         var token = ProcessStartToken.ForPid(Environment.ProcessId);
 
         await Assert.That(token).IsNotNull();
-        await Assert.That(token!.StartsWith("mac:")).IsTrue();
+        await Assert.That(token!.StartsWith("mac:", StringComparison.Ordinal)).IsTrue();
         // Shape: mac:{uuid}:{digits} — a boot-session UUID (has dashes) then a plain integer.
         var parts = token.Split(':');
         await Assert.That(parts.Length).IsEqualTo(3);

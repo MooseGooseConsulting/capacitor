@@ -545,7 +545,7 @@ public class DaemonMutationLaneTests {
         var disposeTask = lane.DisposeAsync().AsTask(); // drains B's queued slot synchronously, before _lifetime.Cancel()
 
         var ex = await Assert.ThrowsAsync<OperationCanceledException>(() => tB);
-        await Assert.That(ex.CancellationToken).IsEqualTo(CancellationToken.None);
+        await Assert.That(ex!.CancellationToken).IsEqualTo(CancellationToken.None);
 
         gateA.SetResult("9.9.9");
         await Assert.ThrowsAsync<OperationCanceledException>(() => tA);

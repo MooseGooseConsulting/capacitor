@@ -44,7 +44,7 @@ public class AcpServerConnectionTests {
 
         /// <summary> reliability fix (Codex P1 #1): how many MORE times the raw
         /// AcpSessionStarted invoke should throw for a given agentId before it starts succeeding —
-        /// drives <see cref="ReBindAcpSessionsAsyncBoundedRetryTests"/>'s bounded-retry-then-give-up
+        /// drives <c>ReBindAcpSessionsAsyncBoundedRetryTests</c>'s bounded-retry-then-give-up
         /// and transient-failure-then-recover cases. Absent/zero entries always succeed.</summary>
         public Dictionary<string, int> FailSessionStartedRemaining { get; } = [];
 
