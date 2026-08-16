@@ -27,22 +27,22 @@ namespace Capacitor.Cli.Tests.Unit;
 /// section, making captured content monotone in wire order (SignalR preserves per-connection send
 /// order).</para>
 /// </summary>
-public partial class AgentOrchestratorVendorTests {
+public class DeliveryTriggeredStatusReportTests {
     [Test]
     public async Task Delivered_input_emits_exactly_one_report_carrying_the_advanced_seq_and_reset_idle() {
         var server = new CaptureServerConnection();
         var time   = new FakeTimeProvider();
         var clock  = new AgentActivityClock(time);
 
-        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
-        var agent = orch.SeedAgentForTest("dispatch-report-1", pty: new RecordingPtyProcess(), activityClock: clock);
+        await using var orch  = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        var             agent = orch.SeedAgentForTest("dispatch-report-1", pty: new RecordingPtyProcess(), activityClock: clock);
 
         time.Advance(TimeSpan.FromSeconds(10));
         await Assert.That(server.StatusReportCount).IsEqualTo(0); // nothing has emitted yet
 
         await orch.HandleSendInputForTest(new SendInputCommand(agent.Id, "hello", null));
 
-        await PollUntilAsync(() => server.StatusReportCount >= 1);
+        await WaitHarness.PollUntilAsync(() => server.StatusReportCount >= 1);
         // Give a wrongly-duplicated emission a chance to land before pinning the count.
         await Task.Delay(50);
         await Assert.That(server.StatusReportCount).IsEqualTo(1);
@@ -65,8 +65,8 @@ public partial class AgentOrchestratorVendorTests {
         var time   = new FakeTimeProvider();
         var clock  = new AgentActivityClock(time);
 
-        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
-        var agent = orch.SeedAgentForTest("dispatch-report-fail", pty: new AlwaysThrowsPtyProcess(), activityClock: clock);
+        await using var orch  = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        var             agent = orch.SeedAgentForTest("dispatch-report-fail", pty: new AlwaysThrowsPtyProcess(), activityClock: clock);
 
         time.Advance(TimeSpan.FromSeconds(10));
 
@@ -105,8 +105,8 @@ public partial class AgentOrchestratorVendorTests {
         var time  = new FakeTimeProvider();
         var clock = new AgentActivityClock(time);
 
-        await using var orch = BuildOrchestrator(probe, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
-        var agent = orch.SeedAgentForTest("ordering-1", pty: new RecordingPtyProcess(), activityClock: clock);
+        await using var orch  = AgentOrchestratorHarness.BuildOrchestrator(probe, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        var             agent = orch.SeedAgentForTest("ordering-1", pty: new RecordingPtyProcess(), activityClock: clock);
 
         // The "slow periodic" emission: it captures the pre-delivery snapshot (seq 1) and then parks
         // INSIDE the hub send, exactly the window where a send that ignored the section could overtake it.
@@ -132,7 +132,7 @@ public partial class AgentOrchestratorVendorTests {
 
         probe.ReleaseFirstSend();
         await slowPeriodic.WaitAsync(TimeSpan.FromSeconds(5));
-        await PollUntilAsync(() => probe.CompletedInOrder.Count >= 2);
+        await WaitHarness.PollUntilAsync(() => probe.CompletedInOrder.Count >= 2);
         await Assert.That(probe.CompletedInOrder.Count).IsEqualTo(2);
 
         // (ii) completion (= wire) order carries non-decreasing content.
@@ -156,7 +156,7 @@ public partial class AgentOrchestratorVendorTests {
         var time  = new FakeTimeProvider();
         var clock = new AgentActivityClock(time);
 
-        await using var orch = BuildOrchestrator(probe, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(probe, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
         orch.StatusReportSendTimeout = TimeSpan.FromMilliseconds(200);
 
         var agent = orch.SeedAgentForTest("timeout-1", pty: new RecordingPtyProcess(), activityClock: clock);
@@ -171,7 +171,7 @@ public partial class AgentOrchestratorVendorTests {
         // for the never-releasing parked send, this would hang instead of completing.
         await orch.SendDaemonStatusReportOnceAsync().WaitAsync(TimeSpan.FromSeconds(5));
 
-        await PollUntilAsync(() => probe.CompletedInOrder.Count >= 1);
+        await WaitHarness.PollUntilAsync(() => probe.CompletedInOrder.Count >= 1);
         await Assert.That(probe.CompletedInOrder[0].LiveAgents.Single(a => a.Id == agent.Id).ActivitySeq)
             .IsEqualTo(2UL); // the second emission's own capture, on the wire first
 
@@ -179,7 +179,7 @@ public partial class AgentOrchestratorVendorTests {
         // captured before the release) even though it lands second.
         probe.ReleaseFirstSend();
         await stalled.WaitAsync(TimeSpan.FromSeconds(5));
-        await PollUntilAsync(() => probe.CompletedInOrder.Count >= 2);
+        await WaitHarness.PollUntilAsync(() => probe.CompletedInOrder.Count >= 2);
 
         var seqs = probe.CompletedInOrder
             .Select(r => r.LiveAgents.Single(a => a.Id == agent.Id).ActivitySeq)

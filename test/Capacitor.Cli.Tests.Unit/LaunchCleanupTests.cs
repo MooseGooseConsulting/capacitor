@@ -16,13 +16,13 @@ namespace Capacitor.Cli.Tests.Unit;
 /// <c>EffectiveCount</c>, and reported in <c>QuarantineSnapshot()</c> — so a stuck-kill mode fails
 /// closed rather than minting unbounded processes.</item>
 /// </list>
-/// Partial of <see cref="Daemon.AgentOrchestratorVendorTests"/> to reuse its BuildOrchestrator/CreateGitRepo/
+/// Uses <see cref="AgentOrchestratorHarness"/> for its BuildOrchestrator/CreateGitRepo/
 /// CaptureServerConnection/SpyPtyProcessFactory harness.
 /// </summary>
-public partial class AgentOrchestratorVendorTests {
+public class LaunchCleanupTests {
     [Test]
     public async Task Post_insert_launch_failure_tears_down_via_single_flight_and_unregisters() {
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
 
         try {
             // AgentRegisteredAsync throws on the launch's RegisterAgentAsync call, AFTER the agent was
@@ -30,7 +30,7 @@ public partial class AgentOrchestratorVendorTests {
             var server     = new CaptureServerConnection { AgentRegisteredFailTimes = 1 };
             var ptyFactory = new SpyPtyProcessFactory();
 
-            await using var orch = BuildOrchestrator(server, ptyFactory, Launcher("claude"), allowedRepoPath: repoPath);
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, ptyFactory, AgentOrchestratorHarness.Launcher("claude"), allowedRepoPath: repoPath);
 
             await orch.HandleLaunchAgentForTest(new LaunchAgentCommand(
                 AgentId: "a1", Prompt: "hi", Model: "opus", Effort: null,
@@ -50,7 +50,7 @@ public partial class AgentOrchestratorVendorTests {
     public async Task Concurrent_teardown_of_one_agent_unregisters_exactly_once() {
         var server = new CaptureServerConnection();
 
-        await using var orch = BuildOrchestrator(
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         orch.SeedAgentForTest("s1", LaunchKind.Default, status: "Running");
@@ -67,7 +67,7 @@ public partial class AgentOrchestratorVendorTests {
     public async Task Teardown_of_a_child_that_survives_disposal_quarantines_and_counts_it() {
         var server = new CaptureServerConnection();
 
-        await using var orch = BuildOrchestrator(
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         // A real, live child whose runtime Dispose/Terminate are no-ops — so it is STILL ALIVE after
@@ -95,13 +95,13 @@ public partial class AgentOrchestratorVendorTests {
 
     [Test]
     public async Task Launch_stamps_daemon_identity_env_markers_on_the_spawned_child() {
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
 
         try {
             var server     = new CaptureServerConnection();
             var ptyFactory = new SpyPtyProcessFactory();
 
-            await using var orch = BuildOrchestrator(server, ptyFactory, Launcher("claude"), allowedRepoPath: repoPath);
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, ptyFactory, AgentOrchestratorHarness.Launcher("claude"), allowedRepoPath: repoPath);
 
             await orch.HandleLaunchAgentForTest(new LaunchAgentCommand(
                 AgentId: "env-1", Prompt: "hi", Model: "opus", Effort: null,
@@ -122,7 +122,7 @@ public partial class AgentOrchestratorVendorTests {
     public async Task Teardown_does_not_quarantine_or_kill_a_recycled_pid() {
         var server = new CaptureServerConnection();
 
-        await using var orch = BuildOrchestrator(
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         // A live process occupies the pid, but the agent's STORED identity is a same-scheme token with a
@@ -151,7 +151,7 @@ public partial class AgentOrchestratorVendorTests {
     public async Task Teardown_quarantines_when_the_stored_identity_is_uncomparable() {
         var server = new CaptureServerConnection();
 
-        await using var orch = BuildOrchestrator(
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         // A live child whose stored identity uses a FOREIGN token scheme ("zz:") — uncomparable on every
@@ -174,7 +174,7 @@ public partial class AgentOrchestratorVendorTests {
     public async Task Quarantine_drain_deletes_the_retained_pid_record() {
         var server = new CaptureServerConnection();
 
-        await using var orch = BuildOrchestrator(
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         // A live child with a durable PID record. Teardown quarantines it (still alive) and RETAINS the

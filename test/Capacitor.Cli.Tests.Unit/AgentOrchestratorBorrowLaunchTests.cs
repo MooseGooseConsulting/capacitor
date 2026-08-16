@@ -18,22 +18,22 @@ namespace Capacitor.Cli.Tests.Unit;
 /// removed / <c>git worktree remove</c>d / branch-deleted on ANY path (normal stop, failed
 /// launch, anywhere). These tests lock that in behaviourally.
 ///
-/// Reuses the <c>partial</c> harness in <see cref="Daemon.AgentOrchestratorVendorTests"/>
+/// Reuses the shared <see cref="AgentOrchestratorHarness"/>
 /// (<c>BuildOrchestrator</c>, <c>CreateGitRepo</c>, <c>CaptureServerConnection</c>,
 /// <c>SpyPtyProcessFactory</c>, <c>FixedPtyProcessFactory</c>, <c>OneChunkThenBlockPtyProcess</c>,
 /// <c>SpyHostedAgentLauncher</c>).
 /// </summary>
-public partial class AgentOrchestratorVendorTests {
+public class AgentOrchestratorBorrowLaunchTests {
     [Test]
     public async Task Borrowed_Claude_review_flow_fails_at_runtime_boundary_without_spawning() {
-        var (cwd, cleanup) = CreateGitRepo();
+        var (cwd, cleanup) = GitRepoHarness.CreateGitRepo();
         try {
             var server = new CaptureServerConnection();
             var ptyFactory = new SpyPtyProcessFactory();
             var launcher = new ClaudeLauncher(
                 new DaemonConfig { ClaudePath = "spy-claude", ServerUrl = "http://127.0.0.1:1" },
                 NullLogger<ClaudeLauncher>.Instance);
-            await using var orch = BuildOrchestrator(server, ptyFactory,
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, ptyFactory,
                 new Dictionary<string, IHostedAgentLauncher> { ["claude"] = launcher });
             var cmd = new LaunchAgentCommand(
                 "agent-borrowed-review", "review", "default", null, cwd, null, null,
@@ -53,21 +53,21 @@ public partial class AgentOrchestratorVendorTests {
 
     [Test]
     public async Task Borrowed_Cursor_review_flow_runs_in_owned_dirty_snapshot_and_refreshes_between_rounds() {
-        var (cwd, cleanup) = CreateGitRepo();
+        var (cwd, cleanup) = GitRepoHarness.CreateGitRepo();
         LocalPermissionBridge? bridge = null;
         try {
             File.WriteAllText(Path.Combine(cwd, "README.md"), "dirty-one");
             File.WriteAllText(Path.Combine(cwd, "untracked.txt"), "untracked-one");
             var firstContext = "{\"mcpServers\":{\"first\":{}}}";
             File.WriteAllText(Path.Combine(cwd, ".mcp.json"), firstContext);
-            Git(cwd, "add", ".mcp.json");
+            GitRepoHarness.Git(cwd, "add", ".mcp.json");
             var server = new CaptureServerConnection();
             var factory = new SpyHostedAgentRuntimeFactory("cursor") {
                 SupportsUnattended = true,
                 SupportsBorrowedReviewFlow = true,
                 BorrowedReviewRequiresIndependentSnapshot = true
             };
-            await using var orch = BuildOrchestrator(
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
                 server, new SpyPtyProcessFactory(),
                 new Dictionary<string, IHostedAgentLauncher>(),
                 extraRuntimeFactories: [factory]);
@@ -108,7 +108,7 @@ public partial class AgentOrchestratorVendorTests {
             File.WriteAllText(Path.Combine(cwd, "README.md"), "dirty-two");
             var secondContext = "{\"mcpServers\":{\"second\":{}}}";
             File.WriteAllText(Path.Combine(cwd, ".mcp.json"), secondContext);
-            Git(cwd, "add", ".mcp.json");
+            GitRepoHarness.Git(cwd, "add", ".mcp.json");
             await orch.HandleSendInputForTest(new SendInputCommand(cmd.AgentId, "next", null));
             await Assert.That(File.ReadAllText(Path.Combine(ctx.Worktree.Path, "README.md")))
                 .IsEqualTo("dirty-two");
@@ -135,18 +135,18 @@ public partial class AgentOrchestratorVendorTests {
 
     [Test, NotInParallel("LocalPermissionBridgeTests")]
     public async Task Non_review_independent_snapshot_gets_context_grant_and_refreshes() {
-        var (cwd, cleanup) = CreateGitRepo();
+        var (cwd, cleanup) = GitRepoHarness.CreateGitRepo();
         LocalPermissionBridge? bridge = null;
         try {
             var firstContext = "{\"mcpServers\":{\"first\":{}}}";
             File.WriteAllText(Path.Combine(cwd, ".mcp.json"), firstContext);
-            Git(cwd, "add", ".mcp.json");
+            GitRepoHarness.Git(cwd, "add", ".mcp.json");
             var server = new CaptureServerConnection();
             var factory = new SpyHostedAgentRuntimeFactory("cursor") {
                 SupportsBorrowedReviewFlow = true,
                 BorrowedReviewRequiresIndependentSnapshot = true
             };
-            await using var orch = BuildOrchestrator(
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
                 server, new SpyPtyProcessFactory(),
                 new Dictionary<string, IHostedAgentLauncher>(),
                 extraRuntimeFactories: [factory]);
@@ -166,7 +166,7 @@ public partial class AgentOrchestratorVendorTests {
 
             var secondContext = "{\"mcpServers\":{\"second\":{}}}";
             File.WriteAllText(Path.Combine(cwd, ".mcp.json"), secondContext);
-            Git(cwd, "add", ".mcp.json");
+            GitRepoHarness.Git(cwd, "add", ".mcp.json");
             await orch.HandleSendInputForTest(new SendInputCommand(command.AgentId, "next", null));
 
             await Assert.That(runtime.HasExited).IsFalse();
@@ -187,7 +187,7 @@ public partial class AgentOrchestratorVendorTests {
 
     [Test, NotInParallel("LocalPermissionBridgeTests")]
     public async Task Snapshot_launch_failure_revokes_context_grant_and_removes_sidecar() {
-        var (cwd, cleanup) = CreateGitRepo();
+        var (cwd, cleanup) = GitRepoHarness.CreateGitRepo();
         LocalPermissionBridge? bridge = null;
         try {
             var server = new CaptureServerConnection();
@@ -197,7 +197,7 @@ public partial class AgentOrchestratorVendorTests {
                 BorrowedReviewRequiresIndependentSnapshot = true,
                 StartThrow = new InvalidOperationException("synthetic launch failure")
             };
-            await using var orch = BuildOrchestrator(
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
                 server, new SpyPtyProcessFactory(),
                 new Dictionary<string, IHostedAgentLauncher>(),
                 extraRuntimeFactories: [factory]);
@@ -223,7 +223,7 @@ public partial class AgentOrchestratorVendorTests {
 
     [Test, NotInParallel("LocalPermissionBridgeTests")]
     public async Task Snapshot_refresh_context_failure_terminates_reviewer_and_cleans_capability() {
-        var (cwd, cleanup) = CreateGitRepo();
+        var (cwd, cleanup) = GitRepoHarness.CreateGitRepo();
         LocalPermissionBridge? bridge = null;
         try {
             var server = new CaptureServerConnection();
@@ -232,7 +232,7 @@ public partial class AgentOrchestratorVendorTests {
                 SupportsBorrowedReviewFlow = true,
                 BorrowedReviewRequiresIndependentSnapshot = true
             };
-            await using var orch = BuildOrchestrator(
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
                 server, new SpyPtyProcessFactory(),
                 new Dictionary<string, IHostedAgentLauncher>(),
                 extraRuntimeFactories: [factory]);
@@ -248,7 +248,7 @@ public partial class AgentOrchestratorVendorTests {
 
             Directory.CreateDirectory(Path.Combine(cwd, ".mcp.json"));
             File.WriteAllText(Path.Combine(cwd, ".mcp.json", "child"), "unsafe");
-            Git(cwd, "add", ".mcp.json/child");
+            GitRepoHarness.Git(cwd, "add", ".mcp.json/child");
             await orch.HandleSendInputForTest(new SendInputCommand(command.AgentId, "next", null));
 
             await Assert.That(runtime.HasExited).IsTrue();
@@ -277,22 +277,22 @@ public partial class AgentOrchestratorVendorTests {
 
     [Test]
     public async Task Borrowed_snapshot_is_built_from_the_requester_checkout_not_the_registered_repo() {
-        var (daemonRepo, cleanupDaemon) = CreateGitRepo();
-        var (requesterRepo, cleanupRequester) = CreateGitRepo();
+        var (daemonRepo, cleanupDaemon)       = GitRepoHarness.CreateGitRepo();
+        var (requesterRepo, cleanupRequester) = GitRepoHarness.CreateGitRepo();
         LocalPermissionBridge? bridge = null;
         try {
             // The daemon-registered checkout is a decoy: everything in it is distinguishable from
             // the requester's, so any content leaking from it is caught by value, not by absence.
             File.WriteAllText(Path.Combine(daemonRepo, "README.md"), "daemon-checkout-decoy");
             File.WriteAllText(Path.Combine(daemonRepo, "daemon-only.txt"), "daemon-only");
-            Git(daemonRepo, "add", "-A");
-            Git(daemonRepo, "commit", "-q", "-m", "daemon decoy");
+            GitRepoHarness.Git(daemonRepo, "add", "-A");
+            GitRepoHarness.Git(daemonRepo, "commit", "-q", "-m", "daemon decoy");
 
             // The requester carries all four shapes the snapshot has to get right.
-            Git(requesterRepo, "checkout", "-q", "-b", "feature");
+            GitRepoHarness.Git(requesterRepo, "checkout", "-q", "-b", "feature");
             File.WriteAllText(Path.Combine(requesterRepo, "branch-only.txt"), "branch-only-committed");
-            Git(requesterRepo, "add", "-A");
-            Git(requesterRepo, "commit", "-q", "-m", "branch-only commit");
+            GitRepoHarness.Git(requesterRepo, "add", "-A");
+            GitRepoHarness.Git(requesterRepo, "commit", "-q", "-m", "branch-only commit");
             File.WriteAllText(Path.Combine(requesterRepo, "README.md"), "requester-modified");
             File.WriteAllText(Path.Combine(requesterRepo, "untracked.txt"), "requester-untracked");
             File.WriteAllText(Path.Combine(requesterRepo, ".gitignore"), "ignored.txt\n");
@@ -307,7 +307,7 @@ public partial class AgentOrchestratorVendorTests {
                 SupportsBorrowedReviewFlow = true,
                 BorrowedReviewRequiresIndependentSnapshot = true
             };
-            await using var orch = BuildOrchestrator(
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
                 server, new SpyPtyProcessFactory(),
                 new Dictionary<string, IHostedAgentLauncher>(),
                 extraRuntimeFactories: [factory]);
@@ -424,22 +424,22 @@ public partial class AgentOrchestratorVendorTests {
     /// </summary>
     [Test]
     public async Task Borrowed_Copilot_review_snapshots_the_requester_checkout_and_refreshes_between_rounds() {
-        var (daemonRepo, cleanupDaemon)       = CreateGitRepo();
-        var (requesterRepo, cleanupRequester) = CreateGitRepo();
+        var (daemonRepo, cleanupDaemon)       = GitRepoHarness.CreateGitRepo();
+        var (requesterRepo, cleanupRequester) = GitRepoHarness.CreateGitRepo();
         LocalPermissionBridge? bridge = null;
         try {
             // The registered checkout is a decoy: its content is distinguishable, so a leak is caught
             // by value rather than by absence.
             File.WriteAllText(Path.Combine(daemonRepo, "README.md"), "daemon-checkout-decoy");
             File.WriteAllText(Path.Combine(daemonRepo, "daemon-only.txt"), "daemon-only");
-            Git(daemonRepo, "add", "-A");
-            Git(daemonRepo, "commit", "-q", "-m", "daemon decoy");
+            GitRepoHarness.Git(daemonRepo, "add", "-A");
+            GitRepoHarness.Git(daemonRepo, "commit", "-q", "-m", "daemon decoy");
 
             // All three classes a borrowed reviewer has to be able to see.
-            Git(requesterRepo, "checkout", "-q", "-b", "feature");
+            GitRepoHarness.Git(requesterRepo, "checkout", "-q", "-b", "feature");
             File.WriteAllText(Path.Combine(requesterRepo, "branch-only.txt"), "branch-only-committed");
-            Git(requesterRepo, "add", "-A");
-            Git(requesterRepo, "commit", "-q", "-m", "branch-only commit");
+            GitRepoHarness.Git(requesterRepo, "add", "-A");
+            GitRepoHarness.Git(requesterRepo, "commit", "-q", "-m", "branch-only commit");
             File.WriteAllText(Path.Combine(requesterRepo, "README.md"), "requester-modified");
             File.WriteAllText(Path.Combine(requesterRepo, "untracked.txt"), "requester-untracked");
 
@@ -452,7 +452,7 @@ public partial class AgentOrchestratorVendorTests {
                 SupportsBorrowedReviewFlow = true,
                 BorrowedReviewRequiresIndependentSnapshot = true
             };
-            await using var orch = BuildOrchestrator(
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
                 server, new SpyPtyProcessFactory(),
                 new Dictionary<string, IHostedAgentLauncher>(),
                 extraRuntimeFactories: [factory]);
@@ -540,7 +540,7 @@ public partial class AgentOrchestratorVendorTests {
 
     [Test]
     public async Task Borrowed_launch_creates_no_worktree_and_runs_in_the_cwd() {
-        var (cwd, cleanup) = CreateGitRepo();
+        var (cwd, cleanup) = GitRepoHarness.CreateGitRepo();
 
         try {
             var server     = new CaptureServerConnection();
@@ -550,7 +550,7 @@ public partial class AgentOrchestratorVendorTests {
             var launchers  = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = claudeSpy };
 
             // Empty allowlist ⇒ BorrowAuthorizer authorizes any local git repo (allow-all-repos).
-            await using var orch = BuildOrchestrator(server, ptyFactory, launchers);
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, ptyFactory, launchers);
 
             var before = SnapshotTree(cwd);
 
@@ -599,7 +599,7 @@ public partial class AgentOrchestratorVendorTests {
     public async Task Borrowed_launch_reauth_failure_fails_loudly() {
         // RepoPath is an allowed git repo (passes the early repo-allowed/exists guards); the borrow
         // cwd is a NON-git directory, which the authorizer rejects under an empty allowlist.
-        var (repoPath, cleanupRepo) = CreateGitRepo();
+        var (repoPath, cleanupRepo) = GitRepoHarness.CreateGitRepo();
         var borrowCwd = Path.Combine(Path.GetTempPath(), "kcap-borrow-nogit-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(borrowCwd);
         File.WriteAllText(Path.Combine(borrowCwd, "user-file.txt"), "precious");
@@ -610,7 +610,7 @@ public partial class AgentOrchestratorVendorTests {
             var claudeSpy  = new SpyHostedAgentLauncher("claude", cliPath: "spy-claude");
             var launchers  = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = claudeSpy };
 
-            await using var orch = BuildOrchestrator(server, ptyFactory, launchers);
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, ptyFactory, launchers);
 
             var before = SnapshotTree(borrowCwd);
 
@@ -662,7 +662,7 @@ public partial class AgentOrchestratorVendorTests {
             var throwingFactory = new ThrowingHostedAgentRuntimeFactory("boomvendor", "kaboom during start");
 
             // No launcher for the vendor; the throwing runtime factory is injected directly.
-            await using var orch = BuildOrchestrator(
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
                 server,
                 ptyFactory,
                 new Dictionary<string, IHostedAgentLauncher>(),
@@ -706,14 +706,14 @@ public partial class AgentOrchestratorVendorTests {
 
     [Test]
     public async Task Owned_launch_still_creates_and_on_failure_removes_the_worktree() {
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
 
         try {
             var server          = new CaptureServerConnection();
             var ptyFactory      = new SpyPtyProcessFactory();
             var throwingFactory = new ThrowingHostedAgentRuntimeFactory("boomvendor", "kaboom during start");
 
-            await using var orch = BuildOrchestrator(
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
                 server,
                 ptyFactory,
                 new Dictionary<string, IHostedAgentLauncher>(),
@@ -825,10 +825,10 @@ public partial class AgentOrchestratorVendorTests {
     /// <summary>Creates a main git repo plus a linked worktree checked out from it, returning the
     /// linked worktree path — a realistic "borrow the user's git worktree" cwd.</summary>
     static (string mainRepo, string linkedCwd, Action cleanup) CreateLinkedWorktree() {
-        var (mainRepo, cleanupMain) = CreateGitRepo();
+        var (mainRepo, cleanupMain) = GitRepoHarness.CreateGitRepo();
         var linkedCwd = Path.Combine(Path.GetTempPath(), "kcap-borrow-link-" + Guid.NewGuid().ToString("N")[..8]);
 
-        Git(mainRepo, "worktree", "add", linkedCwd);
+        GitRepoHarness.Git(mainRepo, "worktree", "add", linkedCwd);
 
         return (mainRepo, linkedCwd, () => {
             try { if (Directory.Exists(linkedCwd)) Directory.Delete(linkedCwd, true); } catch { /* best-effort */ }

@@ -1,6 +1,4 @@
-using System.Runtime.CompilerServices;
 using Capacitor.Cli.Core;
-using Capacitor.Cli.Daemon.Pty;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Time.Testing;
 
@@ -21,15 +19,15 @@ namespace Capacitor.Cli.Tests.Unit;
 /// delivery must leave the clock untouched: a false advance would mask a genuinely wedged/dead
 /// agent from the reaper, which is exactly the failure mode this whole clock exists to catch.
 /// </summary>
-public partial class AgentOrchestratorVendorTests {
+public class SendInputActivityClockTests {
     [Test]
     public async Task Delivered_input_advances_the_activity_seq_and_resets_the_idle_clock() {
         var server = new CaptureServerConnection();
         var time   = new FakeTimeProvider();
         var clock  = new AgentActivityClock(time);
 
-        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
-        var agent = orch.SeedAgentForTest("send-input-ok", pty: new RecordingPtyProcess(), activityClock: clock);
+        await using var orch  = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        var             agent = orch.SeedAgentForTest("send-input-ok", pty: new RecordingPtyProcess(), activityClock: clock);
 
         time.Advance(TimeSpan.FromSeconds(10));
         await Assert.That(agent.ActivityClock.IdleForMs).IsGreaterThanOrEqualTo(9_900UL);
@@ -47,7 +45,7 @@ public partial class AgentOrchestratorVendorTests {
     /// silently, no throw) — yet <c>AgentOrchestrator.HandleSendInput</c> still advances the
     /// clock on it, by design (a false advance only delays a reap/silence verdict, never manufactures
     /// one). Uses <see cref="FakeAcpRuntime"/> (an <see cref="IHostedAgentRuntime"/> test double
-    /// already in this partial class, from the ACP-forwarding tests) via <c>SeedAcpAgent</c> — its
+    /// from <see cref="AgentOrchestratorHarness"/>) via <c>SeedAcpAgent</c> — its
     /// <c>SendUserInputAsync</c> is itself a non-throwing no-op, matching the enqueue-accepted shape
     /// this test pins, without needing the full duplex <c>AcpHostedAgentRuntime</c>/<c>FakeAcpAgent</c>
     /// harness the finalizer-verdict tests use.</summary>
@@ -56,8 +54,8 @@ public partial class AgentOrchestratorVendorTests {
         var time  = new FakeTimeProvider();
         var clock = new AgentActivityClock(time);
 
-        await using var orch = BuildOrchestrator(new CaptureServerConnection(), new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
-        var agent = SeedAcpAgent(orch, "send-input-acp-ok", new FakeAcpRuntime(), activityClock: clock);
+        await using var orch  = AgentOrchestratorHarness.BuildOrchestrator(new CaptureServerConnection(), new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        var             agent = AgentOrchestratorHarness.SeedAcpAgent(orch, "send-input-acp-ok", new FakeAcpRuntime(), activityClock: clock);
 
         time.Advance(TimeSpan.FromSeconds(10));
         await Assert.That(agent.ActivityClock.IdleForMs).IsGreaterThanOrEqualTo(9_900UL);
@@ -75,8 +73,8 @@ public partial class AgentOrchestratorVendorTests {
         var time   = new FakeTimeProvider();
         var clock  = new AgentActivityClock(time);
 
-        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
-        var agent = orch.SeedAgentForTest("send-input-fail", pty: new AlwaysThrowsPtyProcess(), activityClock: clock);
+        await using var orch  = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        var             agent = orch.SeedAgentForTest("send-input-fail", pty: new AlwaysThrowsPtyProcess(), activityClock: clock);
 
         time.Advance(TimeSpan.FromSeconds(10));
 
@@ -88,30 +86,4 @@ public partial class AgentOrchestratorVendorTests {
         await Assert.That(agent.ActivityClock.IdleForMs).IsGreaterThanOrEqualTo(9_900UL);
     }
 
-    /// <summary>PTY double whose every write throws — simulates a dead/closed PTY
-    /// (<see cref="IPtyProcess.WriteAsync(string)"/> is documented "unguarded and throws on a closed
-    /// pipe" — see <c>PtyHostedAgentRuntime.WriteSubmitCarriageReturnAsync</c>'s remarks), so
-    /// <c>AgentOrchestrator.HandleSendInput</c>'s delivery await never completes without an
-    /// exception and the activity-clock advance it gates on must not run.</summary>
-    sealed class AlwaysThrowsPtyProcess : IPtyProcess {
-        public int  Pid       => 5151;
-        public bool HasExited => false;
-        public int? ExitCode  => null;
-
-        public ValueTask DisposeAsync() => default;
-        public Task WaitForExitAsync(TimeSpan? _) => Task.CompletedTask;
-        public Task TerminateAsync(TimeSpan?   _) => Task.CompletedTask;
-
-#pragma warning disable CS1998
-        public async IAsyncEnumerable<byte[]> ReadOutputAsync([EnumeratorCancellation] CancellationToken _ = default) {
-            yield break;
-        }
-#pragma warning restore CS1998
-
-        public Task WriteAsync(string _) => throw new IOException("simulated closed pty pipe");
-        public Task WriteAsync(byte[] _) => throw new IOException("simulated closed pty pipe");
-
-        public void Resize(ushort _, ushort __) { }
-        public void SendInterrupt() { }
-    }
 }

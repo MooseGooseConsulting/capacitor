@@ -20,11 +20,11 @@ namespace Capacitor.Cli.Tests.Unit;
 /// keepalive: <c>TurnInFlight</c> is false, so <c>ReviewerIdleTimeout</c> governs exactly as it does
 /// for any ACP reviewer waiting on the next round.</para>
 ///
-/// Partial of <see cref="Daemon.AgentOrchestratorVendorTests"/> to reuse its <c>BuildOrchestrator</c> /
+/// Uses <see cref="AgentOrchestratorHarness"/> for its <c>BuildOrchestrator</c> /
 /// <c>CaptureServerConnection</c> / <c>SpyPtyProcessFactory</c> doubles — the same pattern
 /// <c>ReviewerReapingTests.cs</c> follows.
 /// </summary>
-public partial class AgentOrchestratorVendorTests {
+public class AntigravityReviewerReapingTests {
     static readonly TimeSpan AntigravityHangGuard = TimeSpan.FromSeconds(5);
 
     /// <summary>
@@ -34,7 +34,7 @@ public partial class AgentOrchestratorVendorTests {
     /// </summary>
     [Test]
     public async Task Antigravity_reviewer_between_turns_is_idle_reaped_like_any_other() {
-        await using var orch = BuildOrchestrator(
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             new CaptureServerConnection(), new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var time  = new FakeTimeProvider();
@@ -57,7 +57,7 @@ public partial class AgentOrchestratorVendorTests {
 
         // The REASON, not merely "it is in the list": at this elapsed time the TTL rule cannot fire,
         // so naming the idle rule pins that the plain idle path was reached at all.
-        await Assert.That(Verdicts(orch.FindReviewersToReap())).Contains(("agy-between-turns", "reviewer_idle_expired"));
+        await Assert.That(AgentOrchestratorHarness.Verdicts(orch.FindReviewersToReap())).Contains(("agy-between-turns", "reviewer_idle_expired"));
     }
 
     /// <summary>
@@ -76,7 +76,7 @@ public partial class AgentOrchestratorVendorTests {
     /// </summary>
     [Test]
     public async Task Antigravity_reviewer_mid_turn_is_not_idle_reaped_while_a_settled_one_is() {
-        await using var orch = BuildOrchestrator(
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             new CaptureServerConnection(), new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>(),
             configure: c => c.ReviewerTurnWedgeCeiling = TimeSpan.Zero);
 
@@ -111,7 +111,7 @@ public partial class AgentOrchestratorVendorTests {
         var reap = orch.FindReviewersToReap();
 
         await Assert.That(reap.Select(r => r.Id)).DoesNotContain("agy-mid-turn");
-        await Assert.That(Verdicts(reap)).Contains(("agy-settled", "reviewer_idle_expired"));
+        await Assert.That(AgentOrchestratorHarness.Verdicts(reap)).Contains(("agy-settled", "reviewer_idle_expired"));
     }
 
     /// <summary>
@@ -128,12 +128,12 @@ public partial class AgentOrchestratorVendorTests {
     /// </summary>
     [Test]
     public async Task An_antigravity_launch_wires_the_per_turn_pid_record_seam_to_this_agents_record() {
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
 
         try {
             var factory = new AntigravityRuntimeSpyFactory();
 
-            await using var orch = BuildOrchestrator(
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
                 new CaptureServerConnection(), new SpyPtyProcessFactory(),
                 new Dictionary<string, IHostedAgentLauncher>(),
                 allowedRepoPath: repoPath, extraRuntimeFactories: [factory]);

@@ -10,10 +10,10 @@ namespace Capacitor.Cli.Tests.Unit;
 /// RequesterDisplay (issue #481) is captured the same way, independently — a server may
 /// send the id without a display name (old server, or the server hasn't resolved one yet).
 /// </summary>
-public partial class AgentOrchestratorVendorTests {
+public class AgentOrchestratorRequesterTests {
     [Test]
     public async Task Launch_stamps_RequesterUserId_from_the_command() {
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
 
         try {
             var server     = new CaptureServerConnection();
@@ -22,7 +22,7 @@ public partial class AgentOrchestratorVendorTests {
 
             var launchers = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = claudeSpy };
 
-            await using var orch = BuildOrchestrator(server, ptyFactory, launchers, allowedRepoPath: repoPath);
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, ptyFactory, launchers, allowedRepoPath: repoPath);
 
             var cmd = new LaunchAgentCommand(
                 AgentId: "req-1",
@@ -49,7 +49,7 @@ public partial class AgentOrchestratorVendorTests {
 
     [Test]
     public async Task Launch_without_a_requester_leaves_RequesterUserId_null() {
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
 
         try {
             var server     = new CaptureServerConnection();
@@ -58,7 +58,7 @@ public partial class AgentOrchestratorVendorTests {
 
             var launchers = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = claudeSpy };
 
-            await using var orch = BuildOrchestrator(server, ptyFactory, launchers, allowedRepoPath: repoPath);
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, ptyFactory, launchers, allowedRepoPath: repoPath);
 
             var cmd = new LaunchAgentCommand(
                 AgentId: "req-2",
@@ -83,7 +83,7 @@ public partial class AgentOrchestratorVendorTests {
 
     [Test]
     public async Task SeedAgentForTest_with_no_requester_stamps_null() {
-        await using var orch = BuildOrchestrator(
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             new CaptureServerConnection(), new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var agent = orch.SeedAgentForTest("seed-1");
@@ -93,7 +93,7 @@ public partial class AgentOrchestratorVendorTests {
 
     [Test]
     public async Task SeedAgentForTest_stamps_the_given_requester() {
-        await using var orch = BuildOrchestrator(
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             new CaptureServerConnection(), new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var agent = orch.SeedAgentForTest("seed-2", requester: "github:99");

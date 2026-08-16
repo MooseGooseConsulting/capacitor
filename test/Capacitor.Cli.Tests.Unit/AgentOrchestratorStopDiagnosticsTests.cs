@@ -9,10 +9,10 @@ namespace Capacitor.Cli.Tests.Unit;
 /// it used to say "claude" unconditionally, which mislabelled a Cursor (or Codex, or Copilot)
 /// reviewer in the one log line an operator reads to work out which reviewer wedged.
 ///
-/// Partial of <see cref="Daemon.AgentOrchestratorVendorTests"/> to reuse its orchestrator builder,
+/// Uses <see cref="AgentOrchestratorHarness"/> for its orchestrator builder,
 /// server-connection capture, and no-op runtime double.
 /// </summary>
-public partial class AgentOrchestratorVendorTests {
+public class AgentOrchestratorStopDiagnosticsTests {
     sealed class CapturingOrchestratorLogger : ILogger<AgentOrchestrator> {
         public List<string> Messages { get; } = [];
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
@@ -29,7 +29,7 @@ public partial class AgentOrchestratorVendorTests {
     [Arguments("copilot")]
     public async Task Graceful_exit_timeout_warning_names_the_agents_own_vendor(string vendor) {
         var log = new CapturingOrchestratorLogger();
-        await using var orch = BuildOrchestrator(
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             new CaptureServerConnection(), new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher>(), logger: log);
 
@@ -54,7 +54,7 @@ public partial class AgentOrchestratorVendorTests {
     public async Task Graceful_exit_timeout_warning_still_names_claude_for_a_claude_agent() {
         // Guard against "fixing" the hardcoded name by removing the vendor from the message.
         var log = new CapturingOrchestratorLogger();
-        await using var orch = BuildOrchestrator(
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             new CaptureServerConnection(), new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher>(), logger: log);
 

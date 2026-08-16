@@ -8,25 +8,22 @@ namespace Capacitor.Cli.Tests.Unit;
 /// An unattended review-flow launch mints a per-reviewer LocalPermissionBridge token (bound to its
 /// read-only allowlist) and revokes it on teardown — but ONLY for Codex reviewers (Claude runs via
 /// bypassPermissions and needs none). An allowlist with a non-auto-approvable server fails the launch
-/// fast. Reuses the harness in <see cref="Daemon.AgentOrchestratorVendorTests"/>. The bridge's request
+/// fast. Reuses <see cref="AgentOrchestratorHarness"/>. The bridge's request
 /// classification is covered exhaustively by <see cref="LocalPermissionBridgeTests"/>; these assert
 /// the orchestrator WIRING via <c>ReviewerTokenCountForTest</c> so they needn't do real HTTP.
 /// </summary>
-public partial class AgentOrchestratorVendorTests {
-    static Dictionary<string, IHostedAgentLauncher> Launcher(string vendor) =>
-        new() { [vendor] = new SpyHostedAgentLauncher(vendor, cliPath: $"spy-{vendor}") { SupportsUnattended = true } };
-
+public class AgentOrchestratorReviewerTokenTests {
     // Starts a real bridge (binds a loopback port) → serialize with the other port-binding tests.
     [Test, NotInParallel("LocalPermissionBridgeTests")]
     public async Task ReviewFlow_codex_launch_mints_a_reviewer_token_and_revokes_it_on_cleanup() {
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
 
         try {
             var server     = new CaptureServerConnection();
             var ptyFactory = new FixedPtyProcessFactory(new OneChunkThenBlockPtyProcess());
 
-            await using var orch = BuildOrchestrator(server, ptyFactory, Launcher("codex"), allowedRepoPath: repoPath);
-            var bridge = orch.PermissionBridgeForTest;
+            await using var orch   = AgentOrchestratorHarness.BuildOrchestrator(server, ptyFactory, AgentOrchestratorHarness.Launcher("codex"), allowedRepoPath: repoPath);
+            var             bridge = orch.PermissionBridgeForTest;
             await bridge.StartAsync(CancellationToken.None);
 
             try {
@@ -60,14 +57,14 @@ public partial class AgentOrchestratorVendorTests {
     // LocalPermissionBridgeTests.Reviewer_token_with_empty_allowlist_still_auto_approves_reserved_channel_tools).
     [Test, NotInParallel("LocalPermissionBridgeTests")]
     public async Task Generic_flow_participant_codex_launch_mints_a_reviewer_token_like_a_reviewer() {
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
 
         try {
             var server     = new CaptureServerConnection();
             var ptyFactory = new FixedPtyProcessFactory(new OneChunkThenBlockPtyProcess());
 
-            await using var orch = BuildOrchestrator(server, ptyFactory, Launcher("codex"), allowedRepoPath: repoPath);
-            var bridge = orch.PermissionBridgeForTest;
+            await using var orch   = AgentOrchestratorHarness.BuildOrchestrator(server, ptyFactory, AgentOrchestratorHarness.Launcher("codex"), allowedRepoPath: repoPath);
+            var             bridge = orch.PermissionBridgeForTest;
             await bridge.StartAsync(CancellationToken.None);
 
             try {
@@ -94,14 +91,14 @@ public partial class AgentOrchestratorVendorTests {
     // its config-lock doesn't apply, so a bare tool name wouldn't be provably a kcap tool.
     [Test, NotInParallel("LocalPermissionBridgeTests")]
     public async Task ReviewFlow_non_codex_launch_mints_no_reviewer_token() {
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
 
         try {
             var server     = new CaptureServerConnection();
             var ptyFactory = new FixedPtyProcessFactory(new OneChunkThenBlockPtyProcess());
 
-            await using var orch = BuildOrchestrator(server, ptyFactory, Launcher("claude"), allowedRepoPath: repoPath);
-            var bridge = orch.PermissionBridgeForTest;
+            await using var orch   = AgentOrchestratorHarness.BuildOrchestrator(server, ptyFactory, AgentOrchestratorHarness.Launcher("claude"), allowedRepoPath: repoPath);
+            var             bridge = orch.PermissionBridgeForTest;
             await bridge.StartAsync(CancellationToken.None);
 
             try {
@@ -125,13 +122,13 @@ public partial class AgentOrchestratorVendorTests {
     // No bridge started (no port bind): a Default launch never mints a reviewer token regardless.
     [Test]
     public async Task Default_launch_uses_the_shared_token_no_reviewer_token() {
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
 
         try {
             var server     = new CaptureServerConnection();
             var ptyFactory = new FixedPtyProcessFactory(new OneChunkThenBlockPtyProcess());
 
-            await using var orch = BuildOrchestrator(server, ptyFactory, Launcher("claude"), allowedRepoPath: repoPath);
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, ptyFactory, AgentOrchestratorHarness.Launcher("claude"), allowedRepoPath: repoPath);
 
             await orch.HandleLaunchAgentForTest(new LaunchAgentCommand(
                 AgentId: "def-1", Prompt: "work", Model: "opus", Effort: null,
@@ -147,14 +144,14 @@ public partial class AgentOrchestratorVendorTests {
 
     [Test, NotInParallel("LocalPermissionBridgeTests")]
     public async Task ReviewFlow_codex_launch_with_non_auto_approvable_allowlist_fails_fast() {
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
 
         try {
             var server     = new CaptureServerConnection();
             var ptyFactory = new SpyPtyProcessFactory();
 
-            await using var orch = BuildOrchestrator(server, ptyFactory, Launcher("codex"), allowedRepoPath: repoPath);
-            var bridge = orch.PermissionBridgeForTest;
+            await using var orch   = AgentOrchestratorHarness.BuildOrchestrator(server, ptyFactory, AgentOrchestratorHarness.Launcher("codex"), allowedRepoPath: repoPath);
+            var             bridge = orch.PermissionBridgeForTest;
             await bridge.StartAsync(CancellationToken.None);   // BaseUrl must be non-null so the mint/validate runs
 
             try {
@@ -190,7 +187,7 @@ public partial class AgentOrchestratorVendorTests {
     /// </summary>
     [Test, NotInParallel("LocalPermissionBridgeTests")]
     public async Task ReviewFlow_home_redirecting_runtime_is_minted_a_delivery_capability_without_borrowing() {
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
 
         try {
             var server  = new CaptureServerConnection();
@@ -199,7 +196,7 @@ public partial class AgentOrchestratorVendorTests {
                 ReviewFlowRedirectsHome = true
             };
 
-            await using var orch = BuildOrchestrator(
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
                 server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>(),
                 allowedRepoPath: repoPath, extraRuntimeFactories: [factory]);
             var bridge = orch.PermissionBridgeForTest;
@@ -250,13 +247,13 @@ public partial class AgentOrchestratorVendorTests {
     /// only difference between the two is the declaration itself.</summary>
     [Test, NotInParallel("LocalPermissionBridgeTests")]
     public async Task ReviewFlow_runtime_that_keeps_its_home_is_minted_no_delivery_capability() {
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
 
         try {
             var server  = new CaptureServerConnection();
             var factory = new SpyHostedAgentRuntimeFactory("antigravity") { SupportsUnattended = true };
 
-            await using var orch = BuildOrchestrator(
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
                 server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>(),
                 allowedRepoPath: repoPath, extraRuntimeFactories: [factory]);
             var bridge = orch.PermissionBridgeForTest;

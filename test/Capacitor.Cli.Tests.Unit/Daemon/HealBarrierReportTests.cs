@@ -1,19 +1,18 @@
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Daemon.Pty;
 using Capacitor.Cli.Daemon.Services;
-using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Capacitor.Cli.Tests.Unit.Daemon;
 
 // Phase B2-b (sequenced-settlement design): the orchestrator now owns an epoch-scoped
 // SequencedCommandProcessor, advertises its Epoch/HighestAcceptedSeq/LastProcessedSeq counters on the
 // self-report + connect payload, and exposes the single confirmed-death-precedence liveness read
-// (ReadLiveness) the processor uses to answer duplicate CommandAcks. This partial reuses the vendor
-// test class's BuildOrchestrator/CaptureServerConnection/SpyPtyProcessFactory/SeedAgentForTest harness.
-public partial class AgentOrchestratorVendorTests {
+// (ReadLiveness) the processor uses to answer duplicate CommandAcks. Reuses AgentOrchestratorHarness
+// (BuildOrchestrator/CaptureServerConnection/SpyPtyProcessFactory/SeedAgentForTest).
+public class HealBarrierReportTests {
     [Test]
     public async Task Report_advertises_sequencing_capability_and_counters() {
-        await using var orch = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(new CaptureServerConnection(), new SpyPtyProcessFactory(),
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(new CaptureServerConnection(), new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher>());
         var report = orch.BuildStatusReport();
         await Assert.That(report.Epoch).IsNotNull();
@@ -23,7 +22,7 @@ public partial class AgentOrchestratorVendorTests {
 
     [Test]
     public async Task ReadLiveness_follows_confirmed_death_precedence() {
-        await using var orch = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(new CaptureServerConnection(), new SpyPtyProcessFactory(),
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(new CaptureServerConnection(), new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher>());
         orch.SeedAgentForTest("live", LaunchKind.ReviewFlow, status: "Running");
         await Assert.That(orch.ReadLiveness("live")).IsEqualTo(AgentLiveness.Live);
@@ -38,7 +37,7 @@ public partial class AgentOrchestratorVendorTests {
         // invariant (CleanupAgentAsync adds to _quarantine BEFORE removing from _agents) keeps the id
         // continuously in _agents ∪ _quarantine until the drain, so deadness is monotonic.
         var server = new CaptureServerConnection();
-        await using var orch = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(server, new SpyPtyProcessFactory(),
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher>());
         using var dummy = DummyProcess.StartSleep(30);
         orch.SeedAgentForTest("rev", LaunchKind.ReviewFlow, status: "Running", flowRunId: "f", flowRole: "reviewer",
@@ -69,7 +68,7 @@ public partial class AgentOrchestratorVendorTests {
     [Test]
     public async Task Sequenced_launch_over_capacity_emits_daemon_capacity_rejection() {
         var server = new SeqCaptureServerConnection();
-        await using var orch = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             server, new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher> { ["claude"] = new SpyHostedAgentLauncher("claude", cliPath: "spy-claude") },
             configure: c => c.MaxConcurrentAgents = 0);
@@ -83,7 +82,7 @@ public partial class AgentOrchestratorVendorTests {
         // DrainLaneForTest after submitting), so the terminal rejection is already settled by the
         // time this returns — the poll below is redundant but harmless, kept as defense-in-depth
         // against a future regression reopening the async gap between acceptance and execution.
-        await SpinUntilAsync(() => server.Rejects.Count > 0, TimeSpan.FromSeconds(30));
+        await WaitHarness.SpinUntilAsync(() => server.Rejects.Count > 0, TimeSpan.FromSeconds(30));
 
         await Assert.That(server.Rejects.Count).IsEqualTo(1);
         await Assert.That(server.Rejects[0].Reason).IsEqualTo(CommandRejectedReason.DaemonCapacity);
@@ -101,7 +100,7 @@ public partial class AgentOrchestratorVendorTests {
     [Test]
     public async Task Stop_via_v2_advances_watermark_and_a_later_report_omits_the_confirmed_dead_id() {
         var server = new CaptureServerConnection();
-        await using var orch = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(server, new SpyPtyProcessFactory(),
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher>());
         var agent = orch.SeedAgentForTest("rev", LaunchKind.ReviewFlow, status: "Running", flowRunId: "f", flowRole: "reviewer");
         var epoch = orch.DaemonEpochForTest;
@@ -119,7 +118,7 @@ public partial class AgentOrchestratorVendorTests {
     [Test]
     public async Task Legacy_unsequenced_launch_never_advances_the_watermark() {
         var server = new CaptureServerConnection();
-        await using var orch = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(server, new SpyPtyProcessFactory(),
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher>());
         // No Epoch/Seq/CommandId -> legacy lane.
         await orch.HandleLaunchAgentForTest(new LaunchAgentCommand("x", "hi", "opus", null, "/tmp", null, null, "bogus"));
@@ -136,7 +135,7 @@ public partial class AgentOrchestratorVendorTests {
         var server = new SeqCaptureServerConnection();
         // A VALID vendor so the fail-closed reason can ONLY be the malformed-tuple route, not the legacy
         // lane's unknown-vendor rejection (which would mask a missing fix).
-        await using var orch = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(server, new SpyPtyProcessFactory(),
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher> { ["claude"] = new SpyHostedAgentLauncher("claude", cliPath: "spy-claude") });
 
         // Epoch + Seq present, CommandId ABSENT -> malformed.
@@ -172,32 +171,4 @@ public partial class AgentOrchestratorVendorTests {
         public void SendInterrupt() { }
     }
 
-    /// <summary>Captures the one-way sequenced CommandAck/CommandRejected sends (synchronously, so an
-    /// awaited SubmitAsync has already recorded them) and no-ops everything else the capacity-reject path
-    /// touches. IsReady is forced true so the base sends aren't short-circuited before our override.
-    ///
-    /// <para>§3.3: also overrides <see cref="AgentRegisteredAsync"/> so a genuinely SUCCESSFUL
-    /// sequenced launch (one that reaches <c>RegisterAgentAsync</c>'s awaited, un-guarded
-    /// <c>_server.AgentRegisteredAsync(...)</c> call) doesn't fault on the base implementation's
-    /// <c>_hub.InvokeAsync</c> against a never-started HubConnection — no pre-Task-5 test ever drove a
-    /// full success through THIS server double, since every existing capacity/malformed-tuple test is
-    /// rejected before reaching registration.</para></summary>
-    sealed class SeqCaptureServerConnection() : ServerConnection(
-        new() { Name = "test", ServerUrl = "http://127.0.0.1:1" },
-        NullLoggerFactory.Instance,
-        NullLogger<ServerConnection>.Instance
-    ) {
-        internal override bool IsReady => true;
-        public List<CommandRejected> Rejects       { get; } = [];
-        public List<CommandAck>      Acks          { get; } = [];
-        public List<(string AgentId, string Reason)> LaunchFaileds { get; } = [];
-
-        public override Task LaunchFailedAsync(string agentId, string reason) { lock (LaunchFaileds) LaunchFaileds.Add((agentId, reason)); return Task.CompletedTask; }
-        public override Task CommandRejectedAsync(CommandRejected rej) { lock (Rejects) Rejects.Add(rej); return Task.CompletedTask; }
-        public override Task CommandAckAsync(CommandAck ack)           { lock (Acks)    Acks.Add(ack);    return Task.CompletedTask; }
-
-        public override Task AgentRegisteredAsync(
-                string agentId, string? prompt, string? model, string? effort, string? repoPath,
-                string? sandboxPolicy = null, string? approvalPolicy = null) => Task.CompletedTask;
-    }
 }

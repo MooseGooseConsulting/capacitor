@@ -11,13 +11,13 @@ namespace Capacitor.Cli.Tests.Unit;
 /// that Dispose without a run-once guard would recreate the crash exactly, so these contracts
 /// pin body-ran-once AND cts-ends-cancelled-and-disposed durably.
 ///
-/// Partial of <see cref="Daemon.AgentOrchestratorVendorTests"/> to reuse its orchestrator builder and
+/// Uses <see cref="AgentOrchestratorHarness"/> for its orchestrator builder and
 /// server-connection capture.
 /// </summary>
-public partial class AgentOrchestratorVendorTests {
+public class AgentOrchestratorDisposeTests {
     [Test]
     public async Task Orchestrator_dispose_twice_does_not_throw() {
-        var orch = BuildOrchestrator(
+        var orch = AgentOrchestratorHarness.BuildOrchestrator(
             new CaptureServerConnection(), new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher>());
 
@@ -29,7 +29,7 @@ public partial class AgentOrchestratorVendorTests {
 
     [Test]
     public async Task Orchestrator_second_dispose_does_not_reenter_the_body() {
-        var orch = BuildOrchestrator(
+        var orch = AgentOrchestratorHarness.BuildOrchestrator(
             new CaptureServerConnection(), new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher>());
 
@@ -43,7 +43,7 @@ public partial class AgentOrchestratorVendorTests {
 
     [Test]
     public async Task A_faulting_cancellation_callback_does_not_skip_child_teardown() {
-        var orch = BuildOrchestrator(
+        var orch = AgentOrchestratorHarness.BuildOrchestrator(
             new CaptureServerConnection(), new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher>());
 
@@ -70,7 +70,7 @@ public partial class AgentOrchestratorVendorTests {
 
     [Test]
     public async Task Orchestrator_dispose_cancels_and_disposes_its_shutdown_cts() {
-        var orch = BuildOrchestrator(
+        var orch = AgentOrchestratorHarness.BuildOrchestrator(
             new CaptureServerConnection(), new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher>());
 

@@ -1,6 +1,4 @@
 // test/Capacitor.Cli.Tests.Unit/AgentOrchestratorAcpForwardingTests.cs
-using System.Runtime.CompilerServices;
-using System.Threading.Channels;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Daemon.Services;
 
@@ -10,7 +8,7 @@ namespace Capacitor.Cli.Tests.Unit;
 /// Option B task 4: covers the orchestrator wiring that ties tasks 1–3 into the launch/
 /// teardown lifecycle — <c>AgentOrchestrator.HandleLaunchAgent</c>'s post-registration ACP
 /// bind + forwarder start, and <see cref="AgentOrchestrator"/>'s teardown path's bounded final-drain
-/// before <c>EndAgentSession</c>. Reuses the shared <see cref="Daemon.AgentOrchestratorVendorTests"/> test
+/// before <c>EndAgentSession</c>. Reuses the shared <see cref="AgentOrchestratorHarness"/> test
 /// seam (<c>BuildOrchestrator</c>, <c>CaptureServerConnection</c>) — the ACP-specific capture fields
 /// added there (<c>AcpCallOrder</c>, <c>AcpSessionStartedCalls</c>, <c>AcpEventsCalls</c>,
 /// <c>AcpEventsCallSignal</c>) let these tests assert exact call order deterministically instead of
@@ -18,38 +16,25 @@ namespace Capacitor.Cli.Tests.Unit;
 /// <c>HandleLaunchAgent</c> (must never stall the launch on a slow/blocked bind — see
 /// <c>StartAcpForwardingAsync</c>'s remarks).
 /// </summary>
-public partial class AgentOrchestratorVendorTests {
-    static readonly TimeSpan AcpHangGuard = TimeSpan.FromSeconds(5);
-
-    static LaunchAgentCommand NewCursorLaunch(string agentId, string repoPath) => new(
-        AgentId: agentId,
-        Prompt: "do work",
-        Model: "auto",
-        Effort: null,
-        RepoPath: repoPath,
-        Tools: null,
-        AttachmentIds: null,
-        Vendor: "cursor"
-    );
-
+public class AgentOrchestratorAcpForwardingTests {
     // ── Bind ordering (design spec §2.3) ────────────────────────────────────────────────────────
 
     [Test]
     public async Task Cursor_launch_binds_after_register_and_before_events_and_registers_the_binding() {
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
 
         try {
             var server        = new CaptureServerConnection();
             var ptyFactory    = new SpyPtyProcessFactory();
             var cursorFactory = new SpyAcpHostedAgentRuntimeFactory();
 
-            await using var orch = BuildOrchestrator(
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
                 server, ptyFactory, new Dictionary<string, IHostedAgentLauncher>(),
                 allowedRepoPath: repoPath, extraRuntimeFactories: [cursorFactory]
             );
             orch.AcpFinalDrainBudget = TimeSpan.FromMilliseconds(200);
 
-            var cmd = NewCursorLaunch("agent-acp-bind", repoPath);
+            var cmd = AgentOrchestratorHarness.NewCursorLaunch("agent-acp-bind", repoPath);
 
             await orch.HandleLaunchAgentForTest(cmd);
 
@@ -57,7 +42,7 @@ public partial class AgentOrchestratorVendorTests {
             // forwarder) is fire-and-forget from HandleLaunchAgent (must never stall a launch on a
             // slow bind) — wait deterministically for the first AcpSessionEvents call (always
             // SessionStarted@0) as proof the whole chain ran at least once.
-            await server.AcpEventsCallSignal.Reader.ReadAsync().AsTask().WaitAsync(AcpHangGuard);
+            await server.AcpEventsCallSignal.Reader.ReadAsync().AsTask().WaitAsync(WaitHarness.AcpHangGuard);
 
             var registerIndex    = server.AcpCallOrder.IndexOf("register:agent-acp-bind");
             var bindIndex        = server.AcpCallOrder.IndexOf("bind:agent-acp-bind");
@@ -88,24 +73,24 @@ public partial class AgentOrchestratorVendorTests {
 
     [Test]
     public async Task Cursor_launch_forwards_SessionStarted_first_then_subsequent_envelopes_with_monotonic_seq() {
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
 
         try {
             var server        = new CaptureServerConnection();
             var ptyFactory    = new SpyPtyProcessFactory();
             var cursorFactory = new SpyAcpHostedAgentRuntimeFactory();
 
-            await using var orch = BuildOrchestrator(
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
                 server, ptyFactory, new Dictionary<string, IHostedAgentLauncher>(),
                 allowedRepoPath: repoPath, extraRuntimeFactories: [cursorFactory]
             );
             orch.AcpFinalDrainBudget = TimeSpan.FromMilliseconds(200);
 
-            var cmd = NewCursorLaunch("agent-acp-forward", repoPath);
+            var cmd = AgentOrchestratorHarness.NewCursorLaunch("agent-acp-forward", repoPath);
 
             await orch.HandleLaunchAgentForTest(cmd);
 
-            var call1 = await server.AcpEventsCallSignal.Reader.ReadAsync().AsTask().WaitAsync(AcpHangGuard);
+            var call1 = await server.AcpEventsCallSignal.Reader.ReadAsync().AsTask().WaitAsync(WaitHarness.AcpHangGuard);
             await Assert.That(call1).IsEqualTo(1);
 
             var firstBatch = server.AcpEventsCalls[0].Envelopes;
@@ -118,7 +103,7 @@ public partial class AgentOrchestratorVendorTests {
             // must pick it up off the SAME channel and assign it the next monotonic seq.
             cursorFactory.LastRuntime.EnvelopesWriter.TryWrite(new AcpEventEnvelope(Kind: AcpEventKind.AssistantText, Text: "hello"));
 
-            var call2 = await server.AcpEventsCallSignal.Reader.ReadAsync().AsTask().WaitAsync(AcpHangGuard);
+            var call2 = await server.AcpEventsCallSignal.Reader.ReadAsync().AsTask().WaitAsync(WaitHarness.AcpHangGuard);
             await Assert.That(call2).IsEqualTo(2);
 
             var secondBatch = server.AcpEventsCalls[1].Envelopes;
@@ -135,7 +120,7 @@ public partial class AgentOrchestratorVendorTests {
 
     [Test]
     public async Task Teardown_drains_the_transcript_before_ending_the_session_then_unregisters_the_binding() {
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
 
         try {
             var unregistered  = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -143,17 +128,17 @@ public partial class AgentOrchestratorVendorTests {
             var ptyFactory    = new SpyPtyProcessFactory();
             var cursorFactory = new SpyAcpHostedAgentRuntimeFactory();
 
-            await using var orch = BuildOrchestrator(
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
                 server, ptyFactory, new Dictionary<string, IHostedAgentLauncher>(),
                 allowedRepoPath: repoPath, extraRuntimeFactories: [cursorFactory]
             );
             orch.AcpFinalDrainBudget = TimeSpan.FromSeconds(2); // long enough that the gated send below is
                                                                  // still observably pending at the check point
 
-            var cmd = NewCursorLaunch("agent-acp-teardown", repoPath);
+            var cmd = AgentOrchestratorHarness.NewCursorLaunch("agent-acp-teardown", repoPath);
 
             await orch.HandleLaunchAgentForTest(cmd);
-            await server.AcpEventsCallSignal.Reader.ReadAsync().AsTask().WaitAsync(AcpHangGuard); // SessionStarted@0
+            await server.AcpEventsCallSignal.Reader.ReadAsync().AsTask().WaitAsync(WaitHarness.AcpHangGuard); // SessionStarted@0
 
             // Gate the NEXT AcpSessionEvents call (the trailing "final words" send) so its
             // completion is entirely test-controlled, rather than racing CleanupAgentAsync's own
@@ -167,7 +152,7 @@ public partial class AgentOrchestratorVendorTests {
 
             // Ends the process (releases ReadOutputAsync -> FinalizeAgentRunAsync). HandleStopAgent
             // itself never touches ACP forwarding, so it returns promptly regardless of the gate.
-            await orch.HandleStopAgentForTest(cmd.AgentId).WaitAsync(AcpHangGuard);
+            await orch.HandleStopAgentForTest(cmd.AgentId).WaitAsync(WaitHarness.AcpHangGuard);
 
             // Give FinalizeAgentRunAsync a moment to reach (and block inside) the gated send.
             await Task.Delay(TimeSpan.FromMilliseconds(150));
@@ -180,7 +165,7 @@ public partial class AgentOrchestratorVendorTests {
             // Release the gate: the drain completes comfortably inside its 2s budget.
             gate.TrySetResult();
 
-            await unregistered.Task.WaitAsync(AcpHangGuard);
+            await unregistered.Task.WaitAsync(WaitHarness.AcpHangGuard);
 
             // The runtime was disposed (completing the transcript channel) as part of the drain.
             await Assert.That(runtime.DisposeCount).IsGreaterThanOrEqualTo(1);
@@ -207,7 +192,7 @@ public partial class AgentOrchestratorVendorTests {
 
     [Test]
     public async Task Teardown_proceeds_to_EndAgentSession_within_the_budget_even_if_the_drain_never_completes() {
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
         using var neverRecovers = new CancellationTokenSource();
 
         try {
@@ -220,14 +205,14 @@ public partial class AgentOrchestratorVendorTests {
             var ptyFactory    = new SpyPtyProcessFactory();
             var cursorFactory = new SpyAcpHostedAgentRuntimeFactory();
 
-            await using var orch = BuildOrchestrator(
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
                 server, ptyFactory, new Dictionary<string, IHostedAgentLauncher>(),
                 allowedRepoPath: repoPath, extraRuntimeFactories: [cursorFactory]
             );
             var budget = TimeSpan.FromMilliseconds(300);
             orch.AcpFinalDrainBudget = budget; // must NOT wait the real 5s default
 
-            var cmd = NewCursorLaunch("agent-acp-hang", repoPath);
+            var cmd = AgentOrchestratorHarness.NewCursorLaunch("agent-acp-hang", repoPath);
 
             await orch.HandleLaunchAgentForTest(cmd);
 
@@ -236,12 +221,12 @@ public partial class AgentOrchestratorVendorTests {
             await Task.Delay(TimeSpan.FromMilliseconds(100));
 
             var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-            await orch.HandleStopAgentForTest(cmd.AgentId).WaitAsync(AcpHangGuard);
+            await orch.HandleStopAgentForTest(cmd.AgentId).WaitAsync(WaitHarness.AcpHangGuard);
 
             // The bounded drain gives up after ~budget; EndAgentSession must still run promptly —
             // proving the permanently-hung send never pinned teardown (the load-bearing guarantee
             // this whole mechanism exists to protect).
-            await unregistered.Task.WaitAsync(AcpHangGuard);
+            await unregistered.Task.WaitAsync(WaitHarness.AcpHangGuard);
             stopwatch.Stop();
 
             // Timing is the discriminator: too fast (well under the budget) would mean no drain was
@@ -270,7 +255,7 @@ public partial class AgentOrchestratorVendorTests {
     /// </summary>
     [Test]
     public async Task Drain_timeout_cancels_the_forwarder_so_its_RunTask_completes_without_leaking() {
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
         using var neverRecovers = new CancellationTokenSource();
 
         try {
@@ -283,14 +268,14 @@ public partial class AgentOrchestratorVendorTests {
             var ptyFactory    = new SpyPtyProcessFactory();
             var cursorFactory = new SpyAcpHostedAgentRuntimeFactory();
 
-            await using var orch = BuildOrchestrator(
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
                 server, ptyFactory, new Dictionary<string, IHostedAgentLauncher>(),
                 allowedRepoPath: repoPath, extraRuntimeFactories: [cursorFactory]
             );
             var budget = TimeSpan.FromMilliseconds(300);
             orch.AcpFinalDrainBudget = budget; // must NOT wait the real 5s default
 
-            var cmd = NewCursorLaunch("agent-acp-cancel-on-timeout", repoPath);
+            var cmd = AgentOrchestratorHarness.NewCursorLaunch("agent-acp-cancel-on-timeout", repoPath);
 
             await orch.HandleLaunchAgentForTest(cmd);
 
@@ -300,14 +285,14 @@ public partial class AgentOrchestratorVendorTests {
 
             var forwarderHandle = orch.GetAgentForTest(cmd.AgentId)!.AcpForwarder!;
 
-            await orch.HandleStopAgentForTest(cmd.AgentId).WaitAsync(AcpHangGuard);
-            await unregistered.Task.WaitAsync(AcpHangGuard);
+            await orch.HandleStopAgentForTest(cmd.AgentId).WaitAsync(WaitHarness.AcpHangGuard);
+            await unregistered.Task.WaitAsync(WaitHarness.AcpHangGuard);
 
             // The crux of the fix: cancelling the per-agent CTS on drain-timeout must actually reach
             // the forwarder's in-flight send and unwind it — RunTask completes on its own, with NO
             // help from this test (contrast the budget test above, which has to Cancel() its own
             // blockCts in a `finally` to avoid leaking the background task).
-            await forwarderHandle.RunTask.WaitAsync(AcpHangGuard);
+            await forwarderHandle.RunTask.WaitAsync(WaitHarness.AcpHangGuard);
         } finally {
             neverRecovers.Cancel(); // belt-and-suspenders — a no-op if the fix already released it
             cleanup();
@@ -326,7 +311,7 @@ public partial class AgentOrchestratorVendorTests {
     /// </summary>
     [Test]
     public async Task Agent_finalized_before_the_bind_completes_registers_no_binding_for_the_late_bind() {
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
 
         try {
             var unregistered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -334,7 +319,7 @@ public partial class AgentOrchestratorVendorTests {
             var ptyFactory    = new SpyPtyProcessFactory();
             var cursorFactory = new SpyAcpHostedAgentRuntimeFactory();
 
-            await using var orch = BuildOrchestrator(
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
                 server, ptyFactory, new Dictionary<string, IHostedAgentLauncher>(),
                 allowedRepoPath: repoPath, extraRuntimeFactories: [cursorFactory]
             );
@@ -345,7 +330,7 @@ public partial class AgentOrchestratorVendorTests {
             var bindGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             server.PendingAcpBindGate = bindGate;
 
-            var cmd = NewCursorLaunch("agent-acp-stale-bind", repoPath);
+            var cmd = AgentOrchestratorHarness.NewCursorLaunch("agent-acp-stale-bind", repoPath);
 
             await orch.HandleLaunchAgentForTest(cmd);
 
@@ -356,8 +341,8 @@ public partial class AgentOrchestratorVendorTests {
             await Assert.That(orch.GetAgentForTest(cmd.AgentId)!.AcpForwarder).IsNull(); // bind hasn't resolved yet
 
             // Run the agent's WHOLE lifecycle to completion WHILE the bind is still pending.
-            await orch.HandleStopAgentForTest(cmd.AgentId).WaitAsync(AcpHangGuard);
-            await unregistered.Task.WaitAsync(AcpHangGuard);
+            await orch.HandleStopAgentForTest(cmd.AgentId).WaitAsync(WaitHarness.AcpHangGuard);
+            await unregistered.Task.WaitAsync(WaitHarness.AcpHangGuard);
             await Assert.That(orch.GetAgentForTest(cmd.AgentId)).IsNull(); // CleanupAgentAsync removed it
 
             // NOW the late bind "succeeds" server-side.
@@ -381,7 +366,7 @@ public partial class AgentOrchestratorVendorTests {
 
     [Test]
     public async Task Claude_launch_never_touches_the_Acp_hub_methods() {
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
 
         try {
             // A PTY that stays "running" (ReadOutputAsync blocks) until stopped — keeps the agent
@@ -393,7 +378,7 @@ public partial class AgentOrchestratorVendorTests {
             var claudeSpy   = new SpyHostedAgentLauncher("claude", cliPath: "spy-claude");
             var launchers   = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = claudeSpy };
 
-            await using var orch = BuildOrchestrator(server, ptyFactory, launchers, allowedRepoPath: repoPath);
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, ptyFactory, launchers, allowedRepoPath: repoPath);
 
             var cmd = new LaunchAgentCommand(
                 AgentId: "agent-pty-unaffected",
@@ -426,23 +411,23 @@ public partial class AgentOrchestratorVendorTests {
 
     [Test]
     public async Task Forwarder_fault_does_not_crash_the_agent_or_the_orchestrator() {
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
 
         try {
             var server        = new CaptureServerConnection();
             var ptyFactory    = new SpyPtyProcessFactory();
             var cursorFactory = new SpyAcpHostedAgentRuntimeFactory();
 
-            await using var orch = BuildOrchestrator(
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
                 server, ptyFactory, new Dictionary<string, IHostedAgentLauncher>(),
                 allowedRepoPath: repoPath, extraRuntimeFactories: [cursorFactory]
             );
             orch.AcpFinalDrainBudget = TimeSpan.FromMilliseconds(200);
 
-            var cmd = NewCursorLaunch("agent-acp-fault", repoPath);
+            var cmd = AgentOrchestratorHarness.NewCursorLaunch("agent-acp-fault", repoPath);
 
             await orch.HandleLaunchAgentForTest(cmd);
-            await server.AcpEventsCallSignal.Reader.ReadAsync().AsTask().WaitAsync(AcpHangGuard); // SessionStarted@0
+            await server.AcpEventsCallSignal.Reader.ReadAsync().AsTask().WaitAsync(WaitHarness.AcpHangGuard); // SessionStarted@0
 
             var agent           = orch.GetAgentForTest(cmd.AgentId)!;
             var forwarderHandle = agent.AcpForwarder!;
@@ -455,11 +440,11 @@ public partial class AgentOrchestratorVendorTests {
 
             // The wrapped run task must complete SUCCESSFULLY (not faulted) — proving the fault
             // never escaped to crash the agent or the daemon.
-            await forwarderHandle.RunTask.WaitAsync(AcpHangGuard);
+            await forwarderHandle.RunTask.WaitAsync(WaitHarness.AcpHangGuard);
 
             // The orchestrator itself is unaffected — the still-live agent can still be stopped
             // cleanly afterwards.
-            await orch.HandleStopAgentForTest(cmd.AgentId).WaitAsync(AcpHangGuard);
+            await orch.HandleStopAgentForTest(cmd.AgentId).WaitAsync(WaitHarness.AcpHangGuard);
         } finally {
             cleanup();
         }
@@ -467,99 +452,4 @@ public partial class AgentOrchestratorVendorTests {
 
     // ── Test doubles ─────────────────────────────────────────────────────
 
-    /// <summary>
-    /// <see cref="IHostedAgentRuntime"/> + <see cref="IAcpTranscriptSource"/> test double mirroring
-    /// the real <c>AcpHostedAgentRuntime</c>'s dual role (task 2) closely enough to exercise task 4's
-    /// wiring: <see cref="ReadOutputAsync"/> stays open until <see cref="TerminateAsync"/>/cancellation
-    /// (exactly like the real ACP runtime, and <see cref="FakeHostedAgentRuntime"/> above), and
-    /// <see cref="DisposeAsync"/> completes the <see cref="Envelopes"/> channel — mirroring the real
-    /// runtime's <c>DisposeAsync</c> completing its transcript channel — so the bounded final-drain
-    /// path has something real to observe.
-    /// </summary>
-    sealed class FakeAcpRuntime : IHostedAgentRuntime, IAcpTranscriptSource {
-        readonly Channel<AcpEventEnvelope> _envelopes = Channel.CreateUnbounded<AcpEventEnvelope>();
-
-        public string Vendor              => "cursor";
-        public int    Pid                 => 0;
-        public bool   HasExited           => ExitGate.Task.IsCompleted;
-        public int?   ExitCode            => 0;
-        public bool   EmitsTerminalOutput => false;
-
-        public string  AcpSessionId  { get; init; } = "acp-sess-1";
-        public string  Cwd           { get; init; } = "/tmp/acp-wt";
-        public string? ResolvedModel { get; init; } = "gpt-x";
-
-        public ChannelReader<AcpEventEnvelope> Envelopes       => _envelopes.Reader;
-        public ChannelWriter<AcpEventEnvelope> EnvelopesWriter => _envelopes.Writer;
-
-        /// <summary>Released by a test (via TerminateAsync, driven by HandleStopAgent) to simulate
-        /// the ACP process exiting.</summary>
-        public TaskCompletionSource ExitGate { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        /// <summary>Number of times DisposeAsync ran — proves teardown actually disposed the
-        /// runtime (and, since it's harmless to call twice, that CleanupAgentAsync's own later
-        /// dispose call is a safe no-op-ish repeat, exactly like the real idempotent-guarded runtime).</summary>
-        public int DisposeCount { get; private set; }
-
-        public async IAsyncEnumerable<byte[]> ReadOutputAsync([EnumeratorCancellation] CancellationToken ct = default) {
-            var ctTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            await using var reg = ct.Register(() => ctTcs.TrySetResult());
-            await Task.WhenAny(ExitGate.Task, ctTcs.Task).ConfigureAwait(false);
-
-            yield break;
-        }
-
-        public Task SendUserInputAsync(string    text) => Task.CompletedTask;
-        public Task SendSpecialKeyAsync(string    key) => Task.CompletedTask;
-        public Task SendRawInputAsync(byte[]      data) => Task.CompletedTask;
-        public void Resize(ushort                 cols, ushort rows) { }
-        public Task RequestGracefulStopAsync() => Task.CompletedTask;
-        public Task WaitForExitAsync(TimeSpan?    timeout = null) => Task.CompletedTask;
-
-        public Task TerminateAsync(TimeSpan? timeout = null) {
-            ExitGate.TrySetResult();
-
-            return Task.CompletedTask;
-        }
-
-        public ValueTask DisposeAsync() {
-            DisposeCount++;
-            _envelopes.Writer.TryComplete(); // mirrors task 2's real DisposeAsync completing the transcript channel
-
-            return default;
-        }
-    }
-
-    /// <summary>
-    /// <see cref="IHostedAgentRuntimeFactory"/> test double for the ACP seam: returns a
-    /// <see cref="HostedRuntimeStart"/> with <see cref="FakeAcpRuntime"/> threaded onto BOTH
-    /// <c>Runtime</c> and <c>Transcript</c> — mirroring <c>AcpHostedAgentRuntimeFactory</c>'s real
-    /// wiring, where the runtime IS its own transcript source.
-    /// </summary>
-    sealed class SpyAcpHostedAgentRuntimeFactory(string vendor = "cursor") : IHostedAgentRuntimeFactory {
-        public string Vendor             { get; } = vendor;
-        public bool   SupportsUnattended => false;
-
-        /// <summary>Threaded onto the <see cref="FakeAcpRuntime"/> as its handshake-confirmed model —
-        /// null stands in for a request that did not take (no match / agent rejected the option).</summary>
-        public string? ResolvedModel { get; init; } = "gpt-x";
-
-        public int                  StartCalls  { get; private set; }
-        public string?              LastAgentId { get; private set; }
-        public RuntimeStartContext? LastContext { get; private set; }
-        public FakeAcpRuntime?      LastRuntime { get; private set; }
-
-        public bool IsAvailable() => true;
-
-        public Task<HostedRuntimeStart> StartAsync(RuntimeStartContext ctx, CancellationToken ct) {
-            StartCalls++;
-            LastAgentId = ctx.AgentId;
-            LastContext = ctx;
-
-            var runtime = new FakeAcpRuntime { ResolvedModel = ResolvedModel };
-            LastRuntime = runtime;
-
-            return Task.FromResult(new HostedRuntimeStart(runtime, McpConfigPath: null, Transcript: runtime));
-        }
-    }
 }

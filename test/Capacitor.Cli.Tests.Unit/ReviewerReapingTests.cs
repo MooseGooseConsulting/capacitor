@@ -20,19 +20,11 @@ namespace Capacitor.Cli.Tests.Unit;
 /// specifically to prove it does nothing — they are the regression fence for the
 /// reviewer-reaped-between-rounds defect.</para>
 ///
-/// Partial of <see cref="Daemon.AgentOrchestratorVendorTests"/> to reuse its <c>BuildOrchestrator</c>/
+/// Uses <see cref="AgentOrchestratorHarness"/> for its <c>BuildOrchestrator</c>/
 /// <c>SeedAgentForTest</c>/<c>CaptureServerConnection</c>/<c>SpyPtyProcessFactory</c> test doubles —
 /// same pattern as <c>ReviewerTtlTests.cs</c>/<c>OneExecutionDomainTests.cs</c>.
 /// </summary>
-public partial class AgentOrchestratorVendorTests {
-    /// <summary>(id, reason) projection of a selection. The decision-table tests below assert on the
-    /// RULE that fired; the rest of <see cref="AgentOrchestrator.ReapCandidate"/> is claim evidence
-    /// (the captured activity generation and whether the rule is activity-fenced), which the claim
-    /// tests at the bottom of this file pin instead.</summary>
-    internal static IEnumerable<(string Id, string Reason)> Verdicts(
-            IEnumerable<AgentOrchestrator.ReapCandidate> selection) =>
-        selection.Select(c => (c.Id, c.Reason));
-
+public class ReviewerReapingTests {
     /// <summary>
     /// THE regression this fix exists for: a reviewer that has finished round 1 and is waiting while
     /// the driver spends half an hour addressing its findings emits nothing, so <c>IdleForMs</c>
@@ -47,7 +39,7 @@ public partial class AgentOrchestratorVendorTests {
     /// </summary>
     [Test]
     public async Task Reviewer_idle_30m_between_rounds_is_not_reaped_despite_a_server_sent_bound() {
-        await using var orch = BuildOrchestrator(
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             new CaptureServerConnection(), new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
         // defaults: 6h lifetime / 2h idle / 60m wedge ceiling
 
@@ -69,7 +61,7 @@ public partial class AgentOrchestratorVendorTests {
     /// reason is asserted individually so the two remain independently load-bearing.</summary>
     [Test]
     public async Task Legacy_ttl_and_idle_still_fire_for_a_bound_carrying_reviewer() {
-        await using var orch = BuildOrchestrator(
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             new CaptureServerConnection(), new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
         // defaults: 6h lifetime / 2h idle
 
@@ -88,8 +80,8 @@ public partial class AgentOrchestratorVendorTests {
 
         var reap = orch.FindReviewersToReap();
 
-        await Assert.That(Verdicts(reap)).Contains(("bound-active-old", "reviewer_ttl_expired"));
-        await Assert.That(Verdicts(reap)).Contains(("bound-idle-young", "reviewer_idle_expired"));
+        await Assert.That(AgentOrchestratorHarness.Verdicts(reap)).Contains(("bound-active-old", "reviewer_ttl_expired"));
+        await Assert.That(AgentOrchestratorHarness.Verdicts(reap)).Contains(("bound-idle-young", "reviewer_idle_expired"));
     }
 
     /// <summary>A held turn suppresses the plain idle rule outright — idle 5m with <c>TurnInFlight</c>
@@ -97,7 +89,7 @@ public partial class AgentOrchestratorVendorTests {
     /// rule: 5m is past the seeded 60s bound.)</summary>
     [Test]
     public async Task TurnInFlight_defers_the_idle_reap() {
-        await using var orch = BuildOrchestrator(
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             new CaptureServerConnection(), new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var time  = new FakeTimeProvider();
@@ -117,7 +109,7 @@ public partial class AgentOrchestratorVendorTests {
     /// irrelevant to it — the wedge is a genuine daemon-local wedge detector, not a round-scoped rule.</summary>
     [Test]
     public async Task Turn_wedged_fires_when_the_seq_stays_frozen_past_the_ceiling() {
-        await using var orch = BuildOrchestrator(
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             new CaptureServerConnection(), new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
         // default ReviewerTurnWedgeCeiling: 60m
 
@@ -131,7 +123,7 @@ public partial class AgentOrchestratorVendorTests {
 
         var reap = orch.FindReviewersToReap();
 
-        await Assert.That(Verdicts(reap)).Contains(("wedged", "turn_wedged"));
+        await Assert.That(AgentOrchestratorHarness.Verdicts(reap)).Contains(("wedged", "turn_wedged"));
     }
 
     /// <summary>Positive control for the wedge rule: an envelope arriving mid-turn (a genuine seq
@@ -139,7 +131,7 @@ public partial class AgentOrchestratorVendorTests {
     /// the turn started, the agent is NOT wedge-reaped — only a truly frozen seq is.</summary>
     [Test]
     public async Task Seq_advance_under_a_held_turn_rearms_and_prevents_the_wedge_reap() {
-        await using var orch = BuildOrchestrator(
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             new CaptureServerConnection(), new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var time  = new FakeTimeProvider();
@@ -164,7 +156,7 @@ public partial class AgentOrchestratorVendorTests {
     /// that the presence or absence of a bound changes nothing.</summary>
     [Test]
     public async Task No_bound_launch_retains_both_legacy_rules_ttl_and_idle() {
-        await using var orch = BuildOrchestrator(
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             new CaptureServerConnection(), new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
         // defaults: 6h lifetime / 2h idle
 
@@ -181,8 +173,8 @@ public partial class AgentOrchestratorVendorTests {
 
         var reap = orch.FindReviewersToReap();
 
-        await Assert.That(Verdicts(reap)).Contains(("active-old", "reviewer_ttl_expired"));
-        await Assert.That(Verdicts(reap)).Contains(("idle-young", "reviewer_idle_expired"));
+        await Assert.That(AgentOrchestratorHarness.Verdicts(reap)).Contains(("active-old", "reviewer_ttl_expired"));
+        await Assert.That(AgentOrchestratorHarness.Verdicts(reap)).Contains(("idle-young", "reviewer_idle_expired"));
     }
 
     /// <summary>
@@ -197,7 +189,7 @@ public partial class AgentOrchestratorVendorTests {
     /// </summary>
     [Test]
     public async Task ACP_agent_with_envelope_activity_at_1h59m_is_not_reaped() {
-        await using var orch = BuildOrchestrator(
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             new CaptureServerConnection(), new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var time  = new FakeTimeProvider();
@@ -219,7 +211,7 @@ public partial class AgentOrchestratorVendorTests {
     /// clock that would trip EVERY rule, gets reaped).</summary>
     [Test]
     public async Task Non_flow_hosted_agents_are_unaffected_regardless_of_clock_state() {
-        await using var orch = BuildOrchestrator(
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             new CaptureServerConnection(), new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var time  = new FakeTimeProvider();
@@ -243,7 +235,7 @@ public partial class AgentOrchestratorVendorTests {
         var reap = orch.FindReviewersToReap();
 
         await Assert.That(reap.Select(r => r.Id)).DoesNotContain("interactive-extreme");
-        await Assert.That(Verdicts(reap)).Contains(("reviewer-extreme", "reviewer_ttl_expired"));
+        await Assert.That(AgentOrchestratorHarness.Verdicts(reap)).Contains(("reviewer-extreme", "reviewer_ttl_expired"));
     }
 
     /// <summary>End-to-end launch-path proof (as opposed to every test above, which injects the field
@@ -253,14 +245,14 @@ public partial class AgentOrchestratorVendorTests {
     /// rest of this file's <c>activityClock</c>/<c>inactivityBoundSeconds</c> seam bypasses.</summary>
     [Test, NotInParallel("LocalPermissionBridgeTests")]
     public async Task Launch_command_inactivity_bound_lands_on_the_agent_instance() {
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
 
         try {
             var server     = new CaptureServerConnection();
             var ptyFactory = new FixedPtyProcessFactory(new OneChunkThenBlockPtyProcess());
 
-            await using var orch = BuildOrchestrator(server, ptyFactory, Launcher("codex"), allowedRepoPath: repoPath);
-            var bridge = orch.PermissionBridgeForTest;
+            await using var orch   = AgentOrchestratorHarness.BuildOrchestrator(server, ptyFactory, AgentOrchestratorHarness.Launcher("codex"), allowedRepoPath: repoPath);
+            var             bridge = orch.PermissionBridgeForTest;
             await bridge.StartAsync(CancellationToken.None);
 
             try {
@@ -289,7 +281,7 @@ public partial class AgentOrchestratorVendorTests {
     /// this fail, since the jumped clock reads 10 years ahead of the agent's real construction time.</summary>
     [Test]
     public async Task Wall_clock_jump_does_not_reap_a_healthy_reviewer() {
-        await using var orch = BuildOrchestrator(
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             new CaptureServerConnection(), new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         // Healthy no-bound reviewer: fresh real-time clock, nowhere near either legacy bound.
@@ -325,7 +317,7 @@ public partial class AgentOrchestratorVendorTests {
         var time   = new FakeTimeProvider();
         var clock  = new AgentActivityClock(time);
 
-        await using var orch = BuildOrchestrator(
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
         // defaults: 6h lifetime / 2h idle / 60m wedge ceiling
 
@@ -372,7 +364,7 @@ public partial class AgentOrchestratorVendorTests {
     public async Task Reap_claim_contention_has_exactly_one_winner() {
         var server = new CaptureServerConnection();
 
-        await using var orch = BuildOrchestrator(
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         // ── delivery first ──────────────────────────────────────────────────────────────────
@@ -411,7 +403,7 @@ public partial class AgentOrchestratorVendorTests {
 
         // The winning delivery's own out-of-cycle report is fire-and-forget, so wait for it HERE —
         // otherwise it lands mid-arm-2 and pollutes that arm's "no report was emitted" baseline.
-        await PollUntilAsync(() => server.StatusReportCount >= 1);
+        await WaitHarness.PollUntilAsync(() => server.StatusReportCount >= 1);
 
         // ── reap first ──────────────────────────────────────────────────────────────────────
         var reapTime  = new FakeTimeProvider();
@@ -452,7 +444,7 @@ public partial class AgentOrchestratorVendorTests {
         var time   = new FakeTimeProvider();
         var clock  = new AgentActivityClock(time);
 
-        await using var orch = BuildOrchestrator(
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var agent = orch.SeedAgentForTest("ttl-reap", LaunchKind.ReviewFlow, status: "Running",
@@ -499,7 +491,7 @@ public partial class AgentOrchestratorVendorTests {
     public async Task Parked_delivery_does_not_defer_the_absolute_lifetime_reap() {
         var server = new CaptureServerConnection();
 
-        await using var orch = BuildOrchestrator(
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         // Shortened only so the test need not spend a real 20s proving the timeout arms; production
@@ -583,7 +575,7 @@ public partial class AgentOrchestratorVendorTests {
         var time   = new FakeTimeProvider();
         var clock  = new AgentActivityClock(time);
 
-        await using var orch = BuildOrchestrator(
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         orch.ReapClaimGateWait = TimeSpan.FromMilliseconds(200);
@@ -639,7 +631,7 @@ public partial class AgentOrchestratorVendorTests {
         var time   = new FakeTimeProvider();
         var clock  = new AgentActivityClock(time);
 
-        await using var orch = BuildOrchestrator(
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         orch.ReapClaimGateWait = TimeSpan.FromMilliseconds(200);
@@ -684,7 +676,7 @@ public partial class AgentOrchestratorVendorTests {
     /// </summary>
     [Test]
     public async Task Reap_claim_gate_wait_stays_under_the_heartbeat_interval() {
-        await using var orch = BuildOrchestrator(
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             new CaptureServerConnection(), new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         await Assert.That(orch.ReapClaimGateWait).IsLessThan(AgentOrchestrator.HeartbeatInterval);
@@ -705,7 +697,7 @@ public partial class AgentOrchestratorVendorTests {
     public async Task Relaunch_between_claim_and_stop_aborts_the_reap() {
         var server = new CaptureServerConnection();
 
-        await using var orch = BuildOrchestrator(
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var claimed = orch.SeedAgentForTest("reused-id", LaunchKind.ReviewFlow, status: "Running",

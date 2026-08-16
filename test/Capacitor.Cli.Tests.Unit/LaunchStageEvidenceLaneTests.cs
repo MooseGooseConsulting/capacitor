@@ -24,10 +24,10 @@ namespace Capacitor.Cli.Tests.Unit;
 /// assertion below is therefore about reports observed DURING the handshake, or about the presence of
 /// an entry rather than its absence.</para>
 ///
-/// Partial of <see cref="Daemon.AgentOrchestratorVendorTests"/> to reuse BuildOrchestrator/CreateGitRepo/
+/// Uses <see cref="AgentOrchestratorHarness"/> for BuildOrchestrator/CreateGitRepo/
 /// SeedAgentForTest/FakeAcpRuntime, same as AcpLaunchStageTests.cs and StatusReportActivityFieldsTests.cs.
 /// </summary>
-public partial class AgentOrchestratorVendorTests {
+public class LaunchStageEvidenceLaneTests {
     /// <summary>Stamps the four real ACP handshake stages, in order, from inside
     /// <c>StartAsync</c> — i.e. exactly where <c>AcpHostedAgentRuntime</c> stamps them, and exactly
     /// where no <c>AgentInstance</c> exists yet. After each stamp it waits for that stamp's
@@ -89,17 +89,17 @@ public partial class AgentOrchestratorVendorTests {
     /// all), so the first assertion fails outright rather than merely differing.</summary>
     [Test]
     public async Task Handshake_stage_stamps_reach_the_server_carrying_the_agent_then_clear_once_running() {
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
 
         try {
             var server  = new CaptureServerConnection();
             var factory = new FourStageAcpRuntimeFactory(server);
 
-            await using var orch = BuildOrchestrator(
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
                 server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>(),
                 allowedRepoPath: repoPath, extraRuntimeFactories: [factory]);
 
-            await orch.HandleLaunchAgentForTest(NewCursorLaunch("stage-lane", repoPath));
+            await orch.HandleLaunchAgentForTest(AgentOrchestratorHarness.NewCursorLaunch("stage-lane", repoPath));
 
             var duringHandshake = ObservedStages(server.StatusReports, "stage-lane");
 
@@ -131,17 +131,17 @@ public partial class AgentOrchestratorVendorTests {
     /// place.</summary>
     [Test]
     public async Task Failed_handshake_reports_its_stage_then_leaves_nothing_behind() {
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
 
         try {
             var server  = new CaptureServerConnection();
             var factory = new FourStageAcpRuntimeFactory(server, throwAfterFirstStage: true);
 
-            await using var orch = BuildOrchestrator(
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
                 server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>(),
                 allowedRepoPath: repoPath, extraRuntimeFactories: [factory]);
 
-            await orch.HandleLaunchAgentForTest(NewCursorLaunch("stage-fail", repoPath));
+            await orch.HandleLaunchAgentForTest(AgentOrchestratorHarness.NewCursorLaunch("stage-fail", repoPath));
 
             await Assert.That(ObservedStages(server.StatusReports, "stage-fail")).IsEquivalentTo(new List<string?> { "spawned" });
 
@@ -163,7 +163,7 @@ public partial class AgentOrchestratorVendorTests {
     /// assertion read 2.</summary>
     [Test]
     public async Task Pending_and_published_entries_never_both_describe_one_agent() {
-        await using var orch = BuildOrchestrator(
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             new CaptureServerConnection(), new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var clock   = new AgentActivityClock(TimeProvider.System);

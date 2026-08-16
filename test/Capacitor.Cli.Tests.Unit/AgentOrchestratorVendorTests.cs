@@ -1,14 +1,10 @@
 using System.ComponentModel;
-using System.Diagnostics;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Daemon;
 using Capacitor.Cli.Daemon.Harness.Claude;
 using Capacitor.Cli.Daemon.Harness.Codex;
-using Capacitor.Cli.Daemon.Pty;
 using Capacitor.Cli.Daemon.Services;
-using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Capacitor.Cli.Tests.Unit;
 
@@ -21,77 +17,7 @@ namespace Capacitor.Cli.Tests.Unit;
 ///   • <see cref="CodexHooksNotInstalledException"/> from Prepare surfaces as a
 ///     LaunchFailed with the exception's message and no PTY ever spawns.
 /// </summary>
-public partial class AgentOrchestratorVendorTests {
-    internal static (string repoPath, Action cleanup) CreateGitRepo() {
-        // Atomic and unique by OS guarantee. A hand-rolled "prefix + 8 hex chars of a GUID" path is
-        // 32 bits across 59 call sites, and since CreateDirectory is idempotent a collision silently
-        // SHARES a directory — after which either test's cleanup() recursively deletes the other's
-        // repo. Also closes the window between choosing a name and owning it.
-        var repoPath = Directory.CreateTempSubdirectory("kcap-orch-").FullName;
-
-        Git(repoPath, "init", "-q");
-        Git(repoPath, "config", "user.email", "test@example.com");
-        Git(repoPath, "config", "user.name", "Test");
-        File.WriteAllText(Path.Combine(repoPath, "README.md"), "test");
-        Git(repoPath, "add", "-A");
-        Git(repoPath, "commit", "-q", "-m", "initial");
-
-        return (repoPath, () => {
-            try { Directory.Delete(repoPath, true); } catch {
-                /* best-effort */
-            }
-        });
-    }
-
-    static void Git(string cwd, params string[] args) {
-        var psi = new ProcessStartInfo("git", args) {
-            WorkingDirectory       = cwd,
-            RedirectStandardOutput = true,
-            RedirectStandardError  = true
-        };
-
-        Process proc;
-
-        try {
-            proc = Process.Start(psi)!;
-        } catch (Win32Exception ex) {
-            // On Unix this spawn fails with the SAME ENOENT for two unrelated causes — (1) the
-            // working directory does not exist, (2) the executable was not found — and .NET
-            // interpolates the working directory into the message either way. A CI log therefore
-            // cannot say which happened. Capture both facts here so the next occurrence diagnoses
-            // itself.
-            var cwdExists = Directory.Exists(cwd);
-            var gitProbe  = ProbeGitStartable();
-            var resolved  = CliExecutable.Resolve("git");   // shared helper: PATHEXT + Unix exec bit
-
-            throw new InvalidOperationException(
-                $"Failed to start 'git {string.Join(' ', args)}'. " +
-                $"WorkingDirectory '{cwd}' exists: {cwdExists}. " +
-                $"'git' startable from a known-good directory: {gitProbe}. " +
-                $"'git' resolves to: {resolved ?? "NOT FOUND"}. " +
-                $"PATH={Environment.GetEnvironmentVariable("PATH")}",
-                ex);
-        }
-
-        using (proc) {
-            // Drain BOTH redirected streams before waiting. Redirecting a stream and never reading
-            // it risks the child blocking forever once the pipe buffer fills, which would turn a
-            // test failure into a hung run — the worst outcome, since a hang produces no report.
-            // These commands are quiet enough that it has not bitten, but the shape is the bug.
-            var stdout = proc.StandardOutput.ReadToEndAsync();
-            var stderr = proc.StandardError.ReadToEndAsync();
-
-            proc.WaitForExit();
-
-            var err = stderr.GetAwaiter().GetResult();
-            _       = stdout.GetAwaiter().GetResult();
-
-            if (proc.ExitCode != 0) {
-                throw new InvalidOperationException($"git {string.Join(' ', args)} failed: {err}");
-            }
-        }
-    }
-
+public class AgentOrchestratorVendorTests {
     /// <summary>
     /// Guards the diagnostic itself. The intermittent failures this replaced were unresolvable
     /// precisely because the message could not distinguish a missing working directory from a
@@ -110,7 +36,7 @@ public partial class AgentOrchestratorVendorTests {
         await Assert.That(Directory.Exists(neverCreated)).IsFalse(); // precondition
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => Task.Run(() => Git(neverCreated, "init", "-q")));
+            () => Task.Run(() => GitRepoHarness.Git(neverCreated, "init", "-q")));
 
         // Names the ambiguity's first horn: the working directory.
         await Assert.That(ex!.Message).Contains(neverCreated);
@@ -131,154 +57,6 @@ public partial class AgentOrchestratorVendorTests {
         await Assert.That(ex.InnerException).IsTypeOf<Win32Exception>();
     }
 
-    /// <summary>
-    /// Answers "could this process start git at all?" by ASKING THE OS — spawning `git --version`
-    /// from a directory known to exist — rather than modelling executable resolution, which cannot
-    /// be done correctly here: `Process.Start` with UseShellExecute=false (forced by redirecting
-    /// streams) will not run a .cmd/.bat shim even though PATHEXT lists it, and a Unix execute bit
-    /// says nothing about EFFECTIVE permission or whether each PATH directory is traversable.
-    ///
-    /// Authoritative because it uses the same mechanism that just failed, and it splits the ENOENT
-    /// ambiguity: startable means the fault was the working directory, not startable means it was
-    /// the executable. `CliExecutable.Resolve` reports WHICH git alongside it.
-    /// </summary>
-    static string ProbeGitStartable() {
-        // Bounded so the diagnostic can never become the problem. This runs on a FAILURE path in a
-        // suite CI executes serially, so an unbounded wait would wedge the entire run and produce no
-        // report at all — strictly worse than the error it is trying to explain.
-        const int probeTimeoutMs = 10_000;
-
-        // "NO" must mean exactly one thing: git could not be STARTED. Post-start failures (stream
-        // reads, the wait, ExitCode, disposal) keep the YES, or they conflate the two facts this
-        // probe exists to separate. It must also NEVER throw — it runs inside the
-        // `catch (Win32Exception)` above, so an escaping exception would REPLACE the message.
-        Process? probe = null;
-
-        try {
-            try {
-                probe = Process.Start(new ProcessStartInfo("git", "--version") {
-                    WorkingDirectory       = Path.GetTempPath(), // known to exist; not the suspect dir
-                    RedirectStandardOutput = true,
-                    RedirectStandardError  = true
-                });
-            } catch (Exception startEx) {
-                return $"NO — {startEx.GetType().Name}: {startEx.Message}";
-            }
-
-            if (probe is null) return "NO — Process.Start returned null";
-
-            // Past here startability is PROVEN. Everything below is a separate fact and must keep
-            // the YES, however it goes wrong.
-            try {
-                var versionTask = probe.StandardOutput.ReadToEndAsync();
-                var errTask     = probe.StandardError.ReadToEndAsync();
-
-                if (!probe.WaitForExit(probeTimeoutMs)) {
-                    try { probe.Kill(entireProcessTree: true); } catch { /* best effort */ }
-
-                    return $"YES (startable; probe did not exit within {probeTimeoutMs}ms, killed)";
-                }
-
-                var version = versionTask.GetAwaiter().GetResult().Trim();
-                var err     = errTask.GetAwaiter().GetResult().Trim();
-
-                return probe.ExitCode == 0
-                    ? $"YES ({version})"
-                    : $"YES (startable; --version exited {probe.ExitCode}: {err})";
-            } catch (Exception afterStartEx) {
-                return $"YES (startable; probe failed after starting — " +
-                       $"{afterStartEx.GetType().Name}: {afterStartEx.Message})";
-            }
-        } finally {
-            // Disposal must not be able to change the verdict or escape.
-            try { probe?.Dispose(); } catch { /* best effort */ }
-        }
-    }
-
-    internal static AgentOrchestrator BuildOrchestrator(
-            ServerConnection                                    server,
-            IPtyProcessFactory                                  ptyFactory,
-            IReadOnlyDictionary<string, IHostedAgentLauncher>   launchers,
-            string?                                             allowedRepoPath        = null,
-            IEnumerable<IHostedAgentRuntimeFactory>?            extraRuntimeFactories  = null,
-            Action<DaemonConfig>?                               configure              = null,
-            // Defaults to NullLogger; a test that asserts on the orchestrator's own diagnostics
-            // (e.g. the graceful-stop timeout warning) passes a capturing logger instead.
-            ILogger<AgentOrchestrator>?                         logger                 = null,
-            // Consent: defaults to an allow-all gate over the factory's own temp state dir so every
-            // pre-existing test (none of which know about consent) keeps passing unchanged. A test
-            // exercising a deny/prompt policy passes its own gate (e.g. built with a Deny-default
-            // LaunchConsentStore) instead.
-            LaunchConsentGate?                                  consentGate            = null,
-            // §3.3: defaults to the fixed never-cancels StubHostLifetime every pre-existing test relies
-            // on. A test that needs to simulate shutdown firing mid-launch (e.g. a gate OCE parked on a
-            // consent prompt) passes its own lifetime with a controllable ApplicationStopping token.
-            IHostApplicationLifetime?                           lifetime               = null,
-            // §3.3: leaves the sequenced processor unpublished, so a test can drive the pre-settlement
-            // inline arm and the publication barrier. Production never has that window.
-            bool                                                deferProcessorPublication = false
-        ) {
-        var config = new DaemonConfig {
-            Name                = "test",
-            ServerUrl           = "http://127.0.0.1:1",
-            ClaudePath          = "claude",
-            MaxConcurrentAgents = 5,
-            WorktreeRoot        = Path.Combine(Path.GetTempPath(), "kcap-orch-wt-" + Guid.NewGuid().ToString("N")[..8]),
-            // Phase B (D4): isolate the PID-record store to a temp dir so tests never touch the
-            // real ~/.config/kcap/daemons.
-            StateDir            = Path.Combine(Path.GetTempPath(), "kcap-orch-state-" + Guid.NewGuid().ToString("N")[..8])
-        };
-
-        if (allowedRepoPath is not null) {
-            config.AllowedRepoPaths = [allowedRepoPath];
-        }
-
-        configure?.Invoke(config); // Phase B: let a test tweak the config (e.g. reviewer TTL bounds)
-
-        var worktreeManager  = new WorktreeManager(config, NullLogger<WorktreeManager>.Instance);
-        var repoMatcher      = new RepoMatcher(config, NullLogger<RepoMatcher>.Instance);
-        var httpFactory      = new StubHttpClientFactory();
-        var permissionBridge = new LocalPermissionBridge(server, NullLogger<LocalPermissionBridge>.Instance);
-
-        // Mirror DaemonRunner's DI wiring: one PtyHostedAgentRuntimeFactory per registered launcher,
-        // all sharing the same (spied) IPtyProcessFactory so SpyPtyProcessFactory's
-        // SpawnCalls/LastCommand assertions stay valid through the runtime-selection seam.
-        // extraRuntimeFactories lets a test inject a non-PTY factory (e.g. a fake "cursor" ACP
-        // factory) without disturbing every other call site of this helper.
-        IReadOnlyDictionary<string, IHostedAgentRuntimeFactory> runtimeFactories = launchers.Values
-            .Select(l => (IHostedAgentRuntimeFactory) new PtyHostedAgentRuntimeFactory(l, ptyFactory, NullLogger<PtyHostedAgentRuntimeFactory>.Instance))
-            .Concat(extraRuntimeFactories ?? [])
-            .ToDictionary(f => f.Vendor);
-
-        consentGate ??= new LaunchConsentGate(
-            new LaunchConsentStore(config.StateDir!, NullLogger.Instance),
-            new LaunchConsentDecisionLog(config.StateDir!, NullLogger.Instance),
-            prompter: null, TimeProvider.System, NullLogger<LaunchConsentGate>.Instance);
-
-        return new AgentOrchestrator(
-            config,
-            server,
-            worktreeManager,
-            repoMatcher,
-            ptyFactory,
-            httpFactory,
-            permissionBridge,
-            launchers,
-            runtimeFactories,
-            lifetime ?? new StubHostLifetime(),
-            logger ?? NullLogger<AgentOrchestrator>.Instance,
-            consentGate,
-            deferProcessorPublication
-        );
-    }
-
-    sealed class StubHostLifetime : IHostApplicationLifetime {
-        public CancellationToken ApplicationStarted  => CancellationToken.None;
-        public CancellationToken ApplicationStopping => CancellationToken.None;
-        public CancellationToken ApplicationStopped  => CancellationToken.None;
-        public void StopApplication() { }
-    }
-
     // re-registration is awaited inside RegisterDaemon before readiness is restored.
     // A transient per-agent failure must be retried (not swallowed on first try), so the agent's
     // ownership is restored before the daemon flips ready — narrowing the "ready despite reregister
@@ -287,7 +65,7 @@ public partial class AgentOrchestratorVendorTests {
     public async Task ReRegister_retries_a_transient_per_agent_failure_then_succeeds() {
         var server = new CaptureServerConnection { AgentRegisteredFailTimes = 1 };
 
-        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         orch.RegisterAgentForTest(new AgentInstance(
             "agent-rereg", null, "", null, "/tmp", "claude",
@@ -308,7 +86,7 @@ public partial class AgentOrchestratorVendorTests {
         var ptyFactory = new SpyPtyProcessFactory();
         var launchers  = new Dictionary<string, IHostedAgentLauncher>();
 
-        await using var orch = BuildOrchestrator(server, ptyFactory, launchers);
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, ptyFactory, launchers);
 
         var cmd = new LaunchAgentCommand(
             AgentId: "agent-bogus",
@@ -355,8 +133,7 @@ public partial class AgentOrchestratorVendorTests {
             CodexPosture: posture
         );
 
-    static AgentOrchestrator BuildPostureOrchestrator(CaptureServerConnection server, SpyPtyProcessFactory ptyFactory) =>
-        BuildOrchestrator(
+    static AgentOrchestrator BuildPostureOrchestrator(CaptureServerConnection server, SpyPtyProcessFactory ptyFactory) => AgentOrchestratorHarness.BuildOrchestrator(
             server, ptyFactory, new Dictionary<string, IHostedAgentLauncher>(),
             extraRuntimeFactories: [
                 new SpyHostedAgentRuntimeFactory("codex")  { SupportsUnattended = true, SupportsBorrowedReviewFlow = true },
@@ -465,7 +242,7 @@ public partial class AgentOrchestratorVendorTests {
         // No explicit allowlist: an empty AllowedRepoPaths allows every local git repo, which is what
         // the borrow tests rely on too — a textual allowlist entry would not match the canonicalized
         // (symlink-resolved) cwd the borrow authorizer compares against.
-        await using var orch = BuildOrchestrator(
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             server, ptyFactory, new Dictionary<string, IHostedAgentLauncher>(),
             extraRuntimeFactories: [codexSpy, claudeSpy], logger: logger);
         var startsReviewerBridge = kind == LaunchKind.ReviewFlow && vendor == "codex";
@@ -495,7 +272,7 @@ public partial class AgentOrchestratorVendorTests {
 
     [Test]
     public async Task Interactive_codex_launch_echoes_the_selected_posture_on_registration() {
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
 
         try {
             var (server, _) = await LaunchForEchoAsync(repoPath, "agent-echo-selected", new("read-only", "never"));
@@ -513,7 +290,7 @@ public partial class AgentOrchestratorVendorTests {
     /// registration still advertising the selected pair.</summary>
     [Test]
     public async Task Interactive_codex_launch_threads_the_posture_into_the_runtime_start_context() {
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
 
         try {
             var (_, codexSpy) = await LaunchForEchoAsync(repoPath, "agent-thread", new("danger-full-access", "untrusted"));
@@ -529,7 +306,7 @@ public partial class AgentOrchestratorVendorTests {
 
     [Test]
     public async Task Interactive_codex_launch_without_a_posture_threads_null() {
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
 
         try {
             var (_, codexSpy) = await LaunchForEchoAsync(repoPath, "agent-thread-null", posture: null);
@@ -546,7 +323,7 @@ public partial class AgentOrchestratorVendorTests {
     /// `!cmd.Borrowed` arm of the echo predicate.</summary>
     [Test, NotInParallel("LocalPermissionBridgeTests")]
     public async Task Snapshot_borrowed_launch_echoes_no_posture() {
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
 
         try {
             var server     = new CaptureServerConnection();
@@ -558,7 +335,7 @@ public partial class AgentOrchestratorVendorTests {
                 BorrowedReviewRequiresIndependentSnapshot = true
             };
 
-            await using var orch = BuildOrchestrator(
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
                 server, ptyFactory, new Dictionary<string, IHostedAgentLauncher>(),
                 extraRuntimeFactories: [codexSpy]);
             var bridge = orch.PermissionBridgeForTest;
@@ -599,7 +376,7 @@ public partial class AgentOrchestratorVendorTests {
 
     [Test]
     public async Task Interactive_codex_launch_without_a_posture_echoes_the_derived_pair() {
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
 
         try {
             var (server, _) = await LaunchForEchoAsync(repoPath, "agent-echo-derived", posture: null);
@@ -615,7 +392,7 @@ public partial class AgentOrchestratorVendorTests {
     public async Task Review_flow_launch_echoes_no_posture() {
         // A reviewer's `never` is the containment invariant, not a selection — reporting it would
         // make every reviewer look like a user-chosen bridge-defeating launch.
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
 
         try {
             var (server, _) = await LaunchForEchoAsync(
@@ -631,7 +408,7 @@ public partial class AgentOrchestratorVendorTests {
     public async Task Borrowed_default_launch_echoes_no_posture() {
         // `work` is resolved from cmd.Borrowed independently of Kind, so a posture-LESS borrowed
         // Default command is accepted — and must still echo nothing rather than a derived pair.
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
 
         try {
             var (server, _) = await LaunchForEchoAsync(
@@ -645,7 +422,7 @@ public partial class AgentOrchestratorVendorTests {
 
     [Test]
     public async Task Non_codex_launch_echoes_no_posture() {
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
 
         try {
             var (server, _) = await LaunchForEchoAsync(
@@ -664,7 +441,7 @@ public partial class AgentOrchestratorVendorTests {
         var server     = new CaptureServerConnection();
         var ptyFactory = new SpyPtyProcessFactory();
 
-        await using var orch = BuildOrchestrator(server, ptyFactory, new Dictionary<string, IHostedAgentLauncher>());
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, ptyFactory, new Dictionary<string, IHostedAgentLauncher>());
 
         orch.RegisterAgentForTest(new AgentInstance(
             "agent-rereg-posture", null, "", null, "/tmp", "codex",
@@ -684,7 +461,7 @@ public partial class AgentOrchestratorVendorTests {
     [Arguments("workspace-write", "never")]
     [Arguments("danger-full-access", "on-request")]
     public async Task Bridge_defeating_posture_logs_a_warning(string sandbox, string approval) {
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
 
         try {
             var logger = new CapturingLogger<AgentOrchestrator>();
@@ -708,7 +485,7 @@ public partial class AgentOrchestratorVendorTests {
 
     [Test]
     public async Task A_prompting_posture_logs_no_bridge_warning() {
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
 
         try {
             var logger = new CapturingLogger<AgentOrchestrator>();
@@ -735,7 +512,7 @@ public partial class AgentOrchestratorVendorTests {
         var ptyFactory = new SpyPtyProcessFactory();
         var launchers  = new Dictionary<string, IHostedAgentLauncher>();
 
-        await using var orch = BuildOrchestrator(server, ptyFactory, launchers);
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, ptyFactory, launchers);
 
         var cmd = new LaunchAgentCommand(
             AgentId: "agent-null-vendor",
@@ -767,7 +544,7 @@ public partial class AgentOrchestratorVendorTests {
 
         var launchers = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = claudeSpy };
 
-        await using var orch = BuildOrchestrator(server, ptyFactory, launchers);
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, ptyFactory, launchers);
 
         var cmd = new LaunchAgentCommand(
             AgentId: "agent-unattended",
@@ -802,7 +579,7 @@ public partial class AgentOrchestratorVendorTests {
         };
         var launchers = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = claudeSpy };
 
-        await using var orch = BuildOrchestrator(server, ptyFactory, launchers,
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, ptyFactory, launchers,
             configure: config => config.ClaudePath = "/definitely/missing/claude");
         var cmd = new LaunchAgentCommand(
             AgentId: "agent-certification",
@@ -833,7 +610,7 @@ public partial class AgentOrchestratorVendorTests {
         var claudeSpy = new SpyHostedAgentLauncher("claude", cliPath: "spy-claude") {
             SupportsUnattended = true
         };
-        await using var orch = BuildOrchestrator(server, ptyFactory,
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, ptyFactory,
             new Dictionary<string, IHostedAgentLauncher> { ["claude"] = claudeSpy });
         var cmd = new LaunchAgentCommand(
             "agent-stale-connection", "review", "default", null, "/tmp/unused", null, null,
@@ -852,7 +629,7 @@ public partial class AgentOrchestratorVendorTests {
 
     [Test]
     public async Task Launch_with_vendor_claude_calls_claude_launcher() {
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
 
         try {
             var server     = new CaptureServerConnection();
@@ -865,7 +642,7 @@ public partial class AgentOrchestratorVendorTests {
                 ["codex"]  = codexSpy
             };
 
-            await using var orch = BuildOrchestrator(server, ptyFactory, launchers, allowedRepoPath: repoPath);
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, ptyFactory, launchers, allowedRepoPath: repoPath);
 
             var cmd = new LaunchAgentCommand(
                 AgentId: "agent-c1",
@@ -895,7 +672,7 @@ public partial class AgentOrchestratorVendorTests {
 
     [Test]
     public async Task Launch_with_vendor_codex_calls_codex_launcher() {
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
 
         try {
             var server     = new CaptureServerConnection();
@@ -908,7 +685,7 @@ public partial class AgentOrchestratorVendorTests {
                 ["codex"]  = codexSpy
             };
 
-            await using var orch = BuildOrchestrator(server, ptyFactory, launchers, allowedRepoPath: repoPath);
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, ptyFactory, launchers, allowedRepoPath: repoPath);
 
             var cmd = new LaunchAgentCommand(
                 AgentId: "agent-x1",
@@ -940,7 +717,7 @@ public partial class AgentOrchestratorVendorTests {
     // test — SpyHostedAgentRuntimeFactory never spawns a real cursor-agent process.
     [Test]
     public async Task Launch_with_vendor_cursor_routes_to_the_acp_runtime_factory_not_pty() {
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
 
         try {
             var server      = new CaptureServerConnection();
@@ -950,7 +727,7 @@ public partial class AgentOrchestratorVendorTests {
 
             var launchers = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = claudeSpy };
 
-            await using var orch = BuildOrchestrator(
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
                 server,
                 ptyFactory,
                 launchers,
@@ -994,7 +771,7 @@ public partial class AgentOrchestratorVendorTests {
     // while still live (the fake's ReadOutputAsync stays open exactly like the real ACP runtime).
     [Test]
     public async Task Launch_of_a_no_terminal_output_runtime_flips_to_Running_immediately_and_is_not_finalized_as_failed() {
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
 
         try {
             var server     = new CaptureServerConnection();
@@ -1003,7 +780,7 @@ public partial class AgentOrchestratorVendorTests {
 
             var launchers = new Dictionary<string, IHostedAgentLauncher>();
 
-            await using var orch = BuildOrchestrator(
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
                 server,
                 ptyFactory,
                 launchers,
@@ -1051,7 +828,7 @@ public partial class AgentOrchestratorVendorTests {
     // HandleLaunchAgent must not fire for it.
     [Test]
     public async Task Launch_of_a_terminal_output_runtime_does_not_flip_to_Running_before_the_first_output_chunk() {
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
 
         try {
             var server     = new CaptureServerConnection();
@@ -1060,7 +837,7 @@ public partial class AgentOrchestratorVendorTests {
 
             var launchers = new Dictionary<string, IHostedAgentLauncher>();
 
-            await using var orch = BuildOrchestrator(
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
                 server,
                 ptyFactory,
                 launchers,
@@ -1097,7 +874,7 @@ public partial class AgentOrchestratorVendorTests {
         // A git repo with NO origin remote: a Codex review now passes the vendor
         // gate (which used to reject it) and fails later at origin validation —
         // the SAME point a Claude review would. Proves the gate is lifted.
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
 
         try {
             var server     = new CaptureServerConnection();
@@ -1106,7 +883,7 @@ public partial class AgentOrchestratorVendorTests {
 
             var launchers = new Dictionary<string, IHostedAgentLauncher> { ["codex"] = codexSpy };
 
-            await using var orch = BuildOrchestrator(server, ptyFactory, launchers, allowedRepoPath: repoPath);
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, ptyFactory, launchers, allowedRepoPath: repoPath);
 
             var cmd = new LaunchAgentCommand(
                 AgentId: "agent-r1",
@@ -1136,7 +913,7 @@ public partial class AgentOrchestratorVendorTests {
 
     [Test]
     public async Task Codex_hooks_not_installed_exception_during_prepare_yields_actionable_launch_failed() {
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
 
         try {
             var server     = new CaptureServerConnection();
@@ -1150,7 +927,7 @@ public partial class AgentOrchestratorVendorTests {
                 ["codex"] = codexSpy
             };
 
-            await using var orch = BuildOrchestrator(server, ptyFactory, launchers, allowedRepoPath: repoPath);
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, ptyFactory, launchers, allowedRepoPath: repoPath);
 
             var cmd = new LaunchAgentCommand(
                 AgentId: "agent-h1",
@@ -1178,7 +955,7 @@ public partial class AgentOrchestratorVendorTests {
 
     [Test]
     public async Task Stopping_an_agent_releases_a_read_loop_blocked_on_a_full_terminal_queue() {
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
 
         try {
             // The send blocks (full/down queue) until its ct cancels; the PTY keeps the
@@ -1192,7 +969,7 @@ public partial class AgentOrchestratorVendorTests {
 
             var launchers = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = claudeSpy };
 
-            await using var orch = BuildOrchestrator(server, ptyFactory, launchers, allowedRepoPath: repoPath);
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, ptyFactory, launchers, allowedRepoPath: repoPath);
 
             await orch.HandleLaunchAgentForTest(new LaunchAgentCommand(
                 AgentId: "agent-bp",
@@ -1228,7 +1005,7 @@ public partial class AgentOrchestratorVendorTests {
         // finalize backstop ends the session afterwards. With EndAgentSession blocked,
         // termination must still happen promptly (before the fix HandleStopAgent awaited
         // its own EndAgentSession call and never reached TerminateAsync).
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
         using var endSessionBlock = new CancellationTokenSource();
 
         try {
@@ -1238,7 +1015,7 @@ public partial class AgentOrchestratorVendorTests {
             var ptyFactory = new FixedPtyProcessFactory(new TerminateSignalingPtyProcess(terminated));
             var launchers  = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = new SpyHostedAgentLauncher("claude", cliPath: "spy-claude") };
 
-            await using var orch = BuildOrchestrator(server, ptyFactory, launchers, allowedRepoPath: repoPath);
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, ptyFactory, launchers, allowedRepoPath: repoPath);
 
             await orch.HandleLaunchAgentForTest(new LaunchAgentCommand(
                 AgentId: "agent-stop",
@@ -1270,7 +1047,7 @@ public partial class AgentOrchestratorVendorTests {
         // up to EndAgentSessionBudget, then proceeds to CleanupAgentAsync (which unregisters
         // the agent) while the retry continues in the background. Here end-session never
         // recovers, yet cleanup must still run.
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
         using var neverRecovers = new CancellationTokenSource();
 
         try {
@@ -1283,7 +1060,7 @@ public partial class AgentOrchestratorVendorTests {
             var ptyFactory = new FixedPtyProcessFactory(new ImmediateExitPtyProcess());
             var launchers  = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = new SpyHostedAgentLauncher("claude", cliPath: "spy-claude") };
 
-            await using var orch = BuildOrchestrator(server, ptyFactory, launchers, allowedRepoPath: repoPath);
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, ptyFactory, launchers, allowedRepoPath: repoPath);
             orch.EndAgentSessionBudget = TimeSpan.FromMilliseconds(250); // don't wait the real 30s in a test
 
             await orch.HandleLaunchAgentForTest(new LaunchAgentCommand(
@@ -1313,8 +1090,7 @@ public partial class AgentOrchestratorVendorTests {
     /// isolation from any launch.</summary>
     static AgentOrchestrator BuildPreflightOrchestrator(
             CaptureServerConnection server, SpyPtyProcessFactory ptyFactory,
-            params SpyHostedAgentRuntimeFactory[] factories) =>
-        BuildOrchestrator(
+            params SpyHostedAgentRuntimeFactory[] factories) => AgentOrchestratorHarness.BuildOrchestrator(
             server, ptyFactory, new Dictionary<string, IHostedAgentLauncher>(),
             extraRuntimeFactories: factories);
 
@@ -1570,7 +1346,7 @@ public partial class AgentOrchestratorVendorTests {
     /// </summary>
     [Test]
     public async Task Interactive_launch_for_a_vendor_that_cannot_select_a_model_reports_no_model_and_still_launches() {
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
 
         try {
             var server     = new CaptureServerConnection();
@@ -1580,7 +1356,7 @@ public partial class AgentOrchestratorVendorTests {
                 SupportsModelSelection = false
             };
 
-            await using var orch = BuildOrchestrator(
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
                 server, ptyFactory, new Dictionary<string, IHostedAgentLauncher>(),
                 allowedRepoPath: repoPath, extraRuntimeFactories: [kiroSpy]);
 
@@ -1617,14 +1393,14 @@ public partial class AgentOrchestratorVendorTests {
     /// </summary>
     [Test]
     public async Task Acp_launch_whose_requested_model_did_not_resolve_registers_no_model() {
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
 
         try {
             var server        = new CaptureServerConnection();
             var ptyFactory    = new SpyPtyProcessFactory();
             var cursorFactory = new SpyAcpHostedAgentRuntimeFactory { ResolvedModel = null };
 
-            await using var orch = BuildOrchestrator(
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
                 server, ptyFactory, new Dictionary<string, IHostedAgentLauncher>(),
                 allowedRepoPath: repoPath, extraRuntimeFactories: [cursorFactory]);
             orch.AcpFinalDrainBudget = TimeSpan.FromMilliseconds(200);
@@ -1659,7 +1435,7 @@ public partial class AgentOrchestratorVendorTests {
     /// blanking every ACP launch's model.</summary>
     [Test]
     public async Task Acp_launch_whose_requested_model_resolved_registers_the_confirmed_id() {
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
 
         try {
             var server        = new CaptureServerConnection();
@@ -1668,7 +1444,7 @@ public partial class AgentOrchestratorVendorTests {
                 ResolvedModel = "claude-opus-4-8[thinking=true,context=200k]"
             };
 
-            await using var orch = BuildOrchestrator(
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
                 server, ptyFactory, new Dictionary<string, IHostedAgentLauncher>(),
                 allowedRepoPath: repoPath, extraRuntimeFactories: [cursorFactory]);
             orch.AcpFinalDrainBudget = TimeSpan.FromMilliseconds(200);
@@ -1706,7 +1482,7 @@ public partial class AgentOrchestratorVendorTests {
             SupportsModelSelection = false
         };
 
-        await using var orch = BuildOrchestrator(
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             server, ptyFactory, new Dictionary<string, IHostedAgentLauncher>(),
             extraRuntimeFactories: [kiroSpy]);
 
@@ -1735,7 +1511,7 @@ public partial class AgentOrchestratorVendorTests {
 
     [Test]
     public async Task NewNew_explicit_model_launch_reports_on_the_v3_channel_and_launches_verbatim_model() {
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
 
         try {
             var server     = new CaptureServerConnection();
@@ -1746,7 +1522,7 @@ public partial class AgentOrchestratorVendorTests {
                 ReviewerModelResolver = ClaudeReviewerModelResolver.Instance
             };
 
-            await using var orch = BuildOrchestrator(
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
                 server, ptyFactory, new Dictionary<string, IHostedAgentLauncher>(),
                 allowedRepoPath: repoPath, extraRuntimeFactories: [claudeSpy]);
 
@@ -1793,14 +1569,14 @@ public partial class AgentOrchestratorVendorTests {
 
     [Test]
     public async Task NewDaemon_oldServer_legacy_codex_launch_uses_the_unchanged_ReportAgentResolvedModel() {
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
 
         try {
             var server     = new CaptureServerConnection();
             var ptyFactory = new SpyPtyProcessFactory();
             var codexSpy   = new SpyHostedAgentRuntimeFactory("codex") { EmitsTerminalOutput = false };
 
-            await using var orch = BuildOrchestrator(
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
                 server, ptyFactory, new Dictionary<string, IHostedAgentLauncher>(),
                 allowedRepoPath: repoPath, extraRuntimeFactories: [codexSpy]);
 
@@ -1829,13 +1605,6 @@ public partial class AgentOrchestratorVendorTests {
 
     // ══ Owner consent gate wired into the server launch choke point ══════════════════════
 
-    internal static LaunchConsentGate DenyDefaultGate(string dir) {
-        var store = new LaunchConsentStore(dir, NullLogger.Instance);
-        store.TryReplace(new LaunchConsentPolicy(LaunchConsentDefault.Deny, 5, []), out _);
-        return new LaunchConsentGate(store, new LaunchConsentDecisionLog(dir, NullLogger.Instance),
-            prompter: null, TimeProvider.System, NullLogger<LaunchConsentGate>.Instance);
-    }
-
     [Test]
     public async Task Server_launch_denied_under_deny_default_sends_coded_launch_failed() {
         var dir        = Directory.CreateTempSubdirectory("kcap-consent-deny-").FullName;
@@ -1845,7 +1614,7 @@ public partial class AgentOrchestratorVendorTests {
 
         var launchers = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = claudeSpy };
 
-        await using var orch = BuildOrchestrator(server, ptyFactory, launchers, consentGate: DenyDefaultGate(dir));
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, ptyFactory, launchers, consentGate: AgentOrchestratorHarness.DenyDefaultGate(dir));
 
         var cmd = new LaunchAgentCommand(
             AgentId: "agent-consent-deny",
@@ -1872,7 +1641,7 @@ public partial class AgentOrchestratorVendorTests {
 
     [Test]
     public async Task Owner_launch_proceeds_under_deny_default() {
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
         var dir = Directory.CreateTempSubdirectory("kcap-consent-owner-").FullName;
 
         try {
@@ -1882,8 +1651,8 @@ public partial class AgentOrchestratorVendorTests {
 
             var launchers = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = claudeSpy };
 
-            await using var orch = BuildOrchestrator(
-                server, ptyFactory, launchers, allowedRepoPath: repoPath, consentGate: DenyDefaultGate(dir));
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
+                server, ptyFactory, launchers, allowedRepoPath: repoPath, consentGate: AgentOrchestratorHarness.DenyDefaultGate(dir));
 
             var cmd = new LaunchAgentCommand(
                 AgentId: "agent-consent-owner",

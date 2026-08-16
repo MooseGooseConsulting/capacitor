@@ -14,10 +14,10 @@ namespace Capacitor.Cli.Tests.Unit;
 /// retained tail-of-PTY capture on disk. Also proves an interactive (Default) agent is NOT
 /// failed-fast on the same output — its human viewer can dismiss the prompt.
 ///
-/// Partial of <see cref="Daemon.AgentOrchestratorVendorTests"/> to reuse its BuildOrchestrator /
+/// Uses <see cref="AgentOrchestratorHarness"/> for its BuildOrchestrator /
 /// CaptureServerConnection / SpyPtyProcessFactory harness.
 /// </summary>
-public partial class AgentOrchestratorVendorTests {
+public class AgentOrchestratorConsentDialogTests {
     // The real Claude 2.1.x banner, condensed to the two matched markers.
     const string BypassDialogOutput =
         "\x1b[2J\x1b[H WARNING: Claude Code running in Bypass Permissions mode \n" +
@@ -28,7 +28,7 @@ public partial class AgentOrchestratorVendorTests {
     public async Task ReviewFlow_reviewer_wedged_on_bypass_dialog_fails_fast_and_captures_the_tail() {
         var server = new CaptureServerConnection();
 
-        await using var orch = BuildOrchestrator(
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var pty   = new BypassBannerPtyProcess(BypassDialogOutput);
@@ -61,7 +61,7 @@ public partial class AgentOrchestratorVendorTests {
     public async Task ReviewFlow_reviewer_with_a_live_session_is_not_failed_fast_on_banner_like_output() {
         var server = new CaptureServerConnection();
 
-        await using var orch = BuildOrchestrator(
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         // The consent/trust dialog is a PRE-SESSION event: it renders once at startup, before any
@@ -87,7 +87,7 @@ public partial class AgentOrchestratorVendorTests {
     public async Task Interactive_agent_is_not_failed_fast_on_the_same_dialog_output() {
         var server = new CaptureServerConnection();
 
-        await using var orch = BuildOrchestrator(
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         // Default (interactive) kind: a human viewer can accept the dialog, so no fail-fast.

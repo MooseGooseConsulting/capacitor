@@ -11,10 +11,10 @@ namespace Capacitor.Cli.Tests.Unit.Daemon;
 /// record is deleted iff the process was confirmed gone. Partial of
 /// <see cref="AgentOrchestratorVendorTests"/> to call the private HandleStopAgent.
 /// </summary>
-public partial class AgentOrchestratorVendorTests {
+public class StopAgentPidFallbackTests {
     [Test]
     public async Task HandleStopAgent_unknown_id_reaps_by_pid_record_where_env_is_readable() {
-        await using var orch = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             new CaptureServerConnection(), new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         using var dummy = DummyProcess.StartSleep(30, new Dictionary<string, string> { ["KCAP_AGENT_ID"] = "ghost" });
@@ -47,7 +47,7 @@ public partial class AgentOrchestratorVendorTests {
 
     [Test]
     public async Task HandleStopAgent_unknown_id_with_no_record_is_a_noop() {
-        await using var orch = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             new CaptureServerConnection(), new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         // No record, no in-memory agent → must not throw.

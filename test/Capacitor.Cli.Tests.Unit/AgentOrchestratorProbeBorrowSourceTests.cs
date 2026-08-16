@@ -10,14 +10,14 @@ namespace Capacitor.Cli.Tests.Unit;
 /// onto the wire-facing <see cref="BorrowProbeResult"/> — the policy itself (allowlist, git-root,
 /// symlink canonicalization) is already covered by <c>BorrowAuthorizerTests</c>.
 /// </summary>
-public partial class AgentOrchestratorVendorTests {
+public class AgentOrchestratorProbeBorrowSourceTests {
     [Test]
     public async Task ProbeBorrowSource_allows_a_git_rooted_temp_dir() {
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
 
         try {
             var server = new CaptureServerConnection();
-            await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
             var result = await orch.HandleProbeBorrowSourceForTest(repoPath);
 
@@ -34,7 +34,7 @@ public partial class AgentOrchestratorVendorTests {
         var missing = Path.Combine(Path.GetTempPath(), "kcap-probe-missing-" + Guid.NewGuid().ToString("N")[..8]);
 
         var server = new CaptureServerConnection();
-        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var result = await orch.HandleProbeBorrowSourceForTest(missing);
 

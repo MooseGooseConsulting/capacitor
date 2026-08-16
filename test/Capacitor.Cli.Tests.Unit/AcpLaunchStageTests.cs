@@ -356,7 +356,7 @@ public class AcpLaunchStageTests {
 
 /// <summary>
 /// Orchestrator-level integration for Task 13: reuses the shared
-/// <see cref="Daemon.AgentOrchestratorVendorTests"/> harness (<c>BuildOrchestrator</c>, <c>CreateGitRepo</c>,
+/// <see cref="AgentOrchestratorHarness"/> (<c>BuildOrchestrator</c>, <c>CreateGitRepo</c>,
 /// <c>CaptureServerConnection</c>) to prove two things the factory-level <see cref="AcpLaunchStageTests"/>
 /// suite cannot reach on its own: (1) a stage timeout surfaces through
 /// <c>AgentOrchestrator.HandleLaunchAgentCore</c>'s ordinary catch-all as a real
@@ -364,7 +364,7 @@ public class AcpLaunchStageTests {
 /// a silent hang or an unhandled fault — and (2) <see cref="AgentActivityClock.ClearLaunchStage"/>
 /// runs at the exact instant the orchestrator flips a Starting ACP agent to Running.
 /// </summary>
-public partial class AgentOrchestratorVendorTests {
+public class AcpLaunchStageOrchestratorTests {
     /// <summary>Minimal <see cref="IAcpProcess"/> — records terminate calls, mirroring
     /// <see cref="AcpLaunchStageTests"/>'s own fake.</summary>
     sealed class StageTimeoutFakeAcpProcess : IAcpProcess {
@@ -388,7 +388,7 @@ public partial class AgentOrchestratorVendorTests {
 
     [Test]
     public async Task Wedged_initialize_reaches_LaunchFailed_through_the_orchestrator_not_a_silent_hang() {
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
 
         try {
             var server  = new CaptureServerConnection();
@@ -406,7 +406,7 @@ public partial class AgentOrchestratorVendorTests {
                 connectionSource: _ => (fake.ClientWriteStream, fake.ClientReadStream, process),
                 timeProvider: time);
 
-            await using var orch = BuildOrchestrator(
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
                 server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>(),
                 allowedRepoPath: repoPath, extraRuntimeFactories: [cursorFactory]
             );
@@ -414,19 +414,19 @@ public partial class AgentOrchestratorVendorTests {
             using var fakeCts = new CancellationTokenSource();
             var fakeRunTask = fake.RunAsync(fakeCts.Token);
 
-            var cmd = NewCursorLaunch("agent-orch-wedge", repoPath);
+            var cmd = AgentOrchestratorHarness.NewCursorLaunch("agent-orch-wedge", repoPath);
 
             // Fired without awaiting: HandleLaunchAgentForTest awaits the whole launch — including the
             // wedged initialize — to completion, so it must not be awaited until the clock advances.
             var launchTask = orch.HandleLaunchAgentForTest(cmd);
 
-            var deadline = DateTime.UtcNow + AcpHangGuard;
+            var deadline = DateTime.UtcNow + WaitHarness.AcpHangGuard;
             while (!fake.ReceivedCalls.Any(c => c.Method == "initialize") && DateTime.UtcNow < deadline)
                 await Task.Delay(5);
 
             time.Advance(TimeSpan.FromSeconds(91));
 
-            await launchTask.WaitAsync(AcpHangGuard);
+            await launchTask.WaitAsync(WaitHarness.AcpHangGuard);
 
             await Assert.That(server.LaunchFailedCalls.Count).IsEqualTo(1);
             await Assert.That(server.LaunchFailedCalls[0].AgentId).IsEqualTo("agent-orch-wedge");
@@ -438,7 +438,7 @@ public partial class AgentOrchestratorVendorTests {
             await Assert.That(orch.GetAgentForTest("agent-orch-wedge")).IsNull();
 
             fakeCts.Cancel();
-            try { await fakeRunTask.WaitAsync(AcpHangGuard); } catch (OperationCanceledException) { }
+            try { await fakeRunTask.WaitAsync(WaitHarness.AcpHangGuard); } catch (OperationCanceledException) { }
             await fake.DisposeAsync();
         } finally {
             cleanup();
@@ -446,8 +446,8 @@ public partial class AgentOrchestratorVendorTests {
     }
 
     /// <summary><see cref="IHostedAgentRuntimeFactory"/> test double that — unlike
-    /// <c>SpyAcpHostedAgentRuntimeFactory</c> (<c>AgentOrchestratorAcpForwardingTests.cs</c>, reused
-    /// here since it lives in the same merged partial class) — stamps a launch stage on the context's
+    /// <c>SpyAcpHostedAgentRuntimeFactory</c> (<c>AgentOrchestratorHarness.cs</c>) — stamps a launch
+    /// stage on the context's
     /// clock before returning, and records BOTH the clock instance it wrote to and the value read
     /// back immediately after the write. This is what makes the test's "cleared once Running"
     /// assertion non-vacuous: <c>AgentActivityClock.ClearLaunchStage</c> unconditionally bumps
@@ -476,19 +476,19 @@ public partial class AgentOrchestratorVendorTests {
 
     [Test]
     public async Task ClearLaunchStage_runs_once_the_agent_flips_to_Running() {
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
 
         try {
             var server        = new CaptureServerConnection();
             var ptyFactory    = new SpyPtyProcessFactory();
             var cursorFactory = new StageStampingAcpRuntimeFactory();
 
-            await using var orch = BuildOrchestrator(
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
                 server, ptyFactory, new Dictionary<string, IHostedAgentLauncher>(),
                 allowedRepoPath: repoPath, extraRuntimeFactories: [cursorFactory]
             );
 
-            var cmd = NewCursorLaunch("agent-clear-stage", repoPath);
+            var cmd = AgentOrchestratorHarness.NewCursorLaunch("agent-clear-stage", repoPath);
 
             await orch.HandleLaunchAgentForTest(cmd);
 

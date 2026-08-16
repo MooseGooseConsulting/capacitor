@@ -8,10 +8,10 @@ namespace Capacitor.Cli.Tests.Unit.Daemon;
 /// authoritative ActiveCount + live-agent metadata (quarantine wired in D4/Task 8).
 /// Partial of <see cref="AgentOrchestratorVendorTests"/> to reuse its test doubles.
 /// </summary>
-public partial class AgentOrchestratorVendorTests {
+public class DaemonStatusReportTests {
     [Test]
     public async Task BuildStatusReport_reports_active_count_and_live_agents() {
-        await using var orch = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             new CaptureServerConnection(), new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         orch.SeedAgentForTest("a1", LaunchKind.ReviewFlow, status: "Running", flowRunId: "f1", flowRole: "reviewer");

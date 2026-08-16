@@ -16,7 +16,7 @@ namespace Capacitor.Cli.Tests.Unit;
 /// Liveness-supervision spec §0/§1: <see cref="AgentActivityClock"/>'s own semantics (this class),
 /// plus proof that each of the four daemon-local sources — PTY output chunk, ACP transcript envelope,
 /// ACP turn transition, and <see cref="LocalPermissionBridge"/> reviewer tool-call hit — independently
-/// advances a launch's clock (the partial <see cref="Daemon.AgentOrchestratorVendorTests"/> extension below,
+/// advances a launch's clock (the <see cref="AgentActivityClockOrchestratorTests"/> below,
 /// and <see cref="ActivityClockTurnAndEnvelopeWiringTests"/>, and the standalone
 /// <see cref="LocalPermissionBridgeActivityWiringTests"/>).
 ///
@@ -120,11 +120,11 @@ public class AgentActivityClockTests {
 }
 
 /// <summary>
-/// PTY-source wiring (liveness-supervision spec §1): partial of <see cref="Daemon.AgentOrchestratorVendorTests"/>
-/// to reuse its <c>BuildOrchestrator</c>/<c>SeedAgentForTest</c>/<c>ReadAgentOutputForTest</c> harness —
+/// PTY-source wiring (liveness-supervision spec §1): uses <see cref="AgentOrchestratorHarness"/>
+/// for its <c>BuildOrchestrator</c>/<c>SeedAgentForTest</c>/<c>ReadAgentOutputForTest</c> harness —
 /// same pattern as <c>AgentOrchestratorConsentDialogTests</c>/<c>AgentOrchestratorBracketedPasteTests</c>.
 /// </summary>
-public partial class AgentOrchestratorVendorTests {
+public class AgentActivityClockOrchestratorTests {
     /// <summary>Emits exactly one output chunk then completes — no other agent activity (no ACP
     /// runtime, no turn, no permission-bridge hit) exists anywhere in this test, so a seq bump can
     /// only have come from the PTY chunk site.</summary>
@@ -153,7 +153,7 @@ public partial class AgentOrchestratorVendorTests {
     public async Task PTY_output_chunk_advances_the_agents_activity_clock() {
         var server = new CaptureServerConnection();
 
-        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var agent = orch.SeedAgentForTest(
             "pty-activity", isPrivate: true, pty: new OneShotChunkPtyProcess(Encoding.UTF8.GetBytes("hello")));

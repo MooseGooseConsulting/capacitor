@@ -15,10 +15,10 @@ namespace Capacitor.Cli.Tests.Unit.Daemon;
 /// (and, under the new model, physically impossible — idle can never exceed age) wall-clock fields.
 /// Partial of <see cref="AgentOrchestratorVendorTests"/> to reuse its test doubles.
 /// </summary>
-public partial class AgentOrchestratorVendorTests {
+public class ReviewerTtlTests {
     [Test]
     public async Task FindReviewersToReap_flags_lifetime_and_idle_but_not_interactive() {
-        await using var orch = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             new CaptureServerConnection(), new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
         // defaults: 6h lifetime / 2h idle, no server-sent bound on any of these agents.
 
@@ -50,15 +50,15 @@ public partial class AgentOrchestratorVendorTests {
 
         var reap = orch.FindReviewersToReap();
 
-        await Assert.That(Unit.AgentOrchestratorVendorTests.Verdicts(reap)).Contains(("rev-old", "reviewer_ttl_expired"));
-        await Assert.That(Unit.AgentOrchestratorVendorTests.Verdicts(reap)).Contains(("rev-idle", "reviewer_idle_expired"));
+        await Assert.That(AgentOrchestratorHarness.Verdicts(reap)).Contains(("rev-old", "reviewer_ttl_expired"));
+        await Assert.That(AgentOrchestratorHarness.Verdicts(reap)).Contains(("rev-idle", "reviewer_idle_expired"));
         await Assert.That(reap.Select(r => r.Id)).DoesNotContain("interactive");
         await Assert.That(reap.Select(r => r.Id)).DoesNotContain("rev-fresh");
     }
 
     [Test]
     public async Task FindReviewersToReap_disabled_when_bounds_are_zero() {
-        await using var orch = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             new CaptureServerConnection(), new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>(),
             configure: c => { c.ReviewerMaxLifetime = TimeSpan.Zero; c.ReviewerIdleTimeout = TimeSpan.Zero; });
 

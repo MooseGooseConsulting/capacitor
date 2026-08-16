@@ -16,7 +16,7 @@ namespace Capacitor.Cli.Tests.Unit;
 
 /// Local-attach (Phase 1) behaviours on AgentOrchestrator. Partial of
 /// AgentOrchestratorVendorTests to reuse its BuildOrchestrator + test doubles.
-public partial class AgentOrchestratorVendorTests {
+public class AgentOrchestratorLocalAttachTests {
     sealed class NoopRestartStrategy : IRestartStrategy { public RestartOutcome Restart() => RestartOutcome.NoOp; }
 
     static RestartCoordinator TestCoordinator() =>
@@ -89,11 +89,11 @@ public partial class AgentOrchestratorVendorTests {
 
     [Test]
     public async Task Borrowed_cwd_cleanup_does_not_delete_user_dir_or_branch() {
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
 
         try {
             var server = new CaptureServerConnection();
-            await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
             // IsStandalone:true means RemoveAsync WOULD Directory.Delete this path —
             // the Work=BorrowedCwd guard must prevent that.
@@ -121,7 +121,7 @@ public partial class AgentOrchestratorVendorTests {
 
         try {
             var server = new CaptureServerConnection();
-            await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
             var agent = new AgentInstance(
                 "owned-1", null, "", null, dir.FullName, "claude",
@@ -148,7 +148,7 @@ public partial class AgentOrchestratorVendorTests {
             var pty       = new EnvCapturingPtyFactory();
             var launchers = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = new SpyHostedAgentLauncher("claude", "spy-claude") };
 
-            await using var orch = BuildOrchestrator(server, pty, launchers);
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, pty, launchers);
 
             // Client read side: one Detach frame so the attach loop returns promptly.
             var readBuf = new MemoryStream();
@@ -176,7 +176,7 @@ public partial class AgentOrchestratorVendorTests {
     [Test]
     public async Task RegisterAgentAsync_registers_public_agent_and_skips_private() {
         var server = new TripwireServerConnection();
-        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var pub = new AgentInstance("pub-1", null, "", null, "/r", "claude",
             new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) { IsPrivate = false };
@@ -191,7 +191,7 @@ public partial class AgentOrchestratorVendorTests {
         // only ever sees the private registration must see zero calls, since RegisterAgentAsync
         // returns immediately for private agents without touching the server.
         var privServer = new TripwireServerConnection();
-        await using var privOrch = BuildOrchestrator(privServer, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        await using var privOrch = AgentOrchestratorHarness.BuildOrchestrator(privServer, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
         var priv = new AgentInstance("priv-1", null, "", null, "/r", "claude",
             new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) { IsPrivate = true };
         await privOrch.RegisterAgentForTestAsync(priv);
@@ -207,7 +207,7 @@ public partial class AgentOrchestratorVendorTests {
             var pty       = new EnvCapturingPtyFactory();
             var launchers = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = new SpyHostedAgentLauncher("claude", "spy-claude") };
 
-            await using var orch = BuildOrchestrator(server, pty, launchers);
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, pty, launchers);
 
             var readBuf = new MemoryStream();
             await FrameCodec.WriteAsync(readBuf, LocalFrame.Detach(), default);
@@ -243,7 +243,7 @@ public partial class AgentOrchestratorVendorTests {
             var pty       = new EnvCapturingPtyFactory();
             var launchers = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = new SpyHostedAgentLauncher("claude", "spy-claude") };
 
-            await using var orch = BuildOrchestrator(server, pty, launchers, consentGate: DenyDefaultGate(consentDir));
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, pty, launchers, consentGate: AgentOrchestratorHarness.DenyDefaultGate(consentDir));
 
             var readBuf = new MemoryStream();
             await FrameCodec.WriteAsync(readBuf, LocalFrame.Detach(), default);
@@ -271,7 +271,7 @@ public partial class AgentOrchestratorVendorTests {
     [Test]
     public async Task Reconnect_resends_stored_dims_not_the_hosted_constant() {
         var server = new TripwireServerConnection();
-        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         orch.RegisterAgentForTest(new AgentInstance("reg-1", null, "", null, "/r", "claude",
             new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
@@ -286,7 +286,7 @@ public partial class AgentOrchestratorVendorTests {
     [Test]
     public async Task Web_resize_updates_stored_dims_then_reconnect_resends_them() {
         var server = new TripwireServerConnection();
-        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var agent = new AgentInstance("reg-2", null, "", null, "/r", "claude",
             new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
@@ -305,7 +305,7 @@ public partial class AgentOrchestratorVendorTests {
     [Test]
     public async Task Web_resize_min_clamps_per_dimension_with_local_client() {
         var server = new TripwireServerConnection();
-        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var agent = new AgentInstance("reg-3", null, "", null, "/r", "claude",
             new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
@@ -326,7 +326,7 @@ public partial class AgentOrchestratorVendorTests {
     [Test]
     public async Task Web_resize_shrinks_pty_below_a_larger_local_client() {
         var server = new TripwireServerConnection();
-        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var agent = new AgentInstance("reg-4", null, "", null, "/r", "claude",
             new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
@@ -345,7 +345,7 @@ public partial class AgentOrchestratorVendorTests {
     [Test]
     public async Task Web_resize_zero_dims_clears_web_and_grows_back_to_local() {
         var server = new TripwireServerConnection();
-        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var agent = new AgentInstance("reg-5", null, "", null, "/r", "claude",
             new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
@@ -369,7 +369,7 @@ public partial class AgentOrchestratorVendorTests {
     [Test]
     public async Task Web_resize_out_of_ushort_range_is_ignored() {
         var server = new TripwireServerConnection();
-        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var agent = new AgentInstance("reg-6", null, "", null, "/r", "claude",
             new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
@@ -390,7 +390,7 @@ public partial class AgentOrchestratorVendorTests {
     [Test]
     public async Task Private_agent_ignores_server_origin_resize_and_stop() {
         var server = new CaptureServerConnection();
-        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var agent = new AgentInstance("priv-2", null, "", null, "/r", "claude",
             new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
@@ -417,7 +417,7 @@ public partial class AgentOrchestratorVendorTests {
             var pty       = new EnvCapturingPtyFactory();
             var launchers = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = new SpyHostedAgentLauncher("claude", "spy-claude") };
 
-            await using var orch = BuildOrchestrator(server, pty, launchers);
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, pty, launchers);
             await orch.PermissionBridgeForTest.StartAsync(default); // binds 127.0.0.1 + sets BaseUrl
 
             try {
@@ -446,7 +446,7 @@ public partial class AgentOrchestratorVendorTests {
     [Test]
     public async Task Private_agents_are_excluded_from_live_agent_ids() {
         var server = new CaptureServerConnection();
-        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         orch.RegisterAgentForTest(new AgentInstance("pub-1", null, "", null, "/r", "claude",
             new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) { IsPrivate = false, Status = "Running" });
@@ -477,7 +477,7 @@ public partial class AgentOrchestratorVendorTests {
     [Arguments("cursor")]
     public async Task Attach_to_a_runtime_with_no_terminal_is_refused_by_name(string vendor) {
         var server = new CaptureServerConnection();
-        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var runtime = new NoRawInputRuntime(vendor);
         var agent = new AgentInstance(
@@ -514,7 +514,7 @@ public partial class AgentOrchestratorVendorTests {
     [Test]
     public async Task Attach_to_a_terminal_runtime_that_rejects_raw_input_gets_an_error_frame_instead_of_crashing() {
         var server = new CaptureServerConnection();
-        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         // Claims a terminal (so the refusal above does not apply) but throws NotSupportedException on
         // raw input — the defence-in-depth path, still reachable for any runtime whose two answers
@@ -627,7 +627,7 @@ public partial class AgentOrchestratorVendorTests {
 
         try {
             var server = new CaptureServerConnection();
-            orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+            orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
             orch.RegisterAgentForTest(new AgentInstance(
                 "agy-xyz", null, "", null, "/tmp/repo", "antigravity",
                 new NoRawInputRuntime("antigravity"), new WorktreeInfo("/tmp/repo", "", "/tmp/repo"), new CancellationTokenSource()
@@ -679,7 +679,7 @@ public partial class AgentOrchestratorVendorTests {
 
         try {
             var server = new CaptureServerConnection();
-            orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+            orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
             orch.RegisterAgentForTest(new AgentInstance(
                 "agent-xyz", null, "", null, "/tmp/repo", "claude",
                 new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo("/tmp/repo", "", "/tmp/repo"), new CancellationTokenSource()
@@ -730,7 +730,7 @@ public partial class AgentOrchestratorVendorTests {
 
         try {
             var server = new TripwireServerConnection();
-            orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+            orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
             orch.SeedAgentForTest("flow-1", kind: LaunchKind.ReviewFlow, flowRunId: "flow-7f3a", flowRole: "reviewer");
 
             var config = new DaemonConfig { Name = daemonName, ServerUrl = "http://127.0.0.1:1" };
@@ -782,7 +782,7 @@ public partial class AgentOrchestratorVendorTests {
     [Test]
     public async Task Local_list_reports_each_agent_kind_and_flow_identity() {
         var server = new TripwireServerConnection();
-        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
         orch.SeedAgentForTest("plain-1");
         orch.SeedAgentForTest("rev-1", kind: LaunchKind.Review);
         orch.SeedAgentForTest("flow-1", kind: LaunchKind.ReviewFlow, flowRunId: "flow-7f3a", flowRole: "reviewer");
@@ -803,10 +803,10 @@ public partial class AgentOrchestratorVendorTests {
 
     [Test]
     public async Task Attaching_to_a_flow_participant_is_read_only() {
-        var server = new TripwireServerConnection();
-        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
-        var pty   = new RecordingPtyProcess();
-        var agent = orch.SeedAgentForTest("flow-1", kind: LaunchKind.ReviewFlow, flowRunId: "flow-7f3a", flowRole: "reviewer", pty: pty);
+        var             server = new TripwireServerConnection();
+        await using var orch   = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        var             pty    = new RecordingPtyProcess();
+        var             agent  = orch.SeedAgentForTest("flow-1", kind: LaunchKind.ReviewFlow, flowRunId: "flow-7f3a", flowRole: "reviewer", pty: pty);
 
         // Client sends input, then a resize, then detaches. None of the first two may land.
         var readBuf = new MemoryStream();
@@ -836,9 +836,9 @@ public partial class AgentOrchestratorVendorTests {
 
     [Test]
     public async Task Attaching_to_a_plain_agent_stays_read_write() {
-        var server = new TripwireServerConnection();
-        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
-        var pty = new RecordingPtyProcess();
+        var             server = new TripwireServerConnection();
+        await using var orch   = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        var             pty    = new RecordingPtyProcess();
         orch.SeedAgentForTest("plain-1", pty: pty);
 
         var readBuf = new MemoryStream();
@@ -908,7 +908,7 @@ public partial class AgentOrchestratorVendorTests {
             var launchers = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = new SpyHostedAgentLauncher("claude", "spy-claude") };
             // A PTY that emits one chunk and then blocks keeps the agent LIVE (a Noop PTY exits at
             // once and the agent is finalized and unpublished before it can be observed).
-            await using var orch = BuildOrchestrator(
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
                 new TripwireServerConnection(), new FixedPtyProcessFactory(new OneChunkThenBlockPtyProcess()), launchers);
 
             using var client = new DuplexTestStream(new ParkedReadStream(), new MemoryStream());
@@ -1003,7 +1003,7 @@ public partial class AgentOrchestratorVendorTests {
         // The server-origin path refuses private agents by design; a local stop must not,
         // or a `--private` agent could never be stopped from the CLI at all.
         var server = new TripwireServerConnection();
-        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
         orch.SeedAgentForTest("priv-1", isPrivate: true);
 
         var reply = await StopAndReadReply(orch, "priv-1");
@@ -1017,7 +1017,7 @@ public partial class AgentOrchestratorVendorTests {
     [Test]
     public async Task Local_stop_of_a_registered_agent_still_reports_to_the_server() {
         var server = new TripwireServerConnection();
-        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
         orch.SeedAgentForTest("pub-1");
 
         var reply = await StopAndReadReply(orch, "pub-1");
@@ -1030,7 +1030,7 @@ public partial class AgentOrchestratorVendorTests {
     [Test]
     public async Task Local_stop_with_an_empty_id_stops_every_agent() {
         var server = new TripwireServerConnection();
-        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
         orch.SeedAgentForTest("a-1");
         orch.SeedAgentForTest("a-2", isPrivate: true);
 
@@ -1045,7 +1045,7 @@ public partial class AgentOrchestratorVendorTests {
     [Test]
     public async Task Local_stop_of_an_unknown_id_with_no_pid_record_is_an_error() {
         var server = new TripwireServerConnection();
-        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var reply = await StopAndReadReply(orch, "ghost");
 
@@ -1056,7 +1056,7 @@ public partial class AgentOrchestratorVendorTests {
     [Test]
     public async Task Local_stop_that_cannot_be_confirmed_reports_failed() {
         var server = new TripwireServerConnection();
-        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
         // A pty that never reports HasExited, even past TerminateAsync — StopAgentCoreAsync's
         // confirmation check must then report "failed" instead of claiming success.
         orch.SeedAgentForTest("stuck-1", pty: new NeverExitsPtyProcess());
@@ -1070,7 +1070,7 @@ public partial class AgentOrchestratorVendorTests {
     [Test]
     public async Task Local_stop_reports_stopped_when_the_reap_lands_just_after_the_kill() {
         var server = new TripwireServerConnection();
-        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
         // Models the real UnixPtyProcess.TerminateAsync: it sends SIGKILL then issues one
         // non-blocking waitpid immediately, too soon to see the reap — HasExited stays false right
         // after TerminateAsync returns and only flips true once something polls again. Without
@@ -1095,7 +1095,7 @@ public partial class AgentOrchestratorVendorTests {
     [Test]
     public async Task Stopping_a_flow_participant_without_force_is_refused() {
         var server = new TripwireServerConnection();
-        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
         orch.SeedAgentForTest("flow-1", kind: LaunchKind.ReviewFlow, flowRunId: "flow-7f3a", flowRole: "reviewer");
 
         var reply = await StopV2AndReadReply(orch, force: false, "flow-1");
@@ -1109,7 +1109,7 @@ public partial class AgentOrchestratorVendorTests {
     [Test]
     public async Task Stopping_a_flow_participant_with_force_succeeds() {
         var server = new TripwireServerConnection();
-        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
         orch.SeedAgentForTest("flow-1", kind: LaunchKind.ReviewFlow, flowRunId: "flow-7f3a", flowRole: "reviewer");
 
         var reply = await StopV2AndReadReply(orch, force: true, "flow-1");
@@ -1122,7 +1122,7 @@ public partial class AgentOrchestratorVendorTests {
     [Test]
     public async Task Stopping_a_non_flow_review_agent_without_force_is_refused_with_an_accurate_message() {
         var server = new TripwireServerConnection();
-        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
         orch.SeedAgentForTest("rev-1", kind: LaunchKind.Review);
 
         var reply = await StopV2AndReadReply(orch, force: false, "rev-1");
@@ -1142,7 +1142,7 @@ public partial class AgentOrchestratorVendorTests {
         // says it was a review-flow participant. The refusal must fire off the RECORD's Kind
         // before TryStopByPidRecordAsync (and its live-process reap) ever runs.
         var server = new TripwireServerConnection();
-        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
         orch.WritePidRecordForTest(new AgentPidRecord(
             "ghost-flow", 999_999, "", PidIdentityKind.IdentityUnavailable, "ReviewFlow", "codex",
             "flow-7f3a", "reviewer", orch.DaemonIdForTest, orch.DaemonEpochForTest, DateTimeOffset.UtcNow));
@@ -1161,7 +1161,7 @@ public partial class AgentOrchestratorVendorTests {
         // --force must reach TryStopByPidRecordAsync itself (kept policy-free) rather than being
         // turned back by the new gate above it.
         var server = new TripwireServerConnection();
-        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         using var dummy = DummyProcess.StartSleep(30);
         var pid      = dummy.Pid;
@@ -1182,7 +1182,7 @@ public partial class AgentOrchestratorVendorTests {
     [Test]
     public async Task Stop_all_without_force_skips_protected_agents_and_says_so() {
         var server = new TripwireServerConnection();
-        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
         orch.SeedAgentForTest("plain-1");
         orch.SeedAgentForTest("flow-1", kind: LaunchKind.ReviewFlow, flowRunId: "flow-7f3a", flowRole: "reviewer");
 
@@ -1197,7 +1197,7 @@ public partial class AgentOrchestratorVendorTests {
     [Test]
     public async Task Stop_all_with_force_includes_protected_agents() {
         var server = new TripwireServerConnection();
-        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
         orch.SeedAgentForTest("plain-1");
         orch.SeedAgentForTest("flow-1", kind: LaunchKind.ReviewFlow, flowRunId: "flow-7f3a", flowRole: "reviewer");
 
@@ -1276,7 +1276,7 @@ public partial class AgentOrchestratorVendorTests {
         // `stop --all`'s confirmation off the kind column — so a corrupted row would understate
         // the blast radius the user is agreeing to.
         var server = new TripwireServerConnection();
-        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
         orch.SeedAgentForTest("tabby-1", kind: LaunchKind.ReviewFlow,
             flowRunId: "flow\t7f3a", flowRole: "rev\niewer");
 

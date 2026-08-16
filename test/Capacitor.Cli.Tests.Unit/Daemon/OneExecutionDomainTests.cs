@@ -14,11 +14,9 @@ namespace Capacitor.Cli.Tests.Unit.Daemon;
 // bypass, and the shutdown teardown/handoff layers. The lane's own mechanics (coalescing, admission,
 // alarm, shutdown settlement) are pinned at the processor level in OneExecutionDomainProcessorTests.
 //
-// Reuses the AgentOrchestratorVendorTests harness (BuildOrchestrator/SpyPtyProcessFactory/
-// SpyHostedAgentLauncher/SeqCaptureServerConnection/CapturingLogger/DenyDefaultGate/CreateGitRepo) — see
-// HealBarrierReportTests.cs for the precedent of a second partial-class file doing the same.
-public partial class AgentOrchestratorVendorTests {
-    static readonly TimeSpan Bounded = TimeSpan.FromSeconds(30);
+// Reuses AgentOrchestratorHarness (BuildOrchestrator/SpyPtyProcessFactory/
+// SpyHostedAgentLauncher/SeqCaptureServerConnection/CapturingLogger/DenyDefaultGate/CreateGitRepo).
+public class OneExecutionDomainTests {
 
     /// <summary>Parks every <see cref="ILaunchConsentPrompter.PromptAsync"/> call on a per-request
     /// TaskCompletionSource (keyed by <see cref="LaunchConsentPromptRequest.RequestId"/>, which is the agent
@@ -60,7 +58,7 @@ public partial class AgentOrchestratorVendorTests {
         /// <paramref name="done"/> reports success. One shot is not enough: on a SERIAL lane a later item's
         /// PromptAsync is not even called — so its TCS does not exist yet — until the earlier item settles.</summary>
         public async Task ResolveUntilAsync(bool? answer, Func<bool> done) {
-            var deadline = DateTime.UtcNow + Bounded;
+            var deadline = DateTime.UtcNow + WaitHarness.Bounded;
             while (true) {
                 foreach (var tcs in _pending.Values) tcs.TrySetResult(answer);
                 if (done()) return;
@@ -91,7 +89,7 @@ public partial class AgentOrchestratorVendorTests {
     }
 
     /// <summary>An <see cref="IHostApplicationLifetime"/> whose <see cref="ApplicationStopping"/> is a REAL,
-    /// test-controlled token — <see cref="Unit.AgentOrchestratorVendorTests.StubHostLifetime"/> (every other test's default) is fixed at
+    /// test-controlled token — <see cref="AgentOrchestratorHarness.StubHostLifetime"/> (every other test's default) is fixed at
     /// <see cref="CancellationToken.None"/> and can never fire. AgentOrchestrator links its internal
     /// <c>_shutdownCts</c> to this token AT CONSTRUCTION via
     /// <see cref="CancellationTokenSource.CreateLinkedTokenSource(CancellationToken)"/>, which is a LIVE link
@@ -144,12 +142,6 @@ public partial class AgentOrchestratorVendorTests {
         new(AgentId: agentId, Prompt: "hi", Model: "opus", Effort: null,
             RepoPath: repoPath, Tools: null, AttachmentIds: null, Vendor: vendor);
 
-    static async Task SpinUntilAsync(Func<bool> condition, TimeSpan timeout) {
-        var deadline = DateTime.UtcNow + timeout;
-        while (!condition() && DateTime.UtcNow < deadline) await Task.Delay(10);
-        if (!condition()) throw new TimeoutException("Condition was not met within the timeout.");
-    }
-
     /// <summary>A stop EXECUTED means the shared executor ran: it stamps Status=Completed and the
     /// user-stop end reason. It does NOT mean the entry left the registry — for a SEEDED agent there is no
     /// read loop to drive FinalizeAgentRunAsync/CleanupAgentAsync, so removal is not the observable here
@@ -162,17 +154,6 @@ public partial class AgentOrchestratorVendorTests {
         await Assert.That(orch.BuildLiveAgents().Select(a => a.Id)).DoesNotContain(agentId);
     }
 
-    /// <summary>Bound EVERY await a §3.3 regression could turn infinite. The pins here work by parking the
-    /// lane and releasing it later in the same test, so a re-added execution await inside a handler would
-    /// block before the release ever runs — and with no <c>[Timeout]</c> on these tests that is a suite hang,
-    /// which is a far worse signal than a named failure. Every <c>Submit*ForTest</c> call (the seams that
-    /// must return WITHOUT execution) goes through here for exactly that reason.</summary>
-    static async Task WaitBoundedAsync(Task task, string because) {
-        var finished = await Task.WhenAny(task, Task.Delay(Bounded));
-        await Assert.That(finished == task).IsTrue().Because(because);
-        await task;
-    }
-
     // ══ Pump + lane contract ════════════════════════════════════════════════════════════════════════
 
     // The core §3.3 liveness claim: with a SEQUENCED launch parked on a consent prompt, the pump keeps
@@ -183,14 +164,14 @@ public partial class AgentOrchestratorVendorTests {
         var dir = Directory.CreateTempSubdirectory("kcap-domain-pump-").FullName;
         var (gate, prompter) = PromptGateWithParkingPrompter(dir);
         var server = new SeqCaptureServerConnection();
-        await using var orch = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(server, new SpyPtyProcessFactory(),
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher>(), consentGate: gate);
         var epoch = orch.DaemonEpochForTest;
 
         var launchTask = orch.SubmitLaunchAgentForTest(SequencedLaunch("parked", epoch, 1));
-        await WaitBoundedAsync(launchTask, "HandleLaunchAgent must not await the sequenced launch's execution");
+        await WaitHarness.WaitBoundedAsync(launchTask, "HandleLaunchAgent must not await the sequenced launch's execution");
         // dequeued and genuinely parked at the gate
-        await WaitBoundedAsync(prompter.WaitForPromptAsync("parked"), "the sequenced launch never reached the consent prompt");
+        await WaitHarness.WaitBoundedAsync(prompter.WaitForPromptAsync("parked"), "the sequenced launch never reached the consent prompt");
 
         orch.SeedAgentForTest("other", status: "Running");
         // NOT awaited: SubmitAsync is not itself `async` — its whole body, including the lock-protected
@@ -202,10 +183,10 @@ public partial class AgentOrchestratorVendorTests {
         await Assert.That(orch.BuildStatusReport().LastProcessedSeq).IsEqualTo(0L); // execution has NOT run
 
         // Processor-independent handlers dispatch freely while the lane is parked.
-        await WaitBoundedAsync(orch.SendDaemonStatusReportOnceAsync(), "a status-report request stalled behind the parked launch");
+        await WaitHarness.WaitBoundedAsync(orch.SendDaemonStatusReportOnceAsync(), "a status-report request stalled behind the parked launch");
 
         await prompter.ResolveUntilAsync(null, () => orch.BuildStatusReport().LastProcessedSeq >= 2L);
-        await WaitBoundedAsync(stopTask, "the sequenced stop handler never returned");
+        await WaitHarness.WaitBoundedAsync(stopTask, "the sequenced stop handler never returned");
         Directory.Delete(dir, true);
     }
 
@@ -216,13 +197,13 @@ public partial class AgentOrchestratorVendorTests {
         var dir = Directory.CreateTempSubdirectory("kcap-domain-order-").FullName;
         var (gate, prompter) = PromptGateWithParkingPrompter(dir);
         var server = new SeqCaptureServerConnection();
-        await using var orch = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(server, new SpyPtyProcessFactory(),
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher>(), consentGate: gate);
         var epoch = orch.DaemonEpochForTest;
 
-        await WaitBoundedAsync(orch.SubmitLaunchAgentForTest(SequencedLaunch("a1", epoch, 1)),
+        await WaitHarness.WaitBoundedAsync(orch.SubmitLaunchAgentForTest(SequencedLaunch("a1", epoch, 1)),
             "the launch handler awaited execution instead of returning after acceptance");
-        await WaitBoundedAsync(orch.SubmitLaunchAgentForTest(SequencedLaunch("a2", epoch, 2)),
+        await WaitHarness.WaitBoundedAsync(orch.SubmitLaunchAgentForTest(SequencedLaunch("a2", epoch, 2)),
             "the launch handler awaited execution instead of returning after acceptance");
 
         await Assert.That(orch.BuildStatusReport().HighestAcceptedSeq).IsEqualTo(2L);
@@ -235,14 +216,14 @@ public partial class AgentOrchestratorVendorTests {
     // Exactly one terminal answer per accepted item — outcome (a) success.
     [Test]
     public async Task Settlement_success_is_accepted_before_terminal_with_exactly_one_ack() {
-        var (repoPath, cleanup) = Unit.AgentOrchestratorVendorTests.CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
 
         try {
             var             server     = new SeqCaptureServerConnection();
             var             ptyFactory = new SpyPtyProcessFactory();
             var             claudeSpy  = new SpyHostedAgentLauncher("claude", cliPath: "spy-claude");
             var             launchers  = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = claudeSpy };
-            await using var orch       = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(server, ptyFactory, launchers, allowedRepoPath: repoPath);
+            await using var orch       = AgentOrchestratorHarness.BuildOrchestrator(server, ptyFactory, launchers, allowedRepoPath: repoPath);
             var             epoch      = orch.DaemonEpochForTest;
 
             await orch.SubmitLaunchAgentForTest(new LaunchAgentCommand(
@@ -250,7 +231,7 @@ public partial class AgentOrchestratorVendorTests {
                 RepoPath: repoPath, Tools: null, AttachmentIds: null, Vendor: "claude",
                 Epoch: epoch, Seq: 1, CommandId: "cmd-1"));
 
-            await SpinUntilAsync(() => server.Acks.Count > 0, Bounded);
+            await WaitHarness.SpinUntilAsync(() => server.Acks.Count > 0, WaitHarness.Bounded);
 
             await Assert.That(server.Rejects).IsEmpty();
             await Assert.That(server.Acks).Count().IsEqualTo(1); // exactly one terminal answer
@@ -269,8 +250,8 @@ public partial class AgentOrchestratorVendorTests {
         var server    = new SeqCaptureServerConnection();
         var claudeSpy = new SpyHostedAgentLauncher("claude", cliPath: "spy-claude");
         var launchers = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = claudeSpy };
-        await using var orch = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(server, new SpyPtyProcessFactory(), launchers,
-            consentGate: Unit.AgentOrchestratorVendorTests.DenyDefaultGate(dir));
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), launchers,
+            consentGate: AgentOrchestratorHarness.DenyDefaultGate(dir));
         var epoch = orch.DaemonEpochForTest;
 
         await orch.SubmitLaunchAgentForTest(new LaunchAgentCommand(
@@ -278,7 +259,7 @@ public partial class AgentOrchestratorVendorTests {
             RepoPath: "/tmp/does-not-matter", Tools: null, AttachmentIds: null, Vendor: "claude",
             Epoch: epoch, Seq: 1, CommandId: "cmd-1"));
 
-        await SpinUntilAsync(() => server.Acks.Count > 0, Bounded);
+        await WaitHarness.SpinUntilAsync(() => server.Acks.Count > 0, WaitHarness.Bounded);
 
         await Assert.That(server.Rejects).Count().IsEqualTo(1);           // exactly one terminal answer
         await Assert.That(server.Rejects[0].Reason).IsEqualTo(CommandRejectedReason.Semantic);
@@ -305,15 +286,15 @@ public partial class AgentOrchestratorVendorTests {
         // Declared before orch, so orch — which holds a live linked registration — disposes first.
         using var lifetime = new CancellableHostLifetime();
         var server         = new SeqCaptureServerConnection();
-        await using var orch = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(server, new SpyPtyProcessFactory(),
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher>(), consentGate: gate, lifetime: lifetime);
         var epoch = orch.DaemonEpochForTest;
 
-        await WaitBoundedAsync(orch.SubmitLaunchAgentForTest(SequencedLaunch("cancel-me", epoch, 1)),
+        await WaitHarness.WaitBoundedAsync(orch.SubmitLaunchAgentForTest(SequencedLaunch("cancel-me", epoch, 1)),
             "the launch handler awaited execution instead of returning after acceptance");
         lifetime.Cts.Cancel();
 
-        await SpinUntilAsync(() => server.Acks.Count > 0, Bounded);
+        await WaitHarness.SpinUntilAsync(() => server.Acks.Count > 0, WaitHarness.Bounded);
 
         await Assert.That(server.Acks).Count().IsEqualTo(1);  // exactly one terminal answer — no double answer
         await Assert.That(server.Acks[0].State).IsEqualTo(CommandAckState.Processed);
@@ -332,24 +313,24 @@ public partial class AgentOrchestratorVendorTests {
         var (gate, prompter) = PromptGateWithParkingPrompter(dir);
         var server = new SeqCaptureServerConnection();
         var logger = new CapturingLogger<AgentOrchestrator>();
-        await using var orch = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(server, new SpyPtyProcessFactory(),
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher>(), consentGate: gate, logger: logger);
 
         // An un-seq'd launch, committed to the lane and parked at the gate.
-        await WaitBoundedAsync(orch.SubmitLaunchAgentForTest(UnsequencedLaunch("parked")),
+        await WaitHarness.WaitBoundedAsync(orch.SubmitLaunchAgentForTest(UnsequencedLaunch("parked")),
             "the launch handler awaited execution instead of returning after the lane commit");
-        await WaitBoundedAsync(prompter.WaitForPromptAsync("parked"), "the un-sequenced launch never reached the consent prompt");
+        await WaitHarness.WaitBoundedAsync(prompter.WaitForPromptAsync("parked"), "the un-sequenced launch never reached the consent prompt");
 
         // An un-seq'd stop for a live agent, submitted while the launch is parked: admitted, queued, and
         // provably not yet executed.
         orch.SeedAgentForTest("victim", status: "Running");
-        await WaitBoundedAsync(orch.SubmitServerStopAgentForTest("victim"),
+        await WaitHarness.WaitBoundedAsync(orch.SubmitServerStopAgentForTest("victim"),
             "the stop handler awaited execution behind the parked launch");
         await Assert.That(orch.GetAgentForTest("victim")!.Status).IsEqualTo("Running");
         await Assert.That(orch.ProcessorForTest!.QueuedStopDepth).IsEqualTo(1);
 
         prompter.Resolve("parked", false);
-        await WaitBoundedAsync(orch.DrainLaneForTest(), "the lane never drained the launch and its queued stop");
+        await WaitHarness.WaitBoundedAsync(orch.DrainLaneForTest(), "the lane never drained the launch and its queued stop");
         await AssertStopExecutedAsync(orch, "victim");
         await Assert.That(orch.ProcessorForTest!.QueuedStopDepth).IsEqualTo(0);
         Directory.Delete(dir, true);
@@ -363,21 +344,21 @@ public partial class AgentOrchestratorVendorTests {
         var dir = Directory.CreateTempSubdirectory("kcap-domain-bypass-").FullName;
         var (gate, prompter) = PromptGateWithParkingPrompter(dir);
         var server = new SeqCaptureServerConnection();
-        await using var orch = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(server, new SpyPtyProcessFactory(),
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher>(), consentGate: gate);
 
-        await WaitBoundedAsync(orch.SubmitLaunchAgentForTest(UnsequencedLaunch("parked")),
+        await WaitHarness.WaitBoundedAsync(orch.SubmitLaunchAgentForTest(UnsequencedLaunch("parked")),
             "the launch handler awaited execution instead of returning after the lane commit");
-        await WaitBoundedAsync(prompter.WaitForPromptAsync("parked"), "the un-sequenced launch never reached the consent prompt");
+        await WaitHarness.WaitBoundedAsync(prompter.WaitForPromptAsync("parked"), "the un-sequenced launch never reached the consent prompt");
 
         orch.SeedAgentForTest("reviewer", LaunchKind.ReviewFlow, status: "Running");
         // The internal path, unchanged: bypasses the lane entirely and completes while it is parked.
-        await WaitBoundedAsync(orch.HandleStopAgentForTest("reviewer"),
+        await WaitHarness.WaitBoundedAsync(orch.HandleStopAgentForTest("reviewer"),
             "internal reaping was routed through the parked execution lane");
         await AssertStopExecutedAsync(orch, "reviewer");
 
         prompter.Resolve("parked", false);
-        await WaitBoundedAsync(orch.DrainLaneForTest(), "the lane never drained");
+        await WaitHarness.WaitBoundedAsync(orch.DrainLaneForTest(), "the lane never drained");
         Directory.Delete(dir, true);
     }
 
@@ -388,12 +369,12 @@ public partial class AgentOrchestratorVendorTests {
         var dir = Directory.CreateTempSubdirectory("kcap-domain-exists-").FullName;
         var (gate, prompter) = PromptGateWithParkingPrompter(dir);
         var server = new SeqCaptureServerConnection();
-        await using var orch = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(server, new SpyPtyProcessFactory(),
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher>(), consentGate: gate);
 
-        await WaitBoundedAsync(orch.SubmitLaunchAgentForTest(UnsequencedLaunch("parked")),
+        await WaitHarness.WaitBoundedAsync(orch.SubmitLaunchAgentForTest(UnsequencedLaunch("parked")),
             "the launch handler awaited execution instead of returning after the lane commit");
-        await WaitBoundedAsync(prompter.WaitForPromptAsync("parked"), "the un-sequenced launch never reached the consent prompt");
+        await WaitHarness.WaitBoundedAsync(prompter.WaitForPromptAsync("parked"), "the un-sequenced launch never reached the consent prompt");
 
         await Assert.That(orch.GetAgentForTest("parked")).IsNull();
         await Assert.That(orch.BuildLiveAgents().Select(a => a.Id)).DoesNotContain("parked");
@@ -402,7 +383,7 @@ public partial class AgentOrchestratorVendorTests {
         await Assert.That(orch.ProcessorForTest!.IsActiveLaunchTargetForTest("parked")).IsTrue();
 
         prompter.Resolve("parked", false);
-        await WaitBoundedAsync(orch.DrainLaneForTest(), "the lane never drained");
+        await WaitHarness.WaitBoundedAsync(orch.DrainLaneForTest(), "the lane never drained");
         Directory.Delete(dir, true);
     }
 
@@ -411,14 +392,14 @@ public partial class AgentOrchestratorVendorTests {
     // population; nothing about §3.3 may change it.
     [Test]
     public async Task With_no_processor_an_unsequenced_launch_executes_inline_before_the_handler_returns() {
-        var (repoPath, cleanup) = Unit.AgentOrchestratorVendorTests.CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
 
         try {
             var server     = new SeqCaptureServerConnection();
             var ptyFactory = new SpyPtyProcessFactory();
             var claudeSpy  = new SpyHostedAgentLauncher("claude", cliPath: "spy-claude");
             var launchers  = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = claudeSpy };
-            await using var orch = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(server, ptyFactory, launchers, allowedRepoPath: repoPath,
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, ptyFactory, launchers, allowedRepoPath: repoPath,
                 deferProcessorPublication: true);
             await Assert.That(orch.ProcessorForTest).IsNull();
 
@@ -448,12 +429,12 @@ public partial class AgentOrchestratorVendorTests {
         var dir = Directory.CreateTempSubdirectory("kcap-domain-barrier-").FullName;
         var (gate, prompter) = PromptGateWithParkingPrompter(dir);
         var server = new SeqCaptureServerConnection();
-        await using var orch = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(server, new SpyPtyProcessFactory(),
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher>(), consentGate: gate, deferProcessorPublication: true);
 
         // Inline (pre-publication) un-seq'd launch, paused inside the core on the consent prompt.
         var inline = orch.SubmitLaunchAgentForTest(UnsequencedLaunch("inline"));
-        await WaitBoundedAsync(prompter.WaitForPromptAsync("inline"), "the inline launch never reached the consent prompt");
+        await WaitHarness.WaitBoundedAsync(prompter.WaitForPromptAsync("inline"), "the inline launch never reached the consent prompt");
         await Assert.That(inline.IsCompleted).IsFalse();
 
         orch.PublishSequencedProcessorForTest();
@@ -461,7 +442,7 @@ public partial class AgentOrchestratorVendorTests {
 
         // A lane item now exists, but the lane must not start it while the inline slot is reserved.
         orch.SeedAgentForTest("victim", status: "Running");
-        await WaitBoundedAsync(orch.SubmitServerStopAgentForTest("victim"),
+        await WaitHarness.WaitBoundedAsync(orch.SubmitServerStopAgentForTest("victim"),
             "the stop handler awaited execution behind the reserved inline item");
         await Task.Delay(150);
         await Assert.That(orch.GetAgentForTest("victim")!.Status).IsEqualTo("Running")
@@ -469,8 +450,8 @@ public partial class AgentOrchestratorVendorTests {
 
         // Releasing the inline item releases the barrier, and only then does the lane run.
         prompter.Resolve("inline", false);
-        await WaitBoundedAsync(inline, "the inline launch never completed");
-        await WaitBoundedAsync(orch.DrainLaneForTest(), "the lane never started after the inline drain");
+        await WaitHarness.WaitBoundedAsync(inline, "the inline launch never completed");
+        await WaitHarness.WaitBoundedAsync(orch.DrainLaneForTest(), "the lane never started after the inline drain");
         await AssertStopExecutedAsync(orch, "victim");
         Directory.Delete(dir, true);
     }
@@ -482,7 +463,7 @@ public partial class AgentOrchestratorVendorTests {
     // survivor, which is NOT the no-op that justifies dropping unknown ids.
     [Test]
     public async Task Unknown_stop_targets_are_dropped_but_registry_and_pid_record_targets_are_admitted() {
-        await using var orch = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(new SeqCaptureServerConnection(), new SpyPtyProcessFactory(),
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(new SeqCaptureServerConnection(), new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher>());
 
         await Assert.That(orch.IsKnownStopTargetForTest("nobody")).IsFalse();
@@ -498,7 +479,7 @@ public partial class AgentOrchestratorVendorTests {
 
         // An unknown-target stop through the real handler is dropped at admission: nothing queues, and the
         // handler still returns cleanly (there is no reply surface to fail).
-        await WaitBoundedAsync(orch.HandleServerStopAgentForTest("nobody"), "an unknown-target stop hung the handler");
+        await WaitHarness.WaitBoundedAsync(orch.HandleServerStopAgentForTest("nobody"), "an unknown-target stop hung the handler");
         await Assert.That(orch.ProcessorForTest!.QueuedStopDepth).IsEqualTo(0);
     }
 
@@ -514,15 +495,15 @@ public partial class AgentOrchestratorVendorTests {
         var (gate, prompter) = PromptGateWithParkingPrompter(dir);
         var server = new SeqCaptureServerConnection();
         var logger = new CapturingLogger<AgentOrchestrator>();
-        await using var orch = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(server, new SpyPtyProcessFactory(),
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher>(), consentGate: gate, logger: logger);
 
-        await WaitBoundedAsync(orch.SubmitLaunchAgentForTest(UnsequencedLaunch("in-flight")),
+        await WaitHarness.WaitBoundedAsync(orch.SubmitLaunchAgentForTest(UnsequencedLaunch("in-flight")),
             "the launch handler awaited execution instead of returning after the lane commit");
-        await WaitBoundedAsync(prompter.WaitForPromptAsync("in-flight"), "the in-flight launch never reached the consent prompt");
+        await WaitHarness.WaitBoundedAsync(prompter.WaitForPromptAsync("in-flight"), "the in-flight launch never reached the consent prompt");
 
         // Input for the in-flight (unregistered) launch: dropped and logged, no throw, no stall.
-        await WaitBoundedAsync(orch.HandleSendInputForTest(new SendInputCommand("in-flight", "hello", null)),
+        await WaitHarness.WaitBoundedAsync(orch.HandleSendInputForTest(new SendInputCommand("in-flight", "hello", null)),
             "SendInput for an unknown agent stalled instead of dropping");
         await Assert.That(logger.Entries.Any(e =>
             e.Level == LogLevel.Warning && e.Message.Contains("in-flight") && e.Message.Contains("SendInput dropped"))).IsTrue();
@@ -535,10 +516,10 @@ public partial class AgentOrchestratorVendorTests {
         var report = orch.BuildStatusReport();
         await Assert.That(report.LiveAgents.Select(a => a.Id)).DoesNotContain("in-flight");
         await Assert.That(report.Quarantined.Select(a => a.Id)).DoesNotContain("in-flight");
-        await WaitBoundedAsync(orch.SendDaemonStatusReportOnceAsync(), "a status-report request stalled behind the parked launch");
+        await WaitHarness.WaitBoundedAsync(orch.SendDaemonStatusReportOnceAsync(), "a status-report request stalled behind the parked launch");
 
         prompter.Resolve("in-flight", false);
-        await WaitBoundedAsync(orch.DrainLaneForTest(), "the lane never drained");
+        await WaitHarness.WaitBoundedAsync(orch.DrainLaneForTest(), "the lane never drained");
         Directory.Delete(dir, true);
     }
 
@@ -553,7 +534,7 @@ public partial class AgentOrchestratorVendorTests {
         var (gate, prompter) = PromptGateWithParkingPrompter(dir);
         var server = new SeqCaptureServerConnection();
         var logger = new CapturingLogger<AgentOrchestrator>();
-        var orch   = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(server, new SpyPtyProcessFactory(),
+        var orch   = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher>(), consentGate: gate, logger: logger);
 
         using var childA = DummyProcess.StartSleep(60);
@@ -562,19 +543,19 @@ public partial class AgentOrchestratorVendorTests {
         orch.SeedAgentForTest("child-b", status: "Running", pty: new KillingPtyDouble(childB));
 
         // Park the lane so the stops below cannot drain before shutdown.
-        await WaitBoundedAsync(orch.SubmitLaunchAgentForTest(UnsequencedLaunch("parked")),
+        await WaitHarness.WaitBoundedAsync(orch.SubmitLaunchAgentForTest(UnsequencedLaunch("parked")),
             "the launch handler awaited execution instead of returning after the lane commit");
-        await WaitBoundedAsync(prompter.WaitForPromptAsync("parked"), "the un-sequenced launch never reached the consent prompt");
+        await WaitHarness.WaitBoundedAsync(prompter.WaitForPromptAsync("parked"), "the un-sequenced launch never reached the consent prompt");
 
-        await WaitBoundedAsync(orch.SubmitServerStopAgentForTest("child-a"),
+        await WaitHarness.WaitBoundedAsync(orch.SubmitServerStopAgentForTest("child-a"),
             "the stop handler awaited execution behind the parked launch");
-        await WaitBoundedAsync(orch.SubmitServerStopAgentForTest("child-b"),
+        await WaitHarness.WaitBoundedAsync(orch.SubmitServerStopAgentForTest("child-b"),
             "the stop handler awaited execution behind the parked launch");
         await Assert.That(orch.ProcessorForTest!.QueuedStopDepth).IsEqualTo(2);
 
         // Real shutdown. Cancelling the shutdown token releases the parked prompt, and closing the lane to
         // new work happens BEFORE agent teardown, so the queued stops are discarded rather than raced.
-        await WaitBoundedAsync(orch.DisposeAsync().AsTask(), "DisposeAsync hung on the parked lane");
+        await WaitHarness.WaitBoundedAsync(orch.DisposeAsync().AsTask(), "DisposeAsync hung on the parked lane");
 
         childA.WaitForExit(TimeSpan.FromSeconds(10));
         childB.WaitForExit(TimeSpan.FromSeconds(10));
@@ -603,7 +584,7 @@ public partial class AgentOrchestratorVendorTests {
     [Test]
     public async Task A_child_surviving_shutdown_is_reaped_by_the_next_boots_scan_and_a_pid_reused_process_is_not() {
         var server = new SeqCaptureServerConnection();
-        var orch   = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(server, new SpyPtyProcessFactory(),
+        var orch   = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher>());
 
         // A child started AFTER the teardown snapshot: it exists and has a durable record, but the
@@ -627,7 +608,7 @@ public partial class AgentOrchestratorVendorTests {
             "ReviewFlow", "codex", "f1", "reviewer", daemonId, oldEpoch, DateTimeOffset.UtcNow));
 
         var recordRoot = orch.PidRecordRootForTest;
-        await WaitBoundedAsync(orch.DisposeAsync().AsTask(), "DisposeAsync hung");
+        await WaitHarness.WaitBoundedAsync(orch.DisposeAsync().AsTask(), "DisposeAsync hung");
 
         // Shutdown left the late child alive with its record intact — the explicit residual.
         await Assert.That(survivor.HasExited).IsFalse();

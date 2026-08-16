@@ -11,15 +11,14 @@ namespace Capacitor.Cli.Tests.Unit;
 /// <see cref="LiveAgentInfo.TurnInFlight"/>/<see cref="LiveAgentInfo.LaunchStage"/>) lands on
 /// <see cref="AgentOrchestrator.BuildLiveAgents"/>'s entries, and a genuine
 /// <c>AgentActivityClock.SetLaunchStage</c> transition fires an immediate out-of-cycle
-/// <c>DaemonStatusReport</c> alongside the unchanged 60s periodic loop. Reuses the
-/// <see cref="Daemon.AgentOrchestratorVendorTests"/> harness (BuildOrchestrator/SeedAgentForTest/
-/// SpyPtyProcessFactory) — see HealBarrierReportTests.cs for the precedent of a second
-/// partial-class file doing the same.
+/// <c>DaemonStatusReport</c> alongside the unchanged 60s periodic loop. Reuses
+/// <see cref="AgentOrchestratorHarness"/> (BuildOrchestrator/SeedAgentForTest/
+/// SpyPtyProcessFactory).
 /// </summary>
-public partial class AgentOrchestratorVendorTests {
+public class StatusReportActivityFieldsTests {
     [Test]
     public async Task Running_agent_report_carries_the_capability_group_without_launch_stage() {
-        await using var orch = BuildOrchestrator(new CaptureServerConnection(), new SpyPtyProcessFactory(),
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(new CaptureServerConnection(), new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher>());
         var agent = orch.SeedAgentForTest("running-1", LaunchKind.ReviewFlow, status: "Running");
         // Force a non-null clock stage on this ALREADY-Running agent — the real handshake always
@@ -42,7 +41,7 @@ public partial class AgentOrchestratorVendorTests {
 
     [Test]
     public async Task Starting_agent_report_carries_all_four_fields() {
-        await using var orch = BuildOrchestrator(new CaptureServerConnection(), new SpyPtyProcessFactory(),
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(new CaptureServerConnection(), new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher>());
         var agent = orch.SeedAgentForTest("starting-1", LaunchKind.ReviewFlow, status: "Starting");
         agent.ActivityClock.SetLaunchStage("spawned");
@@ -78,12 +77,12 @@ public partial class AgentOrchestratorVendorTests {
     [Test]
     public async Task Stage_transition_triggers_exactly_one_send_and_a_repeat_sends_nothing() {
         var server = new StatusReportCountingServerConnection();
-        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(),
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher>());
         var agent = orch.SeedAgentForTest("stage-1", LaunchKind.ReviewFlow, status: "Starting");
 
         agent.ActivityClock.SetLaunchStage("spawned"); // genuine transition #1 (null -> "spawned")
-        await PollUntilAsync(() => server.SendCount >= 1);
+        await WaitHarness.PollUntilAsync(() => server.SendCount >= 1);
         await Assert.That(server.SendCount).IsEqualTo(1);
 
         agent.ActivityClock.SetLaunchStage("spawned"); // SAME value: no transition, no send
@@ -91,14 +90,14 @@ public partial class AgentOrchestratorVendorTests {
         await Assert.That(server.SendCount).IsEqualTo(1);
 
         agent.ActivityClock.SetLaunchStage("initialized"); // genuine transition #2
-        await PollUntilAsync(() => server.SendCount >= 2);
+        await WaitHarness.PollUntilAsync(() => server.SendCount >= 2);
         await Assert.That(server.SendCount).IsEqualTo(2);
     }
 
     [Test]
     public async Task Failing_out_of_cycle_send_does_not_throw_or_fail_the_launch() {
         var server = new StatusReportCountingServerConnection(throwOnSend: true);
-        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(),
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher>());
         var agent = orch.SeedAgentForTest("stage-2", LaunchKind.ReviewFlow, status: "Starting");
 
@@ -113,7 +112,7 @@ public partial class AgentOrchestratorVendorTests {
         // The stage-transition hook itself (the actual production call site, fire-and-forget) also
         // must not throw synchronously out of SetLaunchStage.
         agent.ActivityClock.SetLaunchStage("spawned");
-        await PollUntilAsync(() => server.SendCount >= 2);
+        await WaitHarness.PollUntilAsync(() => server.SendCount >= 2);
 
         // The agent/launch is completely unaffected by the failed sends.
         await Assert.That(agent.Status).IsEqualTo("Starting");
@@ -121,7 +120,7 @@ public partial class AgentOrchestratorVendorTests {
 
         // A second, distinct transition still fires (the failure didn't wedge the hook).
         agent.ActivityClock.SetLaunchStage("initialized");
-        await PollUntilAsync(() => server.SendCount >= 3);
+        await WaitHarness.PollUntilAsync(() => server.SendCount >= 3);
     }
 
     // Old (pre-liveness-supervision) shape a previous server release's contract would declare: no
@@ -171,16 +170,6 @@ public partial class AgentOrchestratorVendorTests {
     }
 
     static readonly JsonSerializerOptions OldServerOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
-
-    static readonly TimeSpan PollBound = TimeSpan.FromSeconds(5);
-
-    static async Task PollUntilAsync(Func<bool> condition) {
-        var deadline = DateTime.UtcNow + PollBound;
-        while (!condition() && DateTime.UtcNow < deadline)
-            await Task.Delay(10);
-
-        await Assert.That(condition()).IsTrue();
-    }
 
     /// <summary>Counts <see cref="ServerConnection.DaemonStatusReportAsync"/> calls, optionally
     /// throwing to simulate a send failure — completely synchronous (no real hub/network), so the

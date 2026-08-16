@@ -8,19 +8,19 @@ namespace Capacitor.Cli.Tests.Unit.Daemon;
 // level (SequencedCommandProcessorTests); these pin that the orchestrator actually invokes it end-to-end
 // — processor -> _server.CommandAckAsync. Reuses the AgentOrchestratorVendorTests harness
 // (BuildOrchestrator / SpyPtyProcessFactory / SeqCaptureServerConnection / WaitBoundedAsync).
-public partial class AgentOrchestratorVendorTests {
+public class SettlementAckRedeliveryWiringTests {
     // A published processor with exactly one SETTLED (Processed, unretired) sequenced command, so the
     // server has captured its single proactive terminal ack and a re-delivery has something to re-send.
     static async Task<(AgentOrchestrator Orch, SeqCaptureServerConnection Server, int ProactiveAcks)>
         OrchestratorWithOneSettledCommandAsync() {
         var server = new SeqCaptureServerConnection();
-        var orch = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(server, new SpyPtyProcessFactory(),
+        var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher>());
         orch.PublishSequencedProcessorForTest();
         await orch.ProcessorForTest!.SubmitAsync(
             new SequencedItem(SequencedKind.Launch, orch.DaemonEpochForTest, 1, "cmd1", "a1"),
             () => Task.FromResult(new CommandOutcome(CommandOutcomeKind.LaunchExecuted, "a1", "sess")));
-        await WaitBoundedAsync(orch.DrainLaneForTest(), "the lane never settled the command");
+        await WaitHarness.WaitBoundedAsync(orch.DrainLaneForTest(), "the lane never settled the command");
         return (orch, server, server.Acks.Count);
     }
 

@@ -7,10 +7,10 @@ namespace Capacitor.Cli.Tests.Unit.Daemon;
 // hook emits positive per-id death evidence into the real ResolvedCandidatesLedger owned by the
 // orchestrator (append BEFORE the durable PID-record delete). Reuses the vendor test class's
 // BuildOrchestrator/CaptureServerConnection/SpyPtyProcessFactory harness + the shared test seams.
-public partial class AgentOrchestratorVendorTests {
+public class LedgerHookOrchestratorTests {
     [Test]
     public async Task Quarantine_drain_via_orchestrator_emits_resolved_evidence_before_deleting_the_record() {
-        await using var orch = Unit.AgentOrchestratorVendorTests.BuildOrchestrator(
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             new CaptureServerConnection(), new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher>());
 

@@ -17,10 +17,10 @@ namespace Capacitor.Cli.Tests.Unit;
 /// failure-contained, and forces terminal Failed regardless of the child's exit code. Post-window
 /// reaps are deliberately excluded: today's teardown for that case must stay byte-identical.
 ///
-/// Partial of <see cref="Daemon.AgentOrchestratorVendorTests"/> to reuse its BuildOrchestrator /
+/// Uses <see cref="AgentOrchestratorHarness"/> for its BuildOrchestrator /
 /// CaptureServerConnection / CreateGitRepo / SpyHostedAgentRuntimeFactory harness.
 /// </summary>
-public partial class AgentOrchestratorVendorTests {
+public class AgentOrchestratorFinalizerVerdictTests {
     /// <summary>
     /// Minimal <see cref="IAcpProcess"/> whose <see cref="WaitForExitAsync"/> is a SEPARATE,
     /// test-controlled gate from <see cref="HasExited"/>/<see cref="ExitCode"/> — unlike
@@ -89,33 +89,10 @@ public partial class AgentOrchestratorVendorTests {
         return (runtime, process, fake);
     }
 
-    /// <summary>Constructs an <see cref="AgentInstance"/> directly — <c>SeedAgentForTest</c> only
-    /// builds PTY runtimes — wrapping the given ACP runtime, and registers it via
-    /// <c>RegisterAgentForTest</c> so it is reachable exactly like a real launch's registration.
-    /// <paramref name="activityClock"/> mirrors <c>SeedAgentForTest</c>'s own optional clock override
-    /// — a test that needs a controllable (<see cref="Microsoft.Extensions.Time.Testing.FakeTimeProvider"/>-backed)
-    /// clock passes one; omitting it keeps every existing caller's real-time default.</summary>
-    static AgentInstance SeedAcpAgent(
-            AgentOrchestrator orch, string agentId, IHostedAgentRuntime runtime, string status = "Running",
-            AgentActivityClock? activityClock = null) {
-        var agent = new AgentInstance(
-            agentId, "review this", "default", null, "/repo", "cursor",
-            runtime,
-            new WorktreeInfo("/repo", "b", "/repo"),
-            new CancellationTokenSource()) {
-            Status = status,
-            ActivityClock = activityClock ?? new AgentActivityClock(TimeProvider.System)
-        };
-
-        orch.RegisterAgentForTest(agent);
-
-        return agent;
-    }
-
     [Test]
     public async Task Report_sent_before_exit_wait() {
         var server = new CaptureServerConnection();
-        await using var orch = BuildOrchestrator(
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var (runtime, process, fake) = BuildVerdictRuntime("wedge-1");
@@ -126,7 +103,7 @@ public partial class AgentOrchestratorVendorTests {
         await Assert.That(claimed).IsTrue();
         await Assert.That(runtime.Verdict!.ReapedInsideLaunchWindow).IsTrue();
 
-        var agent = SeedAcpAgent(orch, "wedge-1", runtime);
+        var agent = AgentOrchestratorHarness.SeedAcpAgent(orch, "wedge-1", runtime);
 
         var finalizeTask = orch.FinalizeAgentRunForTest(agent);
 
@@ -160,7 +137,7 @@ public partial class AgentOrchestratorVendorTests {
         // attempt. This is what "the guard flag must be shared" is defending against — expressed
         // here as: the factory path is independently exactly-once too, and produces no
         // AgentInstance for the finalizer to duplicate against.
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
 
         try {
             var factoryServer  = new CaptureServerConnection();
@@ -169,7 +146,7 @@ public partial class AgentOrchestratorVendorTests {
                     "kiro_reviewer_mcp_surface_unexpected: violation (transport: read loop ended)")
             };
 
-            await using var factoryOrch = BuildOrchestrator(
+            await using var factoryOrch = AgentOrchestratorHarness.BuildOrchestrator(
                 factoryServer, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>(),
                 allowedRepoPath: repoPath, extraRuntimeFactories: [reapingFactory]);
 
@@ -196,7 +173,7 @@ public partial class AgentOrchestratorVendorTests {
         // hypothetical re-entrant/racing call to prove the per-agent guard is structural, not
         // merely a consequence of today's single-call-site shape.
         var server = new CaptureServerConnection();
-        await using var orch = BuildOrchestrator(
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var (runtime, process, fake) = BuildVerdictRuntime("finalizer-reap-1");
@@ -206,7 +183,7 @@ public partial class AgentOrchestratorVendorTests {
             "unattended_interaction_forbidden:session/request_permission", () => Task.CompletedTask);
         process.SignalExited(0);
 
-        var agent = SeedAcpAgent(orch, "finalizer-reap-1", runtime);
+        var agent = AgentOrchestratorHarness.SeedAcpAgent(orch, "finalizer-reap-1", runtime);
 
         await orch.FinalizeAgentRunForTest(agent);
         await orch.FinalizeAgentRunForTest(agent); // re-entrant call — must not double-report
@@ -219,7 +196,7 @@ public partial class AgentOrchestratorVendorTests {
         var server = new CaptureServerConnection {
             LaunchFailedThrow = new InvalidOperationException("transient SignalR failure")
         };
-        await using var orch = BuildOrchestrator(
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var (runtime, process, fake) = BuildVerdictRuntime("faulted-report-1");
@@ -228,7 +205,7 @@ public partial class AgentOrchestratorVendorTests {
         runtime.TryStartReap("kiro_reviewer_mcp_surface_unexpected: violation", () => Task.CompletedTask);
         process.SignalExited(0);
 
-        var agent = SeedAcpAgent(orch, "faulted-report-1", runtime);
+        var agent = AgentOrchestratorHarness.SeedAcpAgent(orch, "faulted-report-1", runtime);
 
         // Must complete without throwing — a report fault must never propagate out of finalize.
         await orch.FinalizeAgentRunForTest(agent).WaitAsync(TimeSpan.FromSeconds(30));
@@ -242,7 +219,7 @@ public partial class AgentOrchestratorVendorTests {
     [Test]
     public async Task Published_verdict_forces_terminal_failed_regardless_of_exit_code() {
         var server = new CaptureServerConnection();
-        await using var orch = BuildOrchestrator(
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var (runtime, process, fake) = BuildVerdictRuntime("clean-exit-reap-1");
@@ -251,7 +228,7 @@ public partial class AgentOrchestratorVendorTests {
         runtime.TryStartReap("kiro_reviewer_mcp_surface_unexpected: violation", () => Task.CompletedTask);
         process.SignalExited(0); // clean exit — would compute "Completed" absent the fix
 
-        var agent = SeedAcpAgent(orch, "clean-exit-reap-1", runtime);
+        var agent = AgentOrchestratorHarness.SeedAcpAgent(orch, "clean-exit-reap-1", runtime);
 
         await orch.FinalizeAgentRunForTest(agent).WaitAsync(TimeSpan.FromSeconds(30));
 
@@ -269,7 +246,7 @@ public partial class AgentOrchestratorVendorTests {
     [Test]
     public async Task Post_window_reap_sends_no_launchfailed_teardown_byte_identical() {
         var server = new CaptureServerConnection();
-        await using var orch = BuildOrchestrator(
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var (runtime, process, fake) = BuildVerdictRuntime("post-window-1");
@@ -284,7 +261,7 @@ public partial class AgentOrchestratorVendorTests {
 
         process.SignalExited(0);
 
-        var agent = SeedAcpAgent(orch, "post-window-1", runtime);
+        var agent = AgentOrchestratorHarness.SeedAcpAgent(orch, "post-window-1", runtime);
 
         await orch.FinalizeAgentRunForTest(agent).WaitAsync(TimeSpan.FromSeconds(30));
 
@@ -314,7 +291,7 @@ public partial class AgentOrchestratorVendorTests {
         // reachable) empty verdict reason must still report something diagnosable, never a blank
         // string that renders as "unknown failure" with no way to grep the daemon log.
         var server = new CaptureServerConnection();
-        await using var orch = BuildOrchestrator(
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var (runtime, process, fake) = BuildVerdictRuntime("empty-reason-1");
@@ -325,7 +302,7 @@ public partial class AgentOrchestratorVendorTests {
 
         process.SignalExited(0);
 
-        var agent = SeedAcpAgent(orch, "empty-reason-1", runtime);
+        var agent = AgentOrchestratorHarness.SeedAcpAgent(orch, "empty-reason-1", runtime);
 
         await orch.FinalizeAgentRunForTest(agent).WaitAsync(TimeSpan.FromSeconds(30));
 
@@ -353,7 +330,7 @@ public partial class AgentOrchestratorVendorTests {
     [Test]
     public async Task Stop_after_published_verdict_does_not_clear_failed_status_or_reason() {
         var server = new CaptureServerConnection();
-        await using var orch = BuildOrchestrator(
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var agent = orch.SeedAgentForTest("stop-race-1", status: "Running");
@@ -379,7 +356,7 @@ public partial class AgentOrchestratorVendorTests {
         // common case, e.g. every claude/codex PTY agent, and every ACP agent that never trips a
         // containment tripwire) must still behave exactly as before this fix.
         var server = new CaptureServerConnection();
-        await using var orch = BuildOrchestrator(
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var agent = orch.SeedAgentForTest("stop-normal-1", status: "Running");
@@ -400,7 +377,7 @@ public partial class AgentOrchestratorVendorTests {
     [Test]
     public async Task Stop_racing_a_published_but_not_yet_reported_verdict_does_not_emit_completed() {
         var server = new CaptureServerConnection();
-        await using var orch = BuildOrchestrator(
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var (runtime, process, fake) = BuildVerdictRuntime("stop-race-2");
@@ -412,7 +389,7 @@ public partial class AgentOrchestratorVendorTests {
         await Assert.That(runtime.Verdict!.ReapedInsideLaunchWindow).IsTrue();
         process.SignalExited(0);
 
-        var agent = SeedAcpAgent(orch, "stop-race-2", runtime, status: "Running");
+        var agent = AgentOrchestratorHarness.SeedAcpAgent(orch, "stop-race-2", runtime, status: "Running");
         // Precondition: the verdict is published, but nothing has reported it yet — the finalizer
         // never ran for this agent in this test.
         await Assert.That(agent.LaunchFailureVerdictReported).IsEqualTo(0);
@@ -435,7 +412,7 @@ public partial class AgentOrchestratorVendorTests {
 
     [Test]
     public async Task Factory_prespawn_failure_with_blank_message_reports_the_typed_fallback() {
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
 
         try {
             var server = new CaptureServerConnection();
@@ -443,7 +420,7 @@ public partial class AgentOrchestratorVendorTests {
                 StartThrow = new InvalidOperationException("   ")
             };
 
-            await using var orch = BuildOrchestrator(
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
                 server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>(),
                 allowedRepoPath: repoPath, extraRuntimeFactories: [blankMessageFactory]);
 
@@ -467,7 +444,7 @@ public partial class AgentOrchestratorVendorTests {
 
     [Test]
     public async Task Factory_prespawn_failure_with_a_real_message_passes_it_through_verbatim() {
-        var (repoPath, cleanup) = CreateGitRepo();
+        var (repoPath, cleanup) = GitRepoHarness.CreateGitRepo();
 
         try {
             var server = new CaptureServerConnection();
@@ -475,7 +452,7 @@ public partial class AgentOrchestratorVendorTests {
                 StartThrow = new InvalidOperationException("cursor-agent binary not found on PATH")
             };
 
-            await using var orch = BuildOrchestrator(
+            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
                 server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>(),
                 allowedRepoPath: repoPath, extraRuntimeFactories: [realMessageFactory]);
 
@@ -515,13 +492,13 @@ public partial class AgentOrchestratorVendorTests {
     [Test, NotInParallel] // blocks two DEDICATED threads (reaper + finalizer) briefly, released deterministically; keep off timing-sensitive peers
     public async Task Finalizer_verdict_read_synchronizes_with_the_claim() {
         var server = new CaptureServerConnection();
-        await using var orch = BuildOrchestrator(
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var (runtime, process, fake) = BuildVerdictRuntime("barrier-verdict-1");
         await using var _ = fake;
 
-        var agent = SeedAcpAgent(orch, "barrier-verdict-1", runtime);
+        var agent = AgentOrchestratorHarness.SeedAcpAgent(orch, "barrier-verdict-1", runtime);
 
         var reaperInStarter = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var releaseStarter  = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -611,7 +588,7 @@ public partial class AgentOrchestratorVendorTests {
             LaunchFailedEntered = launchFailedEntered,
             LaunchFailedGate    = launchFailedGate
         };
-        await using var orch = BuildOrchestrator(
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var (runtime, process, fake) = BuildVerdictRuntime("rereg-race-1");
@@ -619,7 +596,7 @@ public partial class AgentOrchestratorVendorTests {
 
         runtime.TryStartReap("kiro_reviewer_mcp_surface_unexpected: violation", () => Task.CompletedTask);
 
-        var agent = SeedAcpAgent(orch, "rereg-race-1", runtime, status: "Running");
+        var agent = AgentOrchestratorHarness.SeedAcpAgent(orch, "rereg-race-1", runtime, status: "Running");
 
         var finalizeTask = orch.FinalizeAgentRunForTest(agent);
 
@@ -647,7 +624,7 @@ public partial class AgentOrchestratorVendorTests {
     [Test]
     public async Task Reregistration_of_a_reported_verdict_agent_skips_its_status_resend() {
         var server = new CaptureServerConnection();
-        await using var orch = BuildOrchestrator(
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var agent = orch.SeedAgentForTest("rereg-reported-1", status: "Running");
@@ -665,13 +642,13 @@ public partial class AgentOrchestratorVendorTests {
     [Test]
     public async Task Stop_gate_rechecks_a_verdict_published_after_its_snapshot() {
         var server = new CaptureServerConnection();
-        await using var orch = BuildOrchestrator(
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var (runtime, process, fake) = BuildVerdictRuntime("stop-toctou-1");
         await using var _ = fake;
 
-        var agent = SeedAcpAgent(orch, "stop-toctou-1", runtime, status: "Running");
+        var agent = AgentOrchestratorHarness.SeedAcpAgent(orch, "stop-toctou-1", runtime, status: "Running");
         process.SignalExited(0);
 
         // No verdict yet — the stop gate's snapshot reads "no suppression". The hook then publishes an
@@ -699,13 +676,13 @@ public partial class AgentOrchestratorVendorTests {
     [Test, NotInParallel] // the gate blocks the stop's pool thread on a Join up to the bound; keep it off peers
     public async Task Stop_gate_atomically_serializes_a_publish_against_the_completed_send() {
         var server = new CaptureServerConnection();
-        await using var orch = BuildOrchestrator(
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var (runtime, process, fake) = BuildVerdictRuntime("stop-atomic-1");
         await using var _ = fake;
 
-        var agent = SeedAcpAgent(orch, "stop-atomic-1", runtime, status: "Running");
+        var agent = AgentOrchestratorHarness.SeedAcpAgent(orch, "stop-atomic-1", runtime, status: "Running");
         process.SignalExited(0);
         server.VerdictCaptureRuntime = runtime;
 
@@ -740,13 +717,13 @@ public partial class AgentOrchestratorVendorTests {
             AgentRegisteredEntered = registeredEntered,
             AgentRegisteredGate    = releaseRegistered
         };
-        await using var orch = BuildOrchestrator(
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var (runtime, process, fake) = BuildVerdictRuntime("rereg-await-1");
         await using var _ = fake;
 
-        var agent = SeedAcpAgent(orch, "rereg-await-1", runtime, status: "Running");
+        var agent = AgentOrchestratorHarness.SeedAcpAgent(orch, "rereg-await-1", runtime, status: "Running");
         server.VerdictCaptureRuntime = runtime;
 
         var rereg = orch.ReRegisterAgentsForTestAsync();
