@@ -1,11 +1,13 @@
+using Capacitor.App.Services.Mutation;
 using Capacitor.Cli.Core.LocalIpc;
 
 namespace Capacitor.App.Services;
 
 /// Mirrors Capacitor.Cli.Services.VerifyExit (source of truth:
-/// src/Capacitor.Cli/Services/ServiceVerify.cs). The app never references the CLI project, so
-/// the coded exits are duplicated here deliberately.
-static class VerifyExitCodes {
+/// src/Capacitor.Cli/Services/ServiceVerify.cs) plus DaemonCommands' detached-start digest gate. The
+/// app never references the CLI project, so the coded exits are duplicated here deliberately — the
+/// one shared home for every coded daemon-mutation exit, reused by DaemonMutationLane's classifier.
+internal static class VerifyExitCodes {
     public const int Ok                  = 0;
     public const int Contended           = 20;
     public const int Viability           = 21;
@@ -15,6 +17,9 @@ static class VerifyExitCodes {
     public const int HelloValidation     = 25;
     public const int RollbackBudget      = 26;
     public const int RestoreVerification = 27;
+    public const int StartGate           = 28;
+    public const int StartGateDrift      = 29;
+    public const int DigestGate          = 43; // not a VerifyExit code (DaemonCommands' own digest gate) — mapped in Token() below like every other coded exit
 
     public static string Token(int exitCode) => exitCode switch {
         Contended           => "verify_contended",
@@ -25,6 +30,9 @@ static class VerifyExitCodes {
         HelloValidation     => "verify_hello_validation",
         RollbackBudget      => "verify_rollback_budget",
         RestoreVerification => "verify_restore_verification",
+        StartGate           => "verify_start_gate",
+        StartGateDrift      => "verify_start_gate_drift",
+        DigestGate          => "daemon_start_gate",
         _                   => $"verify_unknown_{exitCode}",
     };
 }
@@ -40,7 +48,6 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     internal const string TakeoverDisclosure =
         "This replaces the existing daemon service and re-captures its settings; a failed replacement leaves it uninstalled rather than restored.";
 
-    internal static readonly TimeSpan ConfirmWindow         = TimeSpan.FromSeconds(15);
     internal static readonly TimeSpan TxnActiveRequeryDelay = TimeSpan.FromSeconds(2);
 
     readonly IDaemonClientService _client;
@@ -50,6 +57,14 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     readonly ILifecycleSurface _surface;
     readonly Func<Task<string?>> _resolveProfileName;
     readonly TimeProvider _time;
+    // Fixed for the controller's lifetime, same as KcapCli's own canonicalServer (both resolved
+    // once from the same AppConfig.ResolvedProfile at composition time) — the mutation-request
+    // guard (MutationRequestFactory) reads this at every lane call, never re-resolving it.
+    readonly string? _canonicalServer;
+    // The lane's RunAsync — every mutating branch routes through it instead of IKcapCli directly; this controller's own _gate serializes DECIDING, the lane serializes EXECUTION.
+    readonly Func<MutationRequest, CancellationToken, Task<MutationOutcome>> _runMutation;
+    // When true, RunStartupBranchAsync never admits; PhaseClosed still resolves, StartActionAsync unaffected.
+    readonly bool _autoActionsPermanentlyClosed;
 
     readonly SemaphoreSlim _gate = new(1, 1);
     readonly CancellationTokenSource _lifetime = new();
@@ -62,22 +77,25 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     bool _disposed;
     int _generation;
     (AttachState State, string? Reason) _lastObserved = (AttachState.Connecting, null);
-    TaskCompletionSource<bool>? _confirmWaiter;
-    int _confirmSinceGen;
     string? _latestSnapshotVersion;
     bool _skewDialogShownThisRun;
     Task _versionCached = Task.CompletedTask;
 
     public DaemonLifecycleController(
             IDaemonClientService client, IKcapCli cli, ILoginShellProbe probe, IAppStateStore store,
-            ILifecycleSurface surface, Func<Task<string?>> resolveProfileName, TimeProvider time) {
-        _client             = client;
-        _cli                = cli;
-        _probe              = probe;
-        _store              = store;
-        _surface            = surface;
-        _resolveProfileName = resolveProfileName;
-        _time               = time;
+            ILifecycleSurface surface, Func<Task<string?>> resolveProfileName, TimeProvider time,
+            string? canonicalServer, Func<MutationRequest, CancellationToken, Task<MutationOutcome>> runMutation,
+            bool autoActionsPermanentlyClosed = false) {
+        _client                        = client;
+        _cli                           = cli;
+        _probe                         = probe;
+        _store                         = store;
+        _surface                       = surface;
+        _resolveProfileName            = resolveProfileName;
+        _time                          = time;
+        _canonicalServer               = canonicalServer;
+        _runMutation                   = runMutation;
+        _autoActionsPermanentlyClosed  = autoActionsPermanentlyClosed;
     }
 
     /// Completes permanently on the first terminal attach outcome (Connected /
@@ -119,31 +137,23 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         }
     }
 
-    // Every AttachStatus transition bumps the generation, records the last-observed outcome, and
-    // may signal an armed confirm waiter — this ALWAYS happens, regardless of the once-per-run
-    // arm below. Only a TERMINAL outcome (never Connecting) can claim that arm, and only the
-    // FIRST one ever does — but the switch itself still runs for every later event: the arm gates
-    // startup AUTO-ACTION eligibility only, never event admission, so a later daemon_incompatible
-    // still reaches its skew/takeover case below unconditionally.
+    // Every AttachStatus transition bumps the generation and records the last-observed outcome —
+    // this ALWAYS happens, regardless of the once-per-run arm below. Only a TERMINAL outcome
+    // (never Connecting) can claim that arm, and only the FIRST one ever does — but the switch
+    // itself still runs for every later event: the arm gates startup AUTO-ACTION eligibility
+    // only, never event admission, so a later daemon_incompatible still reaches its
+    // skew/takeover case below unconditionally.
     void OnAttachStatus(AttachStatus status) {
-        TaskCompletionSource<bool>? toSignal = null;
         bool isFirstTerminalOutcome;
 
         lock (_lock) {
             _generation++;
-            var gen = _generation;
             _lastObserved = (status.State, status.Reason);
-
-            if (status.State == AttachState.Connected && _confirmWaiter is not null && gen > _confirmSinceGen) {
-                toSignal       = _confirmWaiter;
-                _confirmWaiter = null;
-            }
 
             isFirstTerminalOutcome = status.State != AttachState.Connecting && !_armClaimed;
             if (isFirstTerminalOutcome) _armClaimed = true;
         }
 
-        toSignal?.TrySetResult(true);
         if (status.State == AttachState.Connecting) return;
 
         switch (status.State) {
@@ -164,7 +174,11 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
                 _ = RunSkewCheckAsync(status.DaemonVersion); // every incompatible event, same reason as above
                 break;
             case AttachState.Unreachable:
-                if (isFirstTerminalOutcome) _ = RunStartupBranchAsync((status.State, status.Reason));
+                // Closed: PhaseClosed still resolves here — only the startup matrix itself never admits.
+                if (isFirstTerminalOutcome) {
+                    if (_autoActionsPermanentlyClosed) ClosePhase();
+                    else _ = RunStartupBranchAsync((status.State, status.Reason));
+                }
                 break;
         }
     }
@@ -184,21 +198,6 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     bool IsCurrentlyAttached() { lock (_lock) return _lastObserved.State == AttachState.Connected; }
 
     string? LatestSnapshotVersion() { lock (_lock) return _latestSnapshotVersion; }
-
-    TaskCompletionSource<bool> ArmConfirmWaiter() {
-        lock (_lock) {
-            _confirmSinceGen = _generation;
-            var waiter = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _confirmWaiter = waiter;
-            return waiter;
-        }
-    }
-
-    void DisarmConfirmWaiter(TaskCompletionSource<bool> waiter) {
-        lock (_lock) {
-            if (ReferenceEquals(_confirmWaiter, waiter)) _confirmWaiter = null;
-        }
-    }
 
     async Task<bool> TryAcquireGateAsync(CancellationToken ct) {
         try {
@@ -336,7 +335,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
                 AttentionCoexistence(snap.DaemonPid.Value);
                 return;
             }
-            await RunVerifiedMutationAsync(_cli.ServiceStartVerifiedAsync, ct).ConfigureAwait(false);
+            await RunLaneMutationAsync(MutationVerb.StartVerified, ct).ConfigureAwait(false);
             return;
         }
 
@@ -346,7 +345,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
                 AttentionCoexistence(snap.DaemonPid.Value);
                 return;
             }
-            await RunVerifiedMutationAsync(_cli.ServiceStartVerifiedAsync, ct).ConfigureAwait(false);
+            await RunLaneMutationAsync(MutationVerb.StartVerified, ct).ConfigureAwait(false);
             return;
         }
 
@@ -360,7 +359,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         // this name is the install --verify transaction's own job to detect and safely roll back
         // from (post-install ownership + hello verification, spec §3.4; E2E item 2) — not a
         // pre-flight guess by the app.
-        await RunVerifiedMutationAsync(c => _cli.ServiceInstallVerifiedAsync(replace: false, c), ct).ConfigureAwait(false);
+        await RunLaneMutationAsync(MutationVerb.Install, ct).ConfigureAwait(false);
     }
 
     void AttentionCoexistence(int daemonPid) =>
@@ -385,52 +384,18 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         return null;
     }
 
-    /// One CLI mutation call, confirmed by a FRESH Connected (spec §4.2) observed strictly after
-    /// this call began — the confirm waiter is armed BEFORE `mutate` runs so a Connected racing
-    /// the CLI call still counts. No rollback call exists anywhere in IKcapCli: the CLI
-    /// transaction itself already rolled back internally on a coded failure. Returns whether the
-    /// CLI call itself exited Ok (a coded failure is fully surfaced already; callers that offered
-    /// this mutation via a dialog use the return value to decide whether the user got a
-    /// resolution or needs to be able to re-offer).
-    async Task<bool> RunVerifiedMutationAsync(Func<CancellationToken, Task<ProcessResult>> mutate, CancellationToken ct) {
-        var waiter = ArmConfirmWaiter();
-        try {
-            var result = await mutate(ct).ConfigureAwait(false);
-
-            // §3.6: a forced kill after the CLI transaction's own bound is exceeded (pathological)
-            // — the killed tree's exit code is not a verify outcome and must never be read as one.
-            // Re-query fresh evidence and surface Attention; never auto-mutate off a kill the app
-            // itself had to force.
-            if (result.TimedOut) {
-                await SurfaceTimeoutAttentionAsync(ct).ConfigureAwait(false);
-                return false;
-            }
-
-            _ = _client.RestartLoopAsync(); // kick reattach after any attempted action, success or coded failure
-
-            if (result.ExitCode == VerifyExitCodes.Ok) {
-                using var confirmDeadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                var delay = Task.Delay(ConfirmWindow, _time, confirmDeadline.Token);
-                var won = await Task.WhenAny(waiter.Task, delay).ConfigureAwait(false);
-                if (won == waiter.Task)
-                    confirmDeadline.Cancel(); // fresh Connected already arrived — release the timer early
-                else if (!ct.IsCancellationRequested)
-                    _surface.Status("daemon started, app not yet attached — retrying");
-                return true;
-            }
-
-            _surface.Status($"{VerifyExitCodes.Token(result.ExitCode)}: {result.Stderr.Trim()}");
+    /// Routes execution through the lane. A guard refusal is presented here directly; anything reaching the lane fires an idempotent reattach kick and makes no surface call of its own.
+    async Task<bool> RunLaneMutationAsync(MutationVerb verb, CancellationToken ct) {
+        var profileName = await _resolveProfileName().ConfigureAwait(false);
+        var refusal = MutationRequestFactory.TryBuild(verb, profileName, _canonicalServer, _client.DaemonName, out var request);
+        if (refusal is MutationOutcome.Refused(var guardReason, _)) {
+            _surface.Status($"kcap: {guardReason}");
             return false;
-        } finally {
-            DisarmConfirmWaiter(waiter);
         }
-    }
 
-    async Task SurfaceTimeoutAttentionAsync(CancellationToken ct) {
-        var snap = await _cli.ServiceStatusAsync(ct).ConfigureAwait(false);
-        _surface.Attention(snap is null
-            ? "The daemon service operation timed out and its outcome could not be re-checked — check state."
-            : $"The daemon service operation timed out — check state (txn_marker={snap.TxnMarker}, txn_active={snap.TxnActive}).");
+        var outcome = await _runMutation(request!, ct).ConfigureAwait(false);
+        _ = _client.RestartLoopAsync(); // any mutation attempt may have restarted the daemon; kicking reattach is idempotent
+        return outcome is MutationOutcome.Succeeded or MutationOutcome.SucceededAfterTimeout;
     }
 
     /// §4.3: runs on every Connected (paired with the latest known snapshot version) and every
@@ -481,10 +446,10 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
             lock (_lock) _skewDialogShownThisRun = true;
 
             // The retract runs BEFORE the mutation (acceptance itself invalidates the decline
-            // claim), not after: RunVerifiedMutationAsync doesn't catch around the CLI call, so an
-            // install that throws (shutdown mid-spawn, a process/IO fault) would skip a
-            // post-mutation retract entirely and leave an accepted pair mislabeled "declined" on
-            // disk. "Declined" must mean the user declined, full stop.
+            // claim), not after: RunLaneMutationAsync doesn't catch around the lane call, so an
+            // install that throws (shutdown mid-spawn, a process/IO fault, or a lane-lifetime
+            // cancellation) would skip a post-mutation retract entirely and leave an accepted pair
+            // mislabeled "declined" on disk. "Declined" must mean the user declined, full stop.
             var (outcome, succeeded) = await ConfirmAndTakeoverAsync(
                 prompt, revalidate: fresh => ClassifyTakeover(fresh) == kind,
                 onAcceptedNotStale: () => RetractDeclineAsync(pairKey), _lifetime.Token).ConfigureAwait(false);
@@ -514,7 +479,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
 
     /// The ONE accept path every unit rewrite in this controller goes through — skew's takeover
     /// (§4.3) and Start's repair affordance (§4.4) both funnel here, so a future kind can never
-    /// grow a second `ServiceInstallVerifiedAsync(replace: true)` call site. `onAcceptedNotStale`,
+    /// grow a second `MutationVerb.Replace` call site. `onAcceptedNotStale`,
     /// when given, runs after acceptance is confirmed fresh but BEFORE the mutation itself (skew's
     /// decline-claim retract — see its own comment above).
     ///
@@ -547,8 +512,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
 
         if (onAcceptedNotStale is not null) await onAcceptedNotStale().ConfigureAwait(false);
 
-        var succeeded = await RunVerifiedMutationAsync(c => _cli.ServiceInstallVerifiedAsync(replace: true, c), ct)
-            .ConfigureAwait(false);
+        var succeeded = await RunLaneMutationAsync(MutationVerb.Replace, ct).ConfigureAwait(false);
         return (ConfirmOutcome.Attempted, succeeded);
     }
 
@@ -701,7 +665,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
 
                 if (state == ServiceState.Installed) {
                     if (snap.UnitPresent && snap.DaemonPid is null)
-                        await RunVerifiedMutationAsync(_cli.ServiceStartVerifiedAsync, lct).ConfigureAwait(false);
+                        await RunLaneMutationAsync(MutationVerb.StartVerified, lct).ConfigureAwait(false);
                     else
                         await OfferRepairAsync(snap, lct).ConfigureAwait(false); // orphan label or coexistence
                     return;
@@ -710,13 +674,13 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
                 // state == ServiceState.NotInstalled: no loaded label.
                 if (snap.UnitPresent) {
                     if (snap.DaemonPid is null)
-                        await RunVerifiedMutationAsync(_cli.ServiceStartVerifiedAsync, lct).ConfigureAwait(false); // bootstrap the stopped unit
+                        await RunLaneMutationAsync(MutationVerb.StartVerified, lct).ConfigureAwait(false); // bootstrap the stopped unit
                     else
                         await OfferRepairAsync(snap, lct).ConfigureAwait(false); // a manual daemon owns the name
                     return;
                 }
 
-                await _cli.DetachedStartAsync(lct).ConfigureAwait(false); // nothing at all — today's detached start, no unit to rewrite
+                await RunLaneMutationAsync(MutationVerb.DetachedStart, lct).ConfigureAwait(false); // nothing at all — no unit to rewrite
             } finally {
                 _gate.Release();
             }

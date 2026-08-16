@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using Capacitor.App.Services.Mutation;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.LocalIpc;
@@ -9,12 +10,14 @@ using DynamicData;
 namespace Capacitor.App.Services;
 
 /// Rx/DynamicData adapter over LocalControlClient.RunAsync: owns the single live attach
-/// enumeration, publishes the atomic AttachStatus + Snapshots streams and the keyed Agents
-/// cache, and spawns `kcap daemon start` on request. See app-shell design spec §5.
+/// enumeration, publishes the atomic AttachStatus + Snapshots streams, and delegates
+/// `daemon start -d` to the injected mutation-lane runner on request. See app-shell design spec §5.
 public sealed class DaemonClientService : IDaemonClientService, IAsyncDisposable {
     readonly Func<CancellationToken, IAsyncEnumerable<LocalControlEvent>> _runClient;
-    readonly IProcessRunner _processRunner;
-    readonly string _cliPath;
+    // The lane's RunAsync, pre-bound to a DetachedStart request for THIS daemon (or an honest
+    // Refused("no_server_configured") when no canonical server can be bound) — this service no
+    // longer spawns `daemon start -d` itself and carries no bare-"kcap" fallback of its own.
+    readonly Func<CancellationToken, Task<MutationOutcome>> _startDaemon;
 
     readonly BehaviorSubject<AttachStatus> _status = new(new(AttachState.Connecting, null, null));
     readonly ReplaySubject<DaemonStatusDto> _snapshots = new(1);
@@ -29,12 +32,10 @@ public sealed class DaemonClientService : IDaemonClientService, IAsyncDisposable
     public DaemonClientService(
             string daemonName,
             Func<CancellationToken, IAsyncEnumerable<LocalControlEvent>> runClient,
-            IProcessRunner processRunner,
-            string cliPath) {
-        DaemonName    = daemonName;
-        _runClient    = runClient;
-        _processRunner = processRunner;
-        _cliPath      = cliPath;
+            Func<CancellationToken, Task<MutationOutcome>> startDaemon) {
+        DaemonName   = daemonName;
+        _runClient   = runClient;
+        _startDaemon = startDaemon;
     }
 
     public string DaemonName { get; }
@@ -58,10 +59,10 @@ public sealed class DaemonClientService : IDaemonClientService, IAsyncDisposable
             case LocalControlEvent.Connecting:
                 _status.OnNext(new(AttachState.Connecting, null, null));
                 break;
-            case LocalControlEvent.Connected(var caps, var first, _):
+            case LocalControlEvent.Connected(var caps, var first, var identity):
                 _snapshots.OnNext(first);
                 Agents.EditDiff(first.Agents, EqualityComparer<AgentStatusDto>.Default);
-                _status.OnNext(new(AttachState.Connected, null, caps));
+                _status.OnNext(new(AttachState.Connected, null, caps, null, identity));
                 break;
             case LocalControlEvent.Status(var snap):
                 _snapshots.OnNext(snap);
@@ -115,41 +116,62 @@ public sealed class DaemonClientService : IDaemonClientService, IAsyncDisposable
         catch { /* contained — see PumpAsync */ }
     }
 
+    /// Delegates to the injected lane runner and maps its MutationOutcome onto the honest
+    /// StartDaemonResult the UI already understands — ct abandons the WAIT only (a detached start
+    /// already spawned keeps running, never reported as a failure); the lane's own RunAsync
+    /// rethrows OperationCanceledException the same way, so it just propagates here unmodified.
+    /// The reattach kick fires UNCONDITIONALLY, not just on Succeeded/SucceededAfterTimeout: any
+    /// mutation attempt may have restarted the daemon even when it did not end in success, and
+    /// kicking reattach is idempotent — the attach doesn't sit out a backoff either way.
     public async Task<StartDaemonResult> StartDaemonAsync(CancellationToken ct) {
-        try {
-            var result = await _processRunner
-                .RunAsync(_cliPath, ["daemon", "start", "-d", "--name", DaemonName], new RunOptions(), ct)
-                .ConfigureAwait(false);
+        var outcome = await _startDaemon(ct).ConfigureAwait(false);
 
-            if (result.ExitCode == 0) {
-                _ = RestartLoopAsync(); // immediate kick — the attach doesn't sit out a backoff
-                return new(true, null);
-            }
+        _ = RestartLoopAsync();
 
-            return new(false, string.IsNullOrWhiteSpace(result.Stderr)
-                ? $"kcap daemon start exited with code {result.ExitCode}"
-                : result.Stderr.Trim());
-        } catch (OperationCanceledException) {
-            throw; // ct abandons the WAIT, not the started daemon — never reported as a failure
-        } catch (Exception ex) {
-            return new(false, ex.Message);
-        }
+        return ToResult(outcome);
     }
 
+    static StartDaemonResult ToResult(MutationOutcome outcome) => outcome switch {
+        MutationOutcome.Succeeded or MutationOutcome.SucceededAfterTimeout => new(true, null),
+        MutationOutcome.Refused("cli_not_found", _)                       => new(false, "kcap CLI not found"),
+        MutationOutcome.Refused(var reason, _)                            => new(false, reason),
+        MutationOutcome.Failed(var exitCode, var reason, _) =>
+            new(false, reason ?? $"kcap daemon start exited with code {exitCode}"),
+        MutationOutcome.AttentionSkew(var detail)   => new(false, detail),
+        MutationOutcome.AttentionRepair(var detail) => new(false, detail),
+        MutationOutcome.UnconfirmedNoAttach         => new(false, "daemon start not yet confirmed — check status"),
+        _                                            => new(false, outcome.GetType().Name),
+    };
+
     /// Resolves the daemon name ONCE via the same chain DaemonCommands.ResolveName uses, so the
-    /// watched daemon and the started daemon can never diverge (spec §5).
-    public static async Task<DaemonClientService> CreateDefaultAsync() {
+    /// watched daemon and the started daemon can never diverge (spec §5). `runMutation` is the
+    /// app-lifetime DaemonMutationLane's RunAsync, injected by the composition root so this
+    /// factory never spawns a process of its own.
+    public static async Task<DaemonClientService> CreateDefaultAsync(
+            Func<MutationRequest, CancellationToken, Task<MutationOutcome>> runMutation) {
         await AppConfig.ResolveActiveProfile([]);
         var name = DaemonNameResolver.Resolve([], AppConfig.ResolvedProfile?.Profile?.Daemon?.Name);
 
-        // Lenient by design: unlike the lifecycle features (Task 19+), which treat a broken
-        // KCAP_APP_CLI_PATH override as "no CLI" (CliResolver.ResolvePath returning null), this
-        // ad hoc `daemon start -d` path keeps its long-standing fallback so existing behavior is
-        // unchanged here.
-        var cliPath = CliResolver.ResolvePath(Environment.GetEnvironmentVariable, File.Exists) ?? "kcap";
-
-        return new DaemonClientService(name, ct => new LocalControlClient(name).RunAsync(ct), new ProcessRunner(), cliPath);
+        return new DaemonClientService(
+            name, ct => new LocalControlClient(name).RunAsync(ct),
+            BuildStartDaemon(name, () => AppConfig.ResolvedProfile, runMutation));
     }
+
+    /// The main-window Start/Retry delegate: builds a DetachedStart MutationRequest at the
+    /// CURRENTLY resolved profile/server (re-read on every call, never captured once — a profile
+    /// resolved after this service was constructed must still be honored) and hands it to
+    /// `runMutation`; a caller that cannot bind a canonical server never reaches it (binding
+    /// ruling 1). Extracted from CreateDefaultAsync — whose own AppConfig.ResolveActiveProfile
+    /// call touches real config I/O — so this request-building logic stays unit-testable on its own.
+    internal static Func<CancellationToken, Task<MutationOutcome>> BuildStartDaemon(
+            string daemonName, Func<ResolvedProfile?> resolveProfile,
+            Func<MutationRequest, CancellationToken, Task<MutationOutcome>> runMutation) =>
+        ct => {
+            var profile = resolveProfile();
+            var refusal = MutationRequestFactory.TryBuild(
+                MutationVerb.DetachedStart, profile?.ProfileName, profile?.ServerUrl, daemonName, out var request);
+            return refusal is not null ? Task.FromResult(refusal) : runMutation(request!, ct);
+        };
 
     public async ValueTask DisposeAsync() {
         _lifetime.Cancel();
@@ -172,7 +194,7 @@ public sealed class DaemonClientService : IDaemonClientService, IAsyncDisposable
 
     /// Production IProcessRunner: wraps System.Diagnostics.Process with stdout/stderr capture, an
     /// env overlay, an internal timeout, and a per-call cancel mode. `RunOptions.Timeout` is an
-    /// internal deadline distinct from `ct`: on expiry the tree is killed and awaited, and the
+    /// internal deadline distinct from `ct`: on expiry the process (or tree, per `RunOptions.TimeoutKill`) is killed and awaited, and the
     /// result comes back with TimedOut=true rather than throwing. `ct` cancellation behaves per
     /// `RunOptions.CancelMode`: AbandonWait abandons the WAIT only (a detached `daemon start -d`
     /// keeps running) and still throws OperationCanceledException; KillTree kills the tree and
@@ -218,7 +240,7 @@ public sealed class DaemonClientService : IDaemonClientService, IAsyncDisposable
                 }
 
                 // Only the internal timeout could have fired the linked token.
-                await KillAndAwaitAsync(process).ConfigureAwait(false);
+                await KillAndAwaitAsync(process, options.TimeoutKill == TimeoutKillScope.Tree).ConfigureAwait(false);
                 await Task.WhenAll(stdoutTask, stderrTask).ConfigureAwait(false);
                 return new ProcessResult(process.ExitCode, stdoutTask.Result, stderrTask.Result, TimedOut: true);
             }
@@ -227,8 +249,8 @@ public sealed class DaemonClientService : IDaemonClientService, IAsyncDisposable
             return new ProcessResult(process.ExitCode, stdoutTask.Result, stderrTask.Result, TimedOut: false);
         }
 
-        static async Task KillAndAwaitAsync(Process process) {
-            try { process.Kill(entireProcessTree: true); }
+        static async Task KillAndAwaitAsync(Process process, bool entireProcessTree = true) {
+            try { process.Kill(entireProcessTree); }
             catch (InvalidOperationException) { /* already exited */ }
             await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
         }
