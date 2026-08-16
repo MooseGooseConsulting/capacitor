@@ -52,34 +52,13 @@ jobs:
           node npm/kcap/bin/resolve.test.js
           node npm/kcap/bin/refresh.test.js
 
-      - name: Run unit tests
-        # --maximum-parallel-tests 1 does NOT serialize the entire suite.
-        # It caps TUnit's parallel bucket (unattributed tests) at one, but
-        # keyed [NotInParallel("key")] tests are scheduled by the
-        # constraint-key scheduler, which starts every test whose keys are
-        # free WITHOUT consulting this cap — classes with disjoint key
-        # sets still run concurrently under this flag (verified against
-        # TUnit 1.18.37's TestScheduler/ConstraintKeyScheduler). So any
-        # test touching process-global state (Environment/Console,
-        # CliTelemetry/TelemetryState statics, the shared KCAP_CONFIG_DIR)
-        # must hold the SAME NotInParallel key as every other toucher of
-        # that state; this flag only quiets the unkeyed bucket. Local dev
-        # runs stay parallel (the flag lives only in CI).
-        run: dotnet run --project test/Capacitor.Cli.Tests.Unit/Capacitor.Cli.Tests.Unit.csproj -- --maximum-parallel-tests 1
-
-      - name: Run app tests
-        # Same flag, same caveat as the unit suite: the app tests share process-global
-        # Avalonia/Rx state behind [NotInParallel("AvaloniaSession")].
-        run: dotnet run --project test/Capacitor.App.Tests.Unit/Capacitor.App.Tests.Unit.csproj -- --maximum-parallel-tests 1
-
-      - name: Run integration tests
-        # Linux only: the integration suite does real loopback HTTP (WireMock).
-        # On the Windows runner an https probe against the plain-HTTP test server
-        # (localhost/::1 resolution + TLS-to-HTTP) is environment-flaky. The
-        # cross-platform correctness that matters on Windows (path handling, the
-        # AI-820 watcher handle test) lives in the unit suite above. See AI-820.
-        if: runner.os == 'Linux'
-        run: dotnet run --project test/Capacitor.Cli.Tests.Integration/Capacitor.Cli.Tests.Integration.csproj
+      - name: Run tests
+        # One step: GitHub runs steps sequentially, dotnet test overlaps the suites.
+        # --maximum-parallel-tests 1 caps only TUnit's unkeyed bucket — keyed
+        # [NotInParallel] tests still run concurrently with disjoint-key classes, so
+        # anything touching process-global state must hold the SAME key as every other
+        # toucher. Local dev runs stay parallel; the flag lives only in CI.
+        run: dotnet test --solution Capacitor.slnx --no-build -- --maximum-parallel-tests 1
 
   lint-linear-ids:
     name: No Linear issue IDs in C# source

@@ -1,6 +1,10 @@
 # Kurrent Capacitor CLI
 
-**File paths:** CLI source at `src/Capacitor.Cli/`, shared core at `src/Capacitor.Cli.Core/`, daemon at `src/Capacitor.Cli.Daemon/`, npm packages at `npm/`, Claude Code plugin at `kcap/`, unit tests at `test/Capacitor.Cli.Tests.Unit/`, integration tests at `test/Capacitor.Cli.Tests.Integration/`.
+**File paths:** CLI source at `src/Capacitor.Cli/`, shared core at `src/Capacitor.Cli.Core/`, daemon at `src/Capacitor.Cli.Daemon/`, npm packages at `npm/`, Claude Code plugin at `kcap/`.
+
+**Test layout:** one test project per prod project, each mirroring that project's directories — `test/Capacitor.Cli.Core.Tests.Unit/`, `test/Capacitor.Cli.Tests.Unit/`, `test/Capacitor.Cli.Daemon.Tests.Unit/`, plus `test/Capacitor.Cli.Tests.Integration/`.
+A test project references its own prod project and `test/Capacitor.Tests.Helpers/`, never another test project: anything shared across suites goes in Helpers, with a `public` surface (no `InternalsVisibleTo`).
+Helpers' `Guards/` holds the process-global pins every assembly needs.
 
 **Harness layout:** vendor-specific code lives under `Harness/`. Vendors: Antigravity, Claude, Codex, Copilot, Cursor, Gemini, Kiro, OpenCode, Pi.
 
@@ -9,7 +13,7 @@
 - `src/Capacitor.Cli/Commands/Harness/` — command entry points, flat (`<Vendor>HookCommand` and friends).
 - `src/Capacitor.Cli/Harness/<Vendor>/` — everything else per vendor: import sources, subagent teardowns, correlators, ledgers.
 
-Namespaces follow the directory (`Capacitor.Cli.Core.Harness.Codex`, `Capacitor.Cli.Commands.Harness`, `Capacitor.Cli.Harness.Pi`), enforced by `IDE0130` at warning severity. Code shared across vendors stays outside `Harness/` — a directory named after a vendor holds only that vendor's code. Adding a harness should mean a new `Harness/<Vendor>/` directory plus one registration site per assembly, not edits to shared folders.
+Namespaces follow the directory (`Capacitor.Cli.Core.Harness.Codex`, `Capacitor.Cli.Commands.Harness`, `Capacitor.Cli.Harness.Pi`), enforced by the compiler, so moving a file means fixing its namespace in the same change. Code shared across vendors stays outside `Harness/` — a directory named after a vendor holds only that vendor's code. Adding a harness should mean a new `Harness/<Vendor>/` directory plus one registration site per assembly, not edits to shared folders.
 
 ## What this project does
 
@@ -131,11 +135,16 @@ dotnet build src/Capacitor.Cli/Capacitor.Cli.csproj
 
 ## Running tests
 
-Tests use TUnit on Microsoft Testing Platform. Run directly as executables:
+Tests use TUnit on Microsoft Testing Platform.
 
 ```bash
-dotnet run --project test/Capacitor.Cli.Tests.Unit/Capacitor.Cli.Tests.Unit.csproj
-dotnet run --project test/Capacitor.Cli.Tests.Integration/Capacitor.Cli.Tests.Integration.csproj
+dotnet test --solution Capacitor.slnx
+```
+
+A single suite still runs directly as an executable, which is the faster loop when iterating:
+
+```bash
+dotnet run --project test/Capacitor.Cli.Core.Tests.Unit/Capacitor.Cli.Core.Tests.Unit.csproj
 ```
 
 ## Publishing

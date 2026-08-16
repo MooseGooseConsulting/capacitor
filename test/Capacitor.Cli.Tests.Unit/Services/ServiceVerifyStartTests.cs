@@ -1,6 +1,5 @@
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Services;
-using Capacitor.Tests.Helpers;
 using Microsoft.Extensions.Time.Testing;
 
 namespace Capacitor.Cli.Tests.Unit.Services;

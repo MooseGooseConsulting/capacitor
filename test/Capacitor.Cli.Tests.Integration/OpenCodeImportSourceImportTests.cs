@@ -1,6 +1,5 @@
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Harness.OpenCode;
-using Capacitor.Tests.Helpers;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;

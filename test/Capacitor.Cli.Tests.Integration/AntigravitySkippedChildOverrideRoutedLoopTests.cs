@@ -3,7 +3,6 @@ using System.Text.RegularExpressions;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Harness.Antigravity;
 using Capacitor.Cli.Harness.Gemini;
-using Capacitor.Tests.Helpers;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
