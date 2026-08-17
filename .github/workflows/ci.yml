@@ -57,12 +57,15 @@ jobs:
           node npm/kcap/bin/refresh.test.js
 
       - name: Run tests
-        # One step: GitHub runs steps sequentially, dotnet test overlaps the suites.
+        # --max-parallel-test-modules 1 runs one assembly at a time. TEMPORARY: the suites
+        # share process-global state through the filesystem (KCAP_CONFIG_DIR, temp roots),
+        # which no in-assembly [NotInParallel] key can serialise across assemblies. Re-enable
+        # module parallelism once those sharing points are gone.
         # --maximum-parallel-tests 1 caps only TUnit's unkeyed bucket — keyed
         # [NotInParallel] tests still run concurrently with disjoint-key classes, so
         # anything touching process-global state must hold the SAME key as every other
-        # toucher. Local dev runs stay parallel; the flag lives only in CI.
-        run: dotnet test --solution Capacitor.slnx --no-build -- --maximum-parallel-tests 1
+        # toucher. Local dev runs stay parallel; both flags live only in CI.
+        run: dotnet test --solution Capacitor.slnx --no-build --max-parallel-test-modules 1 -- --maximum-parallel-tests 1
 
   lint-linear-ids:
     name: No Linear issue IDs in C# source
