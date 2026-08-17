@@ -26,7 +26,9 @@ namespace Capacitor.Cli.Tests.Unit.Harness.Cursor;
 /// docs/superpowers/specs/2026-07-30-ai1505-cursor-subagent-classification-design.md
 /// </para>
 /// </summary>
-[NotInParallel("HomeEnvVarMutation")]
+// TokenStoreProfileTests too: these read the shared config.json, and a concurrent writer there
+// DELETES it to republish — which a plain read handle blocks on Windows.
+[NotInParallel(["HomeEnvVarMutation", "TokenStoreProfileTests"])]
 public class CursorLiveSubagentIntegrationTests {
     [Test]
     public async Task linked_child_mid_lifecycle_hook_is_suppressed_but_transcript_still_backfills() {

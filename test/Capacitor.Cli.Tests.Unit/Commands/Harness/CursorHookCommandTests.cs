@@ -15,7 +15,9 @@ namespace Capacitor.Cli.Tests.Unit.Commands.Harness;
 // mutates KCAP_AGENT_ID. Serialise against every other test that
 // mutates HOME so a racing HOME-setter from PluginCommand* tests can't
 // land our marker writes in the wrong directory.
-[NotInParallel("HomeEnvVarMutation")]
+// TokenStoreProfileTests too: these read the shared config.json, and a concurrent writer there
+// DELETES it to republish — which a plain read handle blocks on Windows.
+[NotInParallel(["HomeEnvVarMutation", "TokenStoreProfileTests"])]
 public class CursorHookCommandTests {
     const string Sid = "8c3276c2c8f743ce98898c2becf5240a";
 

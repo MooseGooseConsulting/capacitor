@@ -374,16 +374,21 @@ public class WorktreeManagerTests {
                     UseShellExecute = false,
                     CreateNoWindow = true
                 };
+                psi.RedirectStandardOutput = true;
                 if (OperatingSystem.IsWindows()) {
                     psi.ArgumentList.Add("/d");
                     psi.ArgumentList.Add("/c");
-                    psi.ArgumentList.Add("ping -n 30 127.0.0.1 >nul");
+                    psi.ArgumentList.Add("echo ready& ping -n 30 127.0.0.1 >nul");
                 } else {
                     psi.ArgumentList.Add("-c");
-                    psi.ArgumentList.Add("sleep 30");
+                    psi.ArgumentList.Add("echo ready; sleep 30");
                 }
                 holder = Process.Start(psi);
-                await Task.Delay(200);
+                // Wait for the child to say it is up rather than for a fixed 200ms: the assertions
+                // below only mean anything once a live process is holding snapshot.Path as its cwd,
+                // and on a loaded runner process start can take longer than any guess.
+                using var ready = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                await Assert.That((await holder!.StandardOutput.ReadLineAsync(ready.Token))?.Trim()).IsEqualTo("ready");
 
                 File.WriteAllText(Path.Combine(sourceCwd, "round.txt"), "two");
                 File.WriteAllText(Path.Combine(snapshot.Path, "reviewer-created.txt"), "remove");

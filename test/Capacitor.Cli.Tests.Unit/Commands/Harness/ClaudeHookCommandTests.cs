@@ -8,7 +8,9 @@ using Capacitor.Cli.SessionStartMemory;
 
 namespace Capacitor.Cli.Tests.Unit.Commands.Harness;
 
-[NotInParallel("HomeEnvVarMutation")]
+// TokenStoreProfileTests too: these read the shared config.json, and a concurrent writer there
+// DELETES it to republish — which a plain read handle blocks on Windows.
+[NotInParallel(["HomeEnvVarMutation", "TokenStoreProfileTests"])]
 public class ClaudeHookCommandTests {
     const string Sid = "9dc2775376454e4691ecc2d69973c152";
 
