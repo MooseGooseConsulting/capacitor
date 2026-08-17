@@ -173,7 +173,7 @@ This is a public repository — we develop in the open.
 - DO use `JsonElementExtensions` instead of checking JSON value kind.
 - DO capture console output in tests with `ConsoleOutput.StartCapture()` / `StartErrorCapture()` (`test/Capacitor.Tests.Helpers`), never a hand-rolled `Console.SetOut`/`SetError` save-restore — TUnit0055 is an error. Console is process-global, so every caller needs bare `[NotInParallel]`; a group key is not enough.
 - DO NOT use Linear issue numbers in comments. If you absolutely need an issue number, use the GitHub issue number.
-- DO NOT get too verbose in comments. Write self-explanatory code instead.
+- DO NOT get too verbose in comments. Write self-explanatory code instead. Keep them short and concise, and carry the non-obvious **why** — the constraint, the trap, the reason for this shape. Never paraphrase what the code already says. Explaining *how* it works is warranted only when it is genuinely complex (a real algorithm, a gnarly construction), not for ordinary code. If a reader could infer it from the source, write no comment.
 
 ## Common mistakes to avoid
 
