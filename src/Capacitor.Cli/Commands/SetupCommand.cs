@@ -31,6 +31,30 @@ using Profile = Capacitor.Cli.Core.Config.Profile;
 
 namespace Capacitor.Cli.Commands;
 
+/// <summary>Setup's step-scoped rendering of façade output: every non-flush line is two-space indented, and setup still owns the guidance tail.</summary>
+sealed class SetupAuthProgress(IAuthProgress inner) : IAuthProgress {
+    internal const string UnreachableGuidance = "  Retry later, or pass --server-url <url>.";
+
+    public void Notice(string message) => inner.Notice(Indent(message));
+
+    public void Error(string message) => inner.Error(Indent(message));
+
+    public void BrowserOpening(string url) => inner.BrowserOpening(url);
+
+    public void DeviceCode(string code, string verificationUri) => inner.DeviceCode(code, verificationUri);
+
+    public void PollTick() => inner.PollTick();
+
+    /// <summary>Mapped off <see cref="AuthFailureReason"/>, never off the rendered text.</summary>
+    public void ReportFailure(AuthResult result) {
+        if (result is AuthResult.Failed { Reason: AuthFailureReason.Unreachable }) inner.Error(UnreachableGuidance);
+    }
+
+    // Blank separators and already-indented copy (the device-flow numbered list) pass through as-is.
+    internal static string Indent(string message) =>
+        string.IsNullOrWhiteSpace(message) || message.StartsWith(' ') ? message : $"  {message}";
+}
+
 public static class SetupCommand {
     public static async Task<int> HandleAsync(string[] args) {
         var serverUrlArg     = GetArg(args, "--server-url");
@@ -38,7 +62,7 @@ public static class SetupCommand {
         // `kcap setup <tenant>`: a leading positional arg (bare slug or full URL) is treated as the
         // server, equivalent to --server-url. A bare single label expands to {slug}.kcap.ai.
         if (serverUrlArg is null && args.Length > 1 && !args[1].StartsWith('-'))
-            serverUrlArg = ResolveTenantArg(args[1]);
+            serverUrlArg = ServerInput.ResolveTenantArg(args[1]);
         var noPrompt         = args.Contains("--no-prompt");
         var forceDevice      = args.Contains("--device");
         var skipClaudeFlag   = args.Contains("--skip-claude-hooks");
@@ -114,9 +138,8 @@ public static class SetupCommand {
         // Step 1: Server
         AnsiConsole.Write(new Rule("[yellow]Step 1/6 — Server[/]").LeftJustified());
         string serverUrl;
-        string? preAuthToken = null;
         string  provider;
-        bool    loginComplete = false; // WorkOS discovery authenticates inline; skip the Step-2 login.
+        bool    loginComplete = false; // Discovery authenticates inline; skip the Step-2 login.
 
         if (serverUrlArg is not null) {
             var resolved = await ResolveServerAndProviderAsync(serverUrlArg);
@@ -129,7 +152,7 @@ public static class SetupCommand {
         } else {
             var discovered = await RunDiscoveryAsync(args, forceDevice);
             if (discovered is null) return 1;
-            (serverUrl, preAuthToken, provider, loginComplete) = discovered.Value;
+            (serverUrl, provider, loginComplete) = discovered.Value;
 
             // Discovery activates the tenant you picked, so the profile captured before it ran is
             // now stale. Step 2 must save the token under the profile setup will actually
@@ -145,34 +168,8 @@ public static class SetupCommand {
         // Step 2: Login
         AnsiConsole.Write(new Rule("[yellow]Step 2/6 — Login[/]").LeftJustified());
 
-        if (loginComplete) {
-            // WorkOS discovery already authenticated + saved the active (picked) profile.
-            var cfgAfter = await AppConfig.LoadProfileConfig();
-            var tokens   = await TokenStore.LoadAsync(cfgAfter.ActiveProfile);
-            AnsiConsole.MarkupLine($"  [green]✓[/] Logged in as [cyan]{Markup.Escape(tokens?.GitHubUsername ?? "?")}[/]");
-        } else if (provider == AuthProvider.None) {
-            await Console.Out.WriteLineAsync("  Auth provider is None — no login required.");
-        } else if (preAuthToken is not null) {
-            var exchangeResult = await OAuthLoginFlow.ExchangeAndSaveAsync(serverUrl, preAuthToken, provider, activeProfile);
-            if (exchangeResult != 0) {
-                await Console.Error.WriteLineAsync("  Token exchange failed.");
-                return 1;
-            }
-            // Keep formatting consistent with the non-discovery branch
-            var tokens = await TokenStore.LoadAsync(activeProfile);
-            AnsiConsole.MarkupLine($"  [green]✓[/] Logged in as [cyan]{Markup.Escape(tokens?.GitHubUsername ?? "?")}[/]");
-        } else {
-            var loginResult = await OAuthLoginFlow.LoginWithDiscoveryAsync(serverUrl, forceDevice, activeProfile);
-
-            if (loginResult != 0) {
-                await Console.Error.WriteLineAsync("  Login failed.");
-
-                return 1;
-            }
-
-            var tokens = await TokenStore.LoadAsync(activeProfile);
-            await Console.Out.WriteLineAsync($"  ✓ Logged in as {tokens?.GitHubUsername}");
-        }
+        var loginStepResult = await RunLoginStepAsync(loginComplete, provider, serverUrl, forceDevice, activeProfile);
+        if (loginStepResult != 0) return loginStepResult;
 
         await Console.Out.WriteLineAsync();
 
@@ -777,7 +774,7 @@ public static class SetupCommand {
 
     /// <summary>
     /// Normalizes a user-supplied server (a full URL, or a bare slug already expanded by
-    /// <see cref="ResolveTenantArg"/>), probes it, and reads the auth provider from the server's
+    /// <see cref="ServerInput.ResolveTenantArg"/>), probes it, and reads the auth provider from the server's
     /// own <c>/auth/config</c>. Returns null after printing the reason. Shared by
     /// `kcap setup &lt;tenant&gt;` / --server-url and by the zero-tenant "I already have a
     /// workspace" path, so provider selection has exactly one implementation.
@@ -811,7 +808,53 @@ public static class SetupCommand {
         }
     }
 
-    static async Task<(string ServerUrl, string? PreAuthToken, string Provider, bool LoginComplete)?> RunDiscoveryAsync(
+    /// <summary>Test seam: overrides façade construction for Step 1/2. Reset to null in a finally block.</summary>
+    internal static Func<ITenantProvisioner?, OnboardingFacade>? FacadeOverride;
+
+    internal static readonly SetupAuthProgress StepProgress = new(ConsoleAuthProgress.Instance);
+
+    static OnboardingFacade NewFacade(ITenantProvisioner? provisioner) =>
+        FacadeOverride?.Invoke(provisioner)
+            ?? new OnboardingFacade(StepProgress, new SpectreTenantPicker(), provisioner, beforeCommit: null);
+
+    /// <summary>
+    /// Step 2 (Login) as a standalone step: a discovery-completed sign-in just reports what
+    /// discovery already published; everything else — including a <c>None</c> provider, which needs
+    /// no interactive login but still needs its auth_provider stamp written inside the façade's
+    /// commit boundary — goes through the façade, adopting the server onto the active profile,
+    /// since setup's whole job is configuring that profile for the chosen server.
+    /// </summary>
+    internal static async Task<int> RunLoginStepAsync(
+            bool loginComplete, string provider, string serverUrl, bool forceDevice, string activeProfile) {
+        if (loginComplete) {
+            var cfgAfter = await AppConfig.LoadProfileConfig();
+            var tokens   = await TokenStore.LoadAsync(cfgAfter.ActiveProfile);
+            AnsiConsole.MarkupLine($"  [green]✓[/] Logged in as [cyan]{Markup.Escape(tokens?.GitHubUsername ?? "?")}[/]");
+
+            return 0;
+        }
+
+        var result = await NewFacade(provisioner: null)
+            .LoginAsync(serverUrl, forceDevice, activeProfile, CancellationToken.None, adoptServer: true);
+
+        if (result is not AuthResult.Committed) {
+            await Console.Error.WriteLineAsync("  Login failed.");
+
+            return 1;
+        }
+
+        if (provider == AuthProvider.None) {
+            // The façade's ConsoleAuthProgress already printed the "no authentication configured" notice.
+            return 0;
+        }
+
+        var loggedInTokens = await TokenStore.LoadAsync(activeProfile);
+        await Console.Out.WriteLineAsync($"  ✓ Logged in as {loggedInTokens?.GitHubUsername}");
+
+        return 0;
+    }
+
+    internal static async Task<(string ServerUrl, string Provider, bool LoginComplete)?> RunDiscoveryAsync(
             string[] args, bool forceDevice) {
         // Resolved before contacting the auth service: a non-interactive session has no discovery
         // provider at all, so there is nothing to ask the proxy about.
@@ -825,97 +868,75 @@ public static class SetupCommand {
 
         AnsiConsole.MarkupLine($"  Proxy: [dim]{Markup.Escape(AuthProxyEndpoint.Url)}[/]");
 
-        using var http  = new HttpClient();
-        var proxyClient = new AuthProxyClient(http);
-
-        var proxyConfig = await AnsiConsole.Status().Spinner(Spinner.Known.Dots).StartAsync("Contacting auth service…",
-            async _ => await proxyClient.GetConfigAsync(AuthProxyEndpoint.Url));
-        if (proxyConfig is null) {
-            AnsiConsole.MarkupLine("  [red]✗[/] Cannot reach the Kurrent auth service. Retry later, or pass --server-url <url>.");
-            return null;
-        }
-
-        var provider = chosen;
-        // WorkOS discovery always authenticates via a loopback browser (see
-        // WorkOSDiscovery.RunWithLiveAuthAsync's orglessLogin) — headless never switches it to a
-        // device flow the way GitHub App's AcquireGitHubTokenAsync does, so the label must not
+        // WorkOS discovery always authenticates via a loopback browser — headless never switches it
+        // to a device flow the way GitHub App's AcquireGitHubTokenAsync does, so the label must not
         // vary with headlessness for this provider.
-        var signinMode = provider == AuthProvider.WorkOS
+        var signinMode = chosen == AuthProvider.WorkOS
             ? "browser"
             : HeadlessEnvironment.IsHeadless() ? "device" : "browser";
-        SetupFunnel.SigninOpened(signinMode, provider);
+        SetupFunnel.SigninOpened(signinMode, chosen);
 
-        if (provider == AuthProvider.WorkOS) {
-            // Offer inline tenant creation only in an interactive session; headless
-            // setup keeps the legacy "ask your admin" dead-end (provisioner is null).
-            ITenantProvisioner? provisioner = HeadlessEnvironment.IsHeadless()
-                ? null
-                : new SpectreTenantProvisioner(new TenantProvisioningClient(new HttpClient()), ProvisioningEndpoint.Url);
+        // Headless WorkOS keeps the legacy "ask your admin" dead-end; GitHub never provisions.
+        var provisioner = chosen == AuthProvider.WorkOS && !HeadlessEnvironment.IsHeadless()
+            ? new SpectreTenantProvisioner(new TenantProvisioningClient(new HttpClient()), ProvisioningEndpoint.Url)
+            : null;
 
-            // Sign-in events fire inside WorkOSDiscovery.RunAsync itself, right after live auth
-            // succeeds/fails and before tenant enumeration begins — see the comment there for why
-            // anchoring on this call's return (ExitCode) would be wrong.
-            var workosDiscovery = await WorkOSDiscovery.RunWithLiveAuthAsync(
-                AuthProxyEndpoint.Url, proxyConfig, proxyClient, new SpectreTenantPicker(), provisioner);
+        var result = await NewFacade(provisioner).DiscoverAsync(chosen, forceDevice, CancellationToken.None);
 
-            // Checked before ExitCode, which is deliberately non-zero on a re-target. The user has
-            // no WorkOS tenant but does belong to a workspace, so continue setup against that
-            // server: its own /auth/config picks the provider, and Step 2 logs in normally. This is
-            // the path a GitHub-App workspace takes — WorkOS discovery can never return one.
-            if (workosDiscovery.RetargetServerInput is { } target) {
+        // WorkOS's own signin_completed/tenant_none fire from inside Core — only GitHub is derived here.
+        if (chosen == AuthProvider.GitHubApp) {
+            switch (result) {
+                case AuthResult.Failed { Reason: AuthFailureReason.SigninDenied }:
+                    SetupFunnel.SigninFailed("github_token_denied");
+
+                    break;
+                // Other and NoTenantsFound only occur once AcquireGitHubTokenAsync already succeeded.
+                case AuthResult.Committed:
+                case AuthResult.Failed { Reason: AuthFailureReason.Other }:
+                    SetupFunnel.SigninCompleted(AuthProvider.GitHubApp);
+
+                    break;
+                case AuthResult.Failed { Reason: AuthFailureReason.NoTenantsFound }:
+                    SetupFunnel.SigninCompleted(AuthProvider.GitHubApp);
+                    SetupFunnel.TenantNone(AuthProvider.GitHubApp);
+
+                    break;
+            }
+        }
+
+        switch (result) {
+            case AuthResult.Committed committed: {
+                var cfg    = await AppConfig.LoadProfileConfig();
+                var active = cfg.Profiles.GetValueOrDefault(cfg.ActiveProfile);
+
+                if (active?.ServerUrl is null) {
+                    AnsiConsole.MarkupLine("  [red]✗[/] Sign-in did not set an active profile.");
+
+                    return null;
+                }
+
+                // WorkOS already reported "Logged in as … → …" via the façade; GitHub gets its own line.
+                if (committed.Provider != AuthProvider.WorkOS) {
+                    AnsiConsole.MarkupLine(
+                        $"  [green]✓[/] Discovered {committed.Published.Count} tenant(s). Active: [cyan]{Markup.Escape(committed.ActiveProfile)}[/]");
+                }
+
+                return (active.ServerUrl, committed.Provider, true);
+            }
+            case AuthResult.Retarget retarget: {
                 // Origin first, then slug expansion: a pasted "acme.kcap.ai/sessions" must lose its
                 // path before ResolveTenantArg decides it already looks like a host.
-                var retargeted = await ResolveServerAndProviderAsync(ResolveTenantArg(ToServerOrigin(target)));
+                var retargeted = await ResolveServerAndProviderAsync(
+                    ServerInput.ResolveTenantArg(ServerInput.ToServerOrigin(retarget.ServerInput)));
 
-                return retargeted is null
-                    ? null
-                    : (retargeted.Value.ServerUrl, null, retargeted.Value.Provider, false);
+                return retargeted is null ? null : (retargeted.Value.ServerUrl, retargeted.Value.Provider, false);
             }
+            default:
+                // Failed/Cancelled — already rendered through the façade's progress sink, bar the tail setup owns.
+                StepProgress.ReportFailure(result);
 
-            if (workosDiscovery.ExitCode != 0) return null;
-
-            // WorkOSDiscovery saved + activated the picked profile; continue setup against it.
-            var cfg    = await AppConfig.LoadProfileConfig();
-            var active = cfg.Profiles.GetValueOrDefault(cfg.ActiveProfile);
-            if (active?.ServerUrl is null) {
-                AnsiConsole.MarkupLine("  [red]✗[/] WorkOS sign-in did not set an active profile.");
                 return null;
-            }
-            return (active.ServerUrl, null, AuthProvider.WorkOS, true);
         }
-
-        if (string.IsNullOrEmpty(proxyConfig.GitHubClientId)) {
-            AnsiConsole.MarkupLine("  [red]✗[/] Cannot reach the Kurrent auth service. Retry later, or pass --server-url <url>.");
-            return null;
-        }
-
-        var ghToken = await OAuthLoginFlow.AcquireGitHubTokenAsync(
-            proxyConfig.GitHubClientId, proxyConfig.GitHubCodeExchangeUrl, forceDevice);
-        if (ghToken is null) {
-            SetupFunnel.SigninFailed("github_token_denied");
-            return null;
-        }
-        SetupFunnel.SigninCompleted(AuthProvider.GitHubApp);
-
-        var discovery = new TenantDiscovery(proxyClient, new SpectreTenantPicker());
-        var outcome   = await discovery.RunAsync(AuthProxyEndpoint.Url, ghToken);
-
-        // Keyed on the discriminator, not outcome.Tenants.Length == 0: a proxy-unreachable,
-        // token-rejected, or upstream-error outcome ALSO returns zero tenants, and those are
-        // discovery-service failures, not "authenticated but has no tenant" — the funnel's
-        // denominator would otherwise be inflated with outages that never reached signup.
-        if (outcome.NoTenantsFound) SetupFunnel.TenantNone(AuthProvider.GitHubApp);
-
-        if (outcome.ErrorMessage is not null) {
-            AnsiConsole.MarkupLine($"  [red]✗[/] {Markup.Escape(outcome.ErrorMessage)}");
-            return null;
-        }
-
-        await ConfigMutator.MutateAsync(c => TenantDiscovery.MergeProfiles(c, outcome.Tenants, outcome.Picked!));
-
-        AnsiConsole.MarkupLine($"  [green]✓[/] Discovered {outcome.Tenants.Length} tenant(s). Active: [cyan]{Markup.Escape(outcome.Picked!.OrgLogin)}[/]");
-
-        return (AppConfig.NormalizeUrl(outcome.Picked.Origin), ghToken, AuthProvider.GitHubApp, false);
     }
 
     internal static string? ResolvePluginPath(string? overrideDir = null) {
@@ -1077,43 +1098,6 @@ public static class SetupCommand {
 
         return idx >= 0 && idx + 1 < args.Length ? args[idx + 1] : null;
     }
-
-    /// <summary>
-    /// Resolves a `kcap setup &lt;tenant&gt;` positional: a bare single label (no scheme/dot/port)
-    /// expands to <c>https://{slug}.kcap.ai</c>; anything that already looks like a URL, FQDN, or
-    /// host:port is returned unchanged for the normal --server-url path. Self-hosted servers should
-    /// pass a full URL.
-    /// </summary>
-    /// <summary>
-    /// Reduces a user-supplied server to its origin, dropping any path/query/fragment. Everything
-    /// downstream appends a fixed root path (<c>/auth/config</c>), so a pasted page URL would probe
-    /// the wrong endpoint and be reported unreachable. Applied to the zero-discovery
-    /// "I already have a workspace" input, which explicitly invites a paste; the pre-existing
-    /// <c>--server-url</c> / <c>&lt;tenant&gt;</c> arguments keep their current behaviour. A bare
-    /// slug passes through untouched for <see cref="ResolveTenantArg"/> to expand.
-    /// </summary>
-    internal static string ToServerOrigin(string input) {
-        var trimmed = input.Trim().TrimEnd('/');
-
-        if (Uri.TryCreate(trimmed, UriKind.Absolute, out var absolute)
-         && (absolute.Scheme == Uri.UriSchemeHttp || absolute.Scheme == Uri.UriSchemeHttps)) {
-            return absolute.GetLeftPart(UriPartial.Authority);
-        }
-
-        // Scheme-less: cut at the first path/query/fragment separator. A bracketed IPv6 literal
-        // ("[::1]:5108") must be skipped first or the scan would cut inside the address.
-        var bracketEnd = trimmed.StartsWith('[') ? trimmed.IndexOf(']') : -1;
-        var scanFrom   = bracketEnd > 0 ? bracketEnd + 1 : 0;
-        var cut        = trimmed.IndexOfAny(['/', '?', '#'], scanFrom);
-
-        return cut < 0 ? trimmed : trimmed[..cut].TrimEnd('/');
-    }
-
-    internal static string ResolveTenantArg(string arg) =>
-        arg.Contains("://") || arg.Contains('.') || arg.Contains(':')
-        || arg.Equals("localhost", StringComparison.OrdinalIgnoreCase) // bare loopback host, not a kcap.ai slug
-            ? arg
-            : $"https://{arg}.kcap.ai";
 
     static readonly JsonSerializerOptions WriteOpts = new() { WriteIndented = true };
 

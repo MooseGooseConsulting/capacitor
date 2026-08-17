@@ -16,6 +16,9 @@ public class LoginShellProbeTests {
             var step = _steps.Count > 0 ? _steps.Dequeue() : () => Task.FromResult(new ProcessResult(0, "", "", false));
             return step();
         }
+
+        public Task<StreamingResult> RunStreamingAsync(string fileName, string[] args, RunOptions options,
+            Action<StreamedLine> onLine, CancellationToken ct) => throw new NotImplementedException();
     }
 
     static string Wrap(string path) => $"{LoginShellProbe.Sentinel}{path}{LoginShellProbe.Sentinel}";
@@ -314,7 +317,7 @@ public class LoginShellProbeTests {
         await Assert.That(runner.Calls).Count().IsEqualTo(1);
     }
 
-    // Regression (Finding 10): the post-install probe must never reuse the pre-install cached
+    // Regression: the post-install probe must never reuse the pre-install cached
     // answer — forceRefresh bypasses it AND repopulates the cache with the fresh result.
     [Test]
     public async Task KcapOnPathAsync_forceRefresh_bypasses_and_repopulates_the_cache() {

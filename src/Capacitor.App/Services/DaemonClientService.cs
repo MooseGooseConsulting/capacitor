@@ -143,13 +143,17 @@ public sealed class DaemonClientService : IDaemonClientService, IAsyncDisposable
         _                                            => new(false, outcome.GetType().Name),
     };
 
+    /// <summary>
     /// Resolves the daemon name ONCE via the same chain DaemonCommands.ResolveName uses, so the
     /// watched daemon and the started daemon can never diverge (spec §5). `runMutation` is the
     /// app-lifetime DaemonMutationLane's RunAsync, injected by the composition root so this
-    /// factory never spawns a process of its own.
-    public static async Task<DaemonClientService> CreateDefaultAsync(
+    /// factory never spawns a process of its own. Built over the profile the caller ALREADY
+    /// resolved: the app resolves once per graph build (evaluating the onboarding gate) and builds
+    /// from that same resolution, so the gate verdict and the daemon identity can never diverge on
+    /// a concurrently-changing profile.
+    /// </summary>
+    public static DaemonClientService CreateResolved(
             Func<MutationRequest, CancellationToken, Task<MutationOutcome>> runMutation) {
-        await AppConfig.ResolveActiveProfile([]);
         var name = DaemonNameResolver.Resolve([], AppConfig.ResolvedProfile?.Profile?.Daemon?.Name);
 
         return new DaemonClientService(
@@ -161,8 +165,8 @@ public sealed class DaemonClientService : IDaemonClientService, IAsyncDisposable
     /// CURRENTLY resolved profile/server (re-read on every call, never captured once — a profile
     /// resolved after this service was constructed must still be honored) and hands it to
     /// `runMutation`; a caller that cannot bind a canonical server never reaches it (binding
-    /// ruling 1). Extracted from CreateDefaultAsync — whose own AppConfig.ResolveActiveProfile
-    /// call touches real config I/O — so this request-building logic stays unit-testable on its own.
+    /// ruling 1). Extracted from CreateResolved — whose daemon-name resolution reads real config —
+    /// so this request-building logic stays unit-testable on its own.
     internal static Func<CancellationToken, Task<MutationOutcome>> BuildStartDaemon(
             string daemonName, Func<ResolvedProfile?> resolveProfile,
             Func<MutationRequest, CancellationToken, Task<MutationOutcome>> runMutation) =>
@@ -247,6 +251,69 @@ public sealed class DaemonClientService : IDaemonClientService, IAsyncDisposable
 
             await Task.WhenAll(stdoutTask, stderrTask).ConfigureAwait(false);
             return new ProcessResult(process.ExitCode, stdoutTask.Result, stderrTask.Result, TimedOut: false);
+        }
+
+        const int TailLimit = 500;
+
+        public async Task<StreamingResult> RunStreamingAsync(string fileName, string[] args, RunOptions options,
+                Action<StreamedLine> onLine, CancellationToken ct) {
+            var psi = new ProcessStartInfo(fileName) {
+                RedirectStandardOutput = true,
+                RedirectStandardError  = true,
+                UseShellExecute        = false,
+            };
+            foreach (var a in args) psi.ArgumentList.Add(a);
+            if (options.EnvOverlay is not null)
+                foreach (var (key, value) in options.EnvOverlay) psi.Environment[key] = value;
+
+            using var process = Process.Start(psi) ?? throw new InvalidOperationException($"Failed to start '{fileName}'.");
+
+            var tailLock = new object();
+            var tail = new Queue<StreamedLine>(TailLimit + 1);
+
+            void Record(StreamedLine line) {
+                try { onLine(line); }
+                catch (Exception ex) { Console.Error.WriteLine($"kcap: streaming callback threw for '{fileName}': {ex}"); }
+
+                lock (tailLock) {
+                    tail.Enqueue(line);
+                    if (tail.Count > TailLimit) tail.Dequeue();
+                }
+            }
+
+            // Line-buffered per stream — no cross-stream ordering promise; drains to EOF even under kill.
+            async Task PumpAsync(TextReader reader, ProcessStreamKind kind) {
+                string? line;
+                while ((line = await reader.ReadLineAsync(CancellationToken.None).ConfigureAwait(false)) is not null)
+                    Record(new StreamedLine(kind, line));
+            }
+
+            var stdoutTask = PumpAsync(process.StandardOutput, ProcessStreamKind.Stdout);
+            var stderrTask = PumpAsync(process.StandardError, ProcessStreamKind.Stderr);
+
+            using var timeoutCts = options.Timeout is { } timeout ? new CancellationTokenSource(timeout) : null;
+            using var waitCts = timeoutCts is null ? null : CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+
+            try {
+                await process.WaitForExitAsync(waitCts?.Token ?? ct).ConfigureAwait(false);
+            } catch (OperationCanceledException) {
+                if (ct.IsCancellationRequested) {
+                    // Streaming always kills the tree on cancellation, ignoring RunOptions.CancelMode.
+                    await KillAndAwaitAsync(process).ConfigureAwait(false);
+                    // Awaited, not fire-and-forget: the pumps end at EOF once the tree is killed
+                    // (same as the timeout arm below) — a fire-and-forget Observe let a callback
+                    // fire AFTER this method had already thrown OCE, racing caller cleanup.
+                    await Task.WhenAll(stdoutTask, stderrTask).ConfigureAwait(false);
+                    throw;
+                }
+
+                await KillAndAwaitAsync(process, options.TimeoutKill == TimeoutKillScope.Tree).ConfigureAwait(false);
+                await Task.WhenAll(stdoutTask, stderrTask).ConfigureAwait(false);
+                lock (tailLock) return new StreamingResult(process.ExitCode, TimedOut: true, tail.ToArray());
+            }
+
+            await Task.WhenAll(stdoutTask, stderrTask).ConfigureAwait(false);
+            lock (tailLock) return new StreamingResult(process.ExitCode, TimedOut: false, tail.ToArray());
         }
 
         static async Task KillAndAwaitAsync(Process process, bool entireProcessTree = true) {

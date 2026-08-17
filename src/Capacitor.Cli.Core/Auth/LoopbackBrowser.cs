@@ -10,10 +10,12 @@ namespace Capacitor.Cli.Core.Auth;
 /// Opens the system browser to the authorize URL, waits for the redirect callback,
 /// and returns its raw query string. WorkOS documents the loopback exception as
 /// 127.0.0.1 (not localhost). The bind exception is intentionally NOT caught so the
-/// GitHub flow can fall back to device flow on a bind failure.
+/// GitHub flow can fall back to device flow on a bind failure. A caller cancel throws
+/// <see cref="OperationCanceledException"/>; only the independent timeout returns Timeout.
 /// </summary>
-public sealed class LoopbackBrowser(Action<string>? openBrowser = null) : IBrowser {
+public sealed class LoopbackBrowser(Action<string>? openBrowser = null, IAuthProgress? progress = null) : IBrowser {
     readonly Action<string> _openBrowser = openBrowser ?? OpenSystemBrowser;
+    readonly IAuthProgress  _progress    = progress ?? ConsoleAuthProgress.Instance;
 
     public async Task<BrowserResult> InvokeAsync(BrowserOptions options, CancellationToken ct = default) {
         var port = new Uri(options.EndUrl).Port;
@@ -22,8 +24,7 @@ public sealed class LoopbackBrowser(Action<string>? openBrowser = null) : IBrows
         listener.Prefixes.Add($"http://127.0.0.1:{port}/");
         listener.Start(); // bind failure propagates (HttpListenerException / PlatformNotSupportedException)
 
-        await Console.Out.WriteLineAsync("Opening browser for authentication...");
-        await Console.Out.WriteLineAsync($"  If the browser doesn't open, visit: {options.StartUrl}");
+        _progress.BrowserOpening(options.StartUrl);
         _openBrowser(options.StartUrl);
 
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -40,6 +41,9 @@ public sealed class LoopbackBrowser(Action<string>? openBrowser = null) : IBrows
                 listener.Stop();
                 _ = getContext.ContinueWith(t => _ = t.Exception, CancellationToken.None,
                     TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+
+                // The caller's own cancel is not a timeout — it propagates so the flow answers Cancelled.
+                ct.ThrowIfCancellationRequested();
 
                 return new BrowserResult { ResultType = BrowserResultType.Timeout };
             }

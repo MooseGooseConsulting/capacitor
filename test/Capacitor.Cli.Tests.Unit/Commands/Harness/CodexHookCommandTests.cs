@@ -1,11 +1,16 @@
 using System.Text.Json;
 using Capacitor.Cli.Commands.Harness;
+using Capacitor.Cli.Core;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
 
 namespace Capacitor.Cli.Tests.Unit.Commands.Harness;
 
+// Keyed on the shared token/profile state: the hook POST path classifies auth via the process-wide
+// provider cache and the ACTIVE profile's token, so a concurrent token-writing test can flip it to
+// WrongServer and the POST silently spools instead of hitting the stub.
+[NotInParallel("TokenStoreProfileTests")]
 public class CodexHookCommandTests : IDisposable {
     // Every test that mutates Console.Out or the KCAP_DAEMON_URL env
     // var is decorated [NotInParallel] (no group) so it runs strictly alone.
@@ -15,6 +20,11 @@ public class CodexHookCommandTests : IDisposable {
     // race nondeterministically corrupted Console captures (CI).
 
     readonly WireMockServer _server = WireMockServer.Start();
+
+    // First successful discovery wins process-wide regardless of baseUrl — an earlier test's cached
+    // provider would make this class skip its own /auth/config stub.
+    [Before(Test)]
+    public void ResetProviderCache() => HttpClientExtensions.ResetProviderCacheForTesting();
 
     public void Dispose() => _server.Stop();
 
