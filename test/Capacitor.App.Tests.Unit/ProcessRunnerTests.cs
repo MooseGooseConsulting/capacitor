@@ -78,6 +78,7 @@ public class ProcessRunnerTests {
     }
 
     [Test]
+    [NotInParallel("StreamingProcessRunner")]
     public async Task Timeout_kills_the_tree_and_returns_promptly() {
         Skip.When(OperatingSystem.IsWindows(), "execs a POSIX binary");
 
@@ -93,6 +94,7 @@ public class ProcessRunnerTests {
     }
 
     [Test]
+    [NotInParallel("StreamingProcessRunner")]
     public async Task AbandonWait_cancelled_ct_throws_and_the_child_survives() {
         Skip.When(OperatingSystem.IsWindows(), "execs a POSIX binary");
 
@@ -115,6 +117,7 @@ public class ProcessRunnerTests {
     }
 
     [Test]
+    [NotInParallel("StreamingProcessRunner")]
     public async Task KillTree_cancelled_ct_kills_the_child_then_throws() {
         Skip.When(OperatingSystem.IsWindows(), "execs a POSIX binary");
 
@@ -138,6 +141,7 @@ public class ProcessRunnerTests {
     }
 
     [Test]
+    [NotInParallel("StreamingProcessRunner")]
     public async Task ProcessOnly_timeout_kills_the_shell_but_spares_the_grandchild() {
         Skip.When(OperatingSystem.IsWindows(), "execs a POSIX binary");
 
@@ -160,6 +164,7 @@ public class ProcessRunnerTests {
     }
 
     [Test]
+    [NotInParallel("StreamingProcessRunner")]
     public async Task Tree_timeout_kills_the_grandchild_too() {
         Skip.When(OperatingSystem.IsWindows(), "execs a POSIX binary");
 
@@ -175,6 +180,7 @@ public class ProcessRunnerTests {
     }
 
     [Test]
+    [NotInParallel("StreamingProcessRunner")]
     public async Task KillTree_cancellation_kills_the_tree_even_with_TimeoutKill_ProcessOnly() {
         Skip.When(OperatingSystem.IsWindows(), "execs a POSIX binary");
 

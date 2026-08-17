@@ -14,6 +14,9 @@ public class PathShimInstallerTests {
             Calls.Add((fileName, args, options));
             return _step();
         }
+
+        public Task<StreamingResult> RunStreamingAsync(string fileName, string[] args, RunOptions options,
+            Action<StreamedLine> onLine, CancellationToken ct) => throw new NotImplementedException();
     }
 
     readonly List<string> _tempDirs = [];
@@ -357,7 +360,7 @@ public class PathShimInstallerTests {
         await Assert.That(runner.Calls).IsEmpty();
     }
 
-    // Regression (Finding 10): ShimOfferCoordinator's offer decision already consumed
+    // Regression: ShimOfferCoordinator's offer decision already consumed
     // KcapOnPathAsync (caching its "absent" answer) before ever calling InstallAsync — the
     // post-install probe must not just replay that stale cached answer.
     [Test]

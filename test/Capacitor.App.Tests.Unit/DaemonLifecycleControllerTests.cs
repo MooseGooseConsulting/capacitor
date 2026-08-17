@@ -1040,7 +1040,7 @@ public class DaemonLifecycleControllerTests {
         await WaitUntilAsync(() => h.Surface.Prompts.Count == 2, what: "the re-offered prompt");
     }
 
-    // Finding 7: a terminal can replace the plist/unit while the dialog is open WITHOUT producing
+    // A terminal can replace the plist/unit while the dialog is open WITHOUT producing
     // an attach event — the generation token alone is blind to this. Acceptance must re-query
     // fresh status and re-classify before mutating; a classification flip aborts exactly like the
     // generation-based stale-consent path above.
@@ -1410,6 +1410,26 @@ sealed class FakeKcapCli : IKcapCli {
         DetachedStartCallCount++;
         LastBootAttemptId = bootAttemptId;
         return DetachedStartBehavior(ct);
+    }
+
+    public int PluginInstallCallCount;
+    public readonly List<string?> PluginInstallCalls = []; // call-order proof for sequential-install tests
+    public Func<string?, CancellationToken, Task<ProcessResult>> PluginInstallBehavior =
+        (_, _) => Task.FromResult(new ProcessResult(0, "", "", false));
+    public Task<ProcessResult> PluginInstallAsync(string? vendorFlag, CancellationToken ct) {
+        PluginInstallCallCount++;
+        PluginInstallCalls.Add(vendorFlag);
+        return PluginInstallBehavior(vendorFlag, ct);
+    }
+
+    public int ImportCallCount;
+    public readonly List<ImportRequest> ImportRequests = [];
+    public Func<ImportRequest, Action<StreamedLine>, CancellationToken, Task<StreamingResult>> ImportBehavior =
+        (_, _, _) => Task.FromResult(new StreamingResult(0, false, []));
+    public Task<StreamingResult> ImportAsync(ImportRequest request, Action<StreamedLine> onLine, CancellationToken ct) {
+        ImportCallCount++;
+        ImportRequests.Add(request);
+        return ImportBehavior(request, onLine, ct);
     }
 }
 
