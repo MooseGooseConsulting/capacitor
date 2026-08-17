@@ -1,11 +1,11 @@
-using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
+using static Capacitor.Tests.Helpers.AuthFixtures;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Telemetry;
 using NSubstitute;
 using DiscoveryResult = Capacitor.Cli.Core.Auth.DiscoveryResult;
 
-namespace Capacitor.Cli.Tests.Unit;
+namespace Capacitor.Cli.Core.Tests.Unit.Auth;
 
 /// <summary>
 /// The ordered commit boundary itself: the claim hook runs last-cancellable and sees every
@@ -44,8 +44,8 @@ public class CommitBoundaryTests {
         var       configAtHook = true;
         var       tokensAtHook = true;
 
-        var facade = OnboardingFacadeTests.NewFacade(
-            new RecordingAuthProgress(), handler, OnboardingFacadeTests.PickerReturningFirst(),
+        var facade = NewFacade(
+            new RecordingAuthProgress(), handler, PickerReturningFirst(),
             beforeCommit: (ids, _) => {
                 identities.AddRange(ids);
                 configAtHook = File.Exists(ConfigPath);
@@ -68,8 +68,8 @@ public class CommitBoundaryTests {
     public async Task Hook_failure_aborts_the_commit_with_nothing_durable() {
         using var handler = GitHubDiscoveryScript();
 
-        var facade = OnboardingFacadeTests.NewFacade(
-            new RecordingAuthProgress(), handler, OnboardingFacadeTests.PickerReturningFirst(),
+        var facade = NewFacade(
+            new RecordingAuthProgress(), handler, PickerReturningFirst(),
             beforeCommit: (_, _) => throw new InvalidOperationException("claim store is unwritable"));
 
         var result = await facade.DiscoverAsync(AuthProvider.GitHubApp, forceDevice: true, CancellationToken.None);
@@ -85,8 +85,8 @@ public class CommitBoundaryTests {
     public async Task Hook_cancellation_returns_cancelled_with_nothing_durable() {
         using var handler = GitHubDiscoveryScript();
 
-        var facade = OnboardingFacadeTests.NewFacade(
-            new RecordingAuthProgress(), handler, OnboardingFacadeTests.PickerReturningFirst(),
+        var facade = NewFacade(
+            new RecordingAuthProgress(), handler, PickerReturningFirst(),
             beforeCommit: (_, _) => throw new OperationCanceledException());
 
         var result = await facade.DiscoverAsync(AuthProvider.GitHubApp, forceDevice: true, CancellationToken.None);
@@ -101,8 +101,8 @@ public class CommitBoundaryTests {
         using var cts     = new CancellationTokenSource();
         using var handler = GitHubDiscoveryScript();
 
-        var facade = OnboardingFacadeTests.NewFacade(
-            new RecordingAuthProgress(), handler, OnboardingFacadeTests.PickerReturningFirst(),
+        var facade = NewFacade(
+            new RecordingAuthProgress(), handler, PickerReturningFirst(),
             beforeCommit: (_, _) => { cts.Cancel(); return Task.CompletedTask; });
 
         var result = await facade.DiscoverAsync(AuthProvider.GitHubApp, forceDevice: true, cts.Token);
@@ -130,8 +130,8 @@ public class CommitBoundaryTests {
             return AuthHttp.Json("""{"access_token":"capacitor-jwt","expires_in":3600,"username":"alice"}""");
         });
 
-        var facade = OnboardingFacadeTests.NewFacade(
-            new RecordingAuthProgress(), handler, OnboardingFacadeTests.PickerReturningFirst());
+        var facade = NewFacade(
+            new RecordingAuthProgress(), handler, PickerReturningFirst());
 
         var result = await facade.DiscoverAsync(AuthProvider.GitHubApp, forceDevice: true, CancellationToken.None);
 
@@ -145,8 +145,8 @@ public class CommitBoundaryTests {
     public async Task Stamp_records_each_identitys_own_canonical_server() {
         using var handler = GitHubDiscoveryScript();
 
-        var facade = OnboardingFacadeTests.NewFacade(
-            new RecordingAuthProgress(), handler, OnboardingFacadeTests.PickerReturningFirst());
+        var facade = NewFacade(
+            new RecordingAuthProgress(), handler, PickerReturningFirst());
 
         await facade.DiscoverAsync(AuthProvider.GitHubApp, forceDevice: true, CancellationToken.None);
 
@@ -158,7 +158,7 @@ public class CommitBoundaryTests {
     [Test]
     public async Task None_stamp_uses_the_vocabulary_the_start_gate_accepts() {
         using var handler = AuthHttp.Script(authConfig: """{"provider":"None"}""");
-        var       facade  = OnboardingFacadeTests.NewFacade(new RecordingAuthProgress(), handler);
+        var       facade  = NewFacade(new RecordingAuthProgress(), handler);
 
         await facade.LoginAsync(
             "https://none.example", forceDevice: false, profile: "solo", CancellationToken.None, adoptServer: true);
@@ -185,7 +185,7 @@ public class CommitBoundaryTests {
                 return AuthHttp.Json("""{"error":"authorization_pending"}""");
             });
 
-        var facade = OnboardingFacadeTests.NewFacade(new RecordingAuthProgress(), handler);
+        var facade = NewFacade(new RecordingAuthProgress(), handler);
 
         var result = await facade.LoginAsync("https://acme.kcap.ai", forceDevice: true, profile: "acme", cts.Token);
 
@@ -293,7 +293,7 @@ public class CommitBoundaryTests {
         try {
             using var handler  = AuthHttp.Script(authConfig: """{"provider":"GitHubApp","github_client_id":"cid"}""");
             var       progress = new RecordingAuthProgress();
-            var       facade   = OnboardingFacadeTests.NewFacade(progress, handler);
+            var       facade   = NewFacade(progress, handler);
 
             var result = await facade.LoginAsync(
                 "https://acme.kcap.ai", forceDevice: true, profile: "acme", CancellationToken.None);
@@ -321,7 +321,7 @@ public class CommitBoundaryTests {
         try {
             using var handler  = AuthHttp.Script(authConfig: """{"provider":"GitHubApp","github_client_id":"cid"}""");
             var       progress = new RecordingAuthProgress();
-            var       facade   = OnboardingFacadeTests.NewFacade(progress, handler);
+            var       facade   = NewFacade(progress, handler);
 
             var result = await facade.LoginAsync(
                 "https://acme.kcap.ai", forceDevice: true, profile: "acme", CancellationToken.None, adoptServer: true);

@@ -4,7 +4,7 @@ using Capacitor.Cli.Core.Auth;
 using NSubstitute;
 using DiscoveryResult = Capacitor.Cli.Core.Auth.DiscoveryResult;
 
-namespace Capacitor.Cli.Tests.Unit;
+namespace Capacitor.Cli.Core.Tests.Unit.Auth;
 
 /// <summary>
 /// CancellationToken threading through the auth flows: the device-poll loop actually stops on

@@ -1,15 +1,14 @@
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
+using static Capacitor.Tests.Helpers.AuthFixtures;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Telemetry;
-using Capacitor.Cli.Tests.Unit.Telemetry;
-using Capacitor.Tests.Helpers;
 using Spectre.Console;
 using TUnit.Assertions.Enums;
 using Profile = Capacitor.Cli.Core.Config.Profile;
 
-namespace Capacitor.Cli.Tests.Unit;
+namespace Capacitor.Cli.Tests.Unit.Commands;
 
 /// <summary>
 /// `SetupCommand`'s Step 1 (<see cref="SetupCommand.RunDiscoveryAsync"/>) / Step 2
@@ -23,7 +22,7 @@ namespace Capacitor.Cli.Tests.Unit;
 /// pin (mirrors why LoginFacadeParityTests always passes --github too).
 /// </summary>
 [NotInParallel([
-    nameof(TokenStoreProfileTests),
+    "TokenStoreProfileTests",
     nameof(TelemetryState) + "." + nameof(TelemetryState.PathOverride),
     nameof(TelemetryDeviceId) + "." + nameof(TelemetryDeviceId.PathOverride),
 ])]
@@ -67,10 +66,10 @@ public class SetupFacadeParityTests {
     public async Task RunDiscoveryAsync_github_two_tenants_publishes_both_and_marks_loginComplete() {
         using var handler = AuthHttp.Script(
             proxyConfig: """{"github_client_id":"cid"}""",
-            tenants: OnboardingFacadeTests.TwoGitHubTenants);
+            tenants: TwoGitHubTenants);
 
         SetupCommand.FacadeOverride = _ =>
-            OnboardingFacadeTests.NewFacade(new RecordingAuthProgress(), handler, OnboardingFacadeTests.PickerReturningFirst());
+            NewFacade(new RecordingAuthProgress(), handler, PickerReturningFirst());
 
         var discovered = await SetupCommand.RunDiscoveryAsync(["--github"], forceDevice: true);
 
@@ -93,10 +92,10 @@ public class SetupFacadeParityTests {
 
         using var handler = AuthHttp.Script(
             proxyConfig: """{"github_client_id":"cid"}""",
-            tenants: OnboardingFacadeTests.TwoGitHubTenants);
+            tenants: TwoGitHubTenants);
 
         SetupCommand.FacadeOverride = _ =>
-            OnboardingFacadeTests.NewFacade(new RecordingAuthProgress(), handler, OnboardingFacadeTests.PickerReturningFirst());
+            NewFacade(new RecordingAuthProgress(), handler, PickerReturningFirst());
 
         var discovered = await SetupCommand.RunDiscoveryAsync(["--github"], forceDevice: true);
 
@@ -111,7 +110,7 @@ public class SetupFacadeParityTests {
 
         using var handler = AuthHttp.Script(proxyConfig: """{"github_client_id":"cid"}""", tenants: "[]");
 
-        SetupCommand.FacadeOverride = _ => OnboardingFacadeTests.NewFacade(new RecordingAuthProgress(), handler);
+        SetupCommand.FacadeOverride = _ => NewFacade(new RecordingAuthProgress(), handler);
 
         var discovered = await SetupCommand.RunDiscoveryAsync(["--github"], forceDevice: true);
 
@@ -131,7 +130,7 @@ public class SetupFacadeParityTests {
         // token, landing AuthFailureReason.Other (not NoTenantsFound).
         using var handler = AuthHttp.Script(proxyConfig: """{"github_client_id":"cid"}""");
 
-        SetupCommand.FacadeOverride = _ => OnboardingFacadeTests.NewFacade(new RecordingAuthProgress(), handler);
+        SetupCommand.FacadeOverride = _ => NewFacade(new RecordingAuthProgress(), handler);
 
         var discovered = await SetupCommand.RunDiscoveryAsync(["--github"], forceDevice: true);
 
@@ -148,7 +147,7 @@ public class SetupFacadeParityTests {
             proxyConfig: """{"github_client_id":"cid"}""",
             devicePoll: () => AuthHttp.Json("""{"error":"access_denied"}"""));
 
-        SetupCommand.FacadeOverride = _ => OnboardingFacadeTests.NewFacade(new RecordingAuthProgress(), handler);
+        SetupCommand.FacadeOverride = _ => NewFacade(new RecordingAuthProgress(), handler);
 
         var discovered = await SetupCommand.RunDiscoveryAsync(["--github"], forceDevice: true);
 
@@ -163,7 +162,7 @@ public class SetupFacadeParityTests {
 
         using var handler = AuthHttp.Script(); // no /config route — proxy unreachable
 
-        SetupCommand.FacadeOverride = _ => OnboardingFacadeTests.NewFacade(new RecordingAuthProgress(), handler);
+        SetupCommand.FacadeOverride = _ => NewFacade(new RecordingAuthProgress(), handler);
 
         var discovered = await SetupCommand.RunDiscoveryAsync(["--github"], forceDevice: true);
 
@@ -180,7 +179,7 @@ public class SetupFacadeParityTests {
     public async Task RunDiscoveryAsync_unreachable_proxy_still_prints_the_legacy_guidance_tail() {
         using var handler = AuthHttp.Script(); // no /config route — proxy unreachable
 
-        SetupCommand.FacadeOverride = _ => OnboardingFacadeTests.NewFacade(new RecordingAuthProgress(), handler);
+        SetupCommand.FacadeOverride = _ => NewFacade(new RecordingAuthProgress(), handler);
 
         using var console = ConsoleOutput.StartErrorCapture("\n");
 
@@ -280,7 +279,7 @@ public class SetupFacadeParityTests {
     public async Task RunLoginStepAsync_none_provider_commits_the_stamp_through_the_facade() {
         using var handler = AuthHttp.Script(authConfig: """{"provider":"None"}""");
 
-        SetupCommand.FacadeOverride = _ => OnboardingFacadeTests.NewFacade(new RecordingAuthProgress(), handler);
+        SetupCommand.FacadeOverride = _ => NewFacade(new RecordingAuthProgress(), handler);
 
         var exitCode = await SetupCommand.RunLoginStepAsync(
             loginComplete: false, provider: AuthProvider.None, serverUrl: "https://none.example",
@@ -302,7 +301,7 @@ public class SetupFacadeParityTests {
         // failure test below. A None-provider server that becomes unreachable must fail the same way.
         using var handler = AuthHttp.Script();
 
-        SetupCommand.FacadeOverride = _ => OnboardingFacadeTests.NewFacade(new RecordingAuthProgress(), handler);
+        SetupCommand.FacadeOverride = _ => NewFacade(new RecordingAuthProgress(), handler);
 
         var exitCode = await SetupCommand.RunLoginStepAsync(
             loginComplete: false, provider: AuthProvider.None, serverUrl: "https://none.example",
@@ -315,7 +314,7 @@ public class SetupFacadeParityTests {
     public async Task RunLoginStepAsync_explicit_login_commits_and_adopts_the_server_onto_the_active_profile() {
         using var handler = AuthHttp.Script(authConfig: """{"provider":"GitHubApp","github_client_id":"cid"}""");
 
-        SetupCommand.FacadeOverride = _ => OnboardingFacadeTests.NewFacade(new RecordingAuthProgress(), handler);
+        SetupCommand.FacadeOverride = _ => NewFacade(new RecordingAuthProgress(), handler);
 
         var exitCode = await SetupCommand.RunLoginStepAsync(
             loginComplete: false, provider: AuthProvider.GitHubApp, serverUrl: "https://acme.kcap.ai",
@@ -331,7 +330,7 @@ public class SetupFacadeParityTests {
     public async Task RunLoginStepAsync_explicit_login_failure_prints_login_failed_and_returns_one() {
         using var handler = AuthHttp.Script(authConfig: """{"provider":"martian"}""");
 
-        SetupCommand.FacadeOverride = _ => OnboardingFacadeTests.NewFacade(new RecordingAuthProgress(), handler);
+        SetupCommand.FacadeOverride = _ => NewFacade(new RecordingAuthProgress(), handler);
 
         // The provider param is Step 1's resolved value; Step 2 re-fetches /auth/config for the
         // actual login, so a server reporting an unrelated/unknown provider by then still fails.

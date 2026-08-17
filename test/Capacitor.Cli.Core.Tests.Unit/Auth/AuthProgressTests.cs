@@ -1,26 +1,10 @@
 using System.Net;
 using System.Text;
 using Capacitor.Cli.Core.Auth;
-using Capacitor.Tests.Helpers;
 using NSubstitute;
 using DiscoveryResult = Capacitor.Cli.Core.Auth.DiscoveryResult;
 
-namespace Capacitor.Cli.Tests.Unit;
-
-/// <summary>Records every call instead of writing to Console — the test seam for asserting call shape.</summary>
-sealed class RecordingAuthProgress : IAuthProgress {
-    public List<string>              Notices         = [];
-    public List<string>               Errors          = [];
-    public List<string>               BrowserOpenings = [];
-    public List<(string Code, string Uri)> DeviceCodes = [];
-    public int                        PollTicks;
-
-    public void Notice(string message) => Notices.Add(message);
-    public void Error(string message) => Errors.Add(message);
-    public void BrowserOpening(string url) => BrowserOpenings.Add(url);
-    public void DeviceCode(string code, string verificationUri) => DeviceCodes.Add((code, verificationUri));
-    public void PollTick() => PollTicks++;
-}
+namespace Capacitor.Cli.Core.Tests.Unit.Auth;
 
 // Console redirection is process-global state; keep every test in this file serialized against
 // each other (and against anything else asserting on captured stdout/stderr).

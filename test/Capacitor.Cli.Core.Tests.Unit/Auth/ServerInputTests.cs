@@ -2,7 +2,7 @@ using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using TUnit.Assertions.Enums;
 
-namespace Capacitor.Cli.Tests.Unit;
+namespace Capacitor.Cli.Core.Tests.Unit.Auth;
 
 public class ServerInputTests {
     [Test]

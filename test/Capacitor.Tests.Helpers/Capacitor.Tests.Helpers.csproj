@@ -18,5 +18,7 @@
              tests, so those hooks would silently never run. Verified — with [Before(Assembly)],
              DaemonPathsIsolationTests resolved the developer's real ~/.config/kcap/daemons. -->
         <PackageReference Include="TUnit.Core" />
+        <!-- AuthFixtures substitutes the façade's tenant picker. -->
+        <PackageReference Include="NSubstitute" />
     </ItemGroup>
 </Project>

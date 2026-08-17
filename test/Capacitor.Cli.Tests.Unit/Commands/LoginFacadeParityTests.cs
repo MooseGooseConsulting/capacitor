@@ -1,10 +1,11 @@
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
+using static Capacitor.Tests.Helpers.AuthFixtures;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Telemetry;
 
-namespace Capacitor.Cli.Tests.Unit;
+namespace Capacitor.Cli.Tests.Unit.Commands;
 
 /// <summary>
 /// `LoginCommand`'s parity with the pre-re-plumb `HandleDiscoverLoginAsync`/
@@ -13,7 +14,7 @@ namespace Capacitor.Cli.Tests.Unit;
 /// the OnboardingFacadeTests keys — it drives the same shared config dir and telemetry sink.
 /// </summary>
 [NotInParallel([
-    nameof(TokenStoreProfileTests),
+    "TokenStoreProfileTests",
     nameof(TelemetryState) + "." + nameof(TelemetryState.PathOverride),
     nameof(TelemetryDeviceId) + "." + nameof(TelemetryDeviceId.PathOverride),
 ])]
@@ -38,10 +39,10 @@ public class LoginFacadeParityTests {
     public async Task Discover_github_two_tenants_publishes_both_and_prints_todays_final_line() {
         using var handler = AuthHttp.Script(
             proxyConfig: """{"github_client_id":"cid"}""",
-            tenants: OnboardingFacadeTests.TwoGitHubTenants);
+            tenants: TwoGitHubTenants);
 
         var progress = new RecordingAuthProgress();
-        var facade   = OnboardingFacadeTests.NewFacade(progress, handler, OnboardingFacadeTests.PickerReturningFirst());
+        var facade   = NewFacade(progress, handler, PickerReturningFirst());
 
         var exit = await LoginCommand.HandleAsync(["login", "--discover", "--github", "--device"], null, facade, progress);
 
@@ -69,10 +70,10 @@ public class LoginFacadeParityTests {
 
         using var handler = AuthHttp.Script(
             proxyConfig: """{"github_client_id":"cid"}""",
-            tenants: OnboardingFacadeTests.TwoGitHubTenants);
+            tenants: TwoGitHubTenants);
 
         var progress = new RecordingAuthProgress();
-        var facade   = OnboardingFacadeTests.NewFacade(progress, handler, OnboardingFacadeTests.PickerReturningFirst());
+        var facade   = NewFacade(progress, handler, PickerReturningFirst());
 
         var exit = await LoginCommand.HandleAsync(["login", "--discover", "--github", "--device"], null, facade, progress);
 
@@ -89,7 +90,7 @@ public class LoginFacadeParityTests {
     public async Task Login_known_server_none_provider_exits_zero_and_writes_the_stamp() {
         using var handler  = AuthHttp.Script(authConfig: """{"provider":"None"}""");
         var       progress = new RecordingAuthProgress();
-        var       facade   = OnboardingFacadeTests.NewFacade(progress, handler);
+        var       facade   = NewFacade(progress, handler);
 
         await ConfigMutator.MutateAsync(c => c with {
             Profiles = new Dictionary<string, Profile> { ["solo"] = new() { ServerUrl = "https://none.example" } },
@@ -107,7 +108,7 @@ public class LoginFacadeParityTests {
     public async Task Login_known_server_failure_exits_one_without_a_second_message() {
         using var handler  = AuthHttp.Script(authConfig: """{"provider":"martian"}""");
         var       progress = new RecordingAuthProgress();
-        var       facade   = OnboardingFacadeTests.NewFacade(progress, handler);
+        var       facade   = NewFacade(progress, handler);
 
         var exit = await LoginCommand.HandleAsync(["login"], "https://acme.kcap.ai", facade, progress);
 
@@ -130,7 +131,7 @@ public class LoginFacadeParityTests {
         try {
             using var handler  = AuthHttp.Script(authConfig: """{"provider":"GitHubApp","github_client_id":"cid"}""");
             var       progress = new RecordingAuthProgress();
-            var       facade   = OnboardingFacadeTests.NewFacade(progress, handler);
+            var       facade   = NewFacade(progress, handler);
 
             var exit = await LoginCommand.HandleAsync(["login", "--device"], "https://acme.kcap.ai", facade, progress);
 
