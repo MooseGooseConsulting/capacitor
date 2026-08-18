@@ -64,17 +64,52 @@ public class FileSystemOverlayTests {
         await Assert.That(Directory.Exists(Path.Combine(tmp.Dest, "loop"))).IsFalse();
     }
 
+    [Test]
+    public async Task OverlayDirectory_does_not_recurse_into_nested_git_worktree() {
+        using var tmp = new OverlayDirs();
+
+        // A normal config subdir is copied.
+        tmp.SourceDir.CreateDir("commands").CreateFile("cmd.md", "do a thing");
+
+        // A nested worktree, marked by a .git pointer file, must not be recursed into.
+        var worktree = tmp.SourceDir.CreateDir("worktrees", "feature-x");
+        worktree.CreateFile(".git", "gitdir: /repo/.git/worktrees/feature-x");
+        worktree.CreateFile("huge.bin", "x");
+
+        FileSystemOverlay.OverlayDirectory(tmp.Source, tmp.Dest);
+
+        await Assert.That(File.Exists(tmp.DestDir.PathTo("commands", "cmd.md"))).IsTrue();
+        await Assert.That(File.Exists(tmp.DestDir.PathTo("worktrees", "feature-x", "huge.bin"))).IsFalse();
+    }
+
+    [Test]
+    public async Task OverlayDirectory_does_not_recurse_into_nested_git_repo() {
+        using var tmp = new OverlayDirs();
+
+        // A nested repo, marked by a .git directory, must also be skipped.
+        var repo = tmp.SourceDir.CreateDir("vendored");
+        repo.CreateDir(".git");
+        repo.CreateFile("code.cs", "class C {}");
+
+        FileSystemOverlay.OverlayDirectory(tmp.Source, tmp.Dest);
+
+        await Assert.That(File.Exists(tmp.DestDir.PathTo("vendored", "code.cs"))).IsFalse();
+    }
+
     sealed class OverlayDirs : IDisposable {
         readonly TempDir _root = new();
 
-        public string Source { get; }
-        public string Dest { get; }
+        public TempDirHandle SourceDir { get; }
+        public TempDirHandle DestDir { get; }
+
+        public string Source => SourceDir;
+        public string Dest => DestDir;
         public string External { get; }
 
         public OverlayDirs() {
-            Source   = _root.CreateDir("source");
-            Dest     = _root.CreateDir("dest");
-            External = _root.CreateDir("external");
+            SourceDir = _root.CreateDir("source");
+            DestDir   = _root.CreateDir("dest");
+            External  = _root.CreateDir("external");
         }
 
         public void Dispose() => _root.Dispose();

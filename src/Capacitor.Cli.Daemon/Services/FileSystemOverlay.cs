@@ -19,6 +19,10 @@ internal static class FileSystemOverlay {
         }
 
         foreach (var dir in Directory.GetDirectories(source, "*", skipReparsePoints)) {
+            // Skip nested repos/worktrees: a dotfile overlay copies config, not checked-out repos —
+            // and a repo root with worktrees under .claude/worktrees/ would be copied wholesale. A
+            // ".git" entry (dir for a repo, file for a linked worktree) marks one.
+            if (Path.Exists(Path.Combine(dir, ".git"))) continue;
             OverlayDirectory(dir, Path.Combine(dest, Path.GetFileName(dir)));
         }
     }
