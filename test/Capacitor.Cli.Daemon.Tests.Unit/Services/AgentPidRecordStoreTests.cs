@@ -9,19 +9,13 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 /// (exact identity preserved) and corrupt-record quarantine.
 /// </summary>
 public class AgentPidRecordStoreTests {
-    static string NewStateDir() {
-        var dir = Path.Combine(Path.GetTempPath(), "kcap-pidrec-" + Guid.NewGuid().ToString("N")[..8]);
-        Directory.CreateDirectory(dir);
-        return dir;
-    }
-
     static AgentPidRecord Rec(string agentId, int pid = 123) =>
         new(agentId, pid, "lx:boot:999", PidIdentityKind.Present, "ReviewFlow", "codex", "flow-1", "reviewer", "daemon-id", "epoch-1", DateTimeOffset.UtcNow);
 
     [Test]
     public async Task Write_ReadAll_Delete_roundtrip_preserves_exact_identity() {
-        var dir   = NewStateDir();
-        var store = new AgentPidRecordStore(dir, NullLogger.Instance);
+        using var tmp = new TempDir();
+        var store = new AgentPidRecordStore(tmp.Path, NullLogger.Instance);
 
         store.Write(Rec("a1", pid: 4242));
 
@@ -38,11 +32,11 @@ public class AgentPidRecordStoreTests {
 
     [Test]
     public async Task ReadAll_quarantines_a_corrupt_record_and_excludes_it() {
-        var dir   = NewStateDir();
-        var store = new AgentPidRecordStore(dir, NullLogger.Instance);
+        using var tmp = new TempDir();
+        var store = new AgentPidRecordStore(tmp.Path, NullLogger.Instance);
         store.Write(Rec("good"));
 
-        var agentsDir = Path.Combine(dir, "agents");
+        var agentsDir = tmp.PathTo("agents");
         File.WriteAllText(Path.Combine(agentsDir, "bad.json"), "{ not valid json");
 
         var all = store.ReadAll();
@@ -54,9 +48,9 @@ public class AgentPidRecordStoreTests {
 
     [Test]
     public async Task Write_hashes_a_path_traversal_agent_id_inside_the_agents_dir() {
-        var dir   = NewStateDir();
-        var store = new AgentPidRecordStore(dir, NullLogger.Instance);
-        var agentsDir = Path.Combine(dir, "agents");
+        using var tmp = new TempDir();
+        var store = new AgentPidRecordStore(tmp.Path, NullLogger.Instance);
+        var agentsDir = tmp.PathTo("agents");
 
         // A hostile agent id (path separators / ".." — the id crosses the wire unconstrained) must not
         // escape the agents directory: the filename is a hash, and the record round-trips by its original id.
@@ -72,8 +66,8 @@ public class AgentPidRecordStoreTests {
 
     [Test]
     public async Task Write_is_atomic_overwrite_no_temp_files_left() {
-        var dir   = NewStateDir();
-        var store = new AgentPidRecordStore(dir, NullLogger.Instance);
+        using var tmp = new TempDir();
+        var store = new AgentPidRecordStore(tmp.Path, NullLogger.Instance);
 
         store.Write(Rec("a1", pid: 1));
         store.Write(Rec("a1", pid: 2)); // overwrite
@@ -81,13 +75,13 @@ public class AgentPidRecordStoreTests {
         var all = store.ReadAll();
         await Assert.That(all).Count().IsEqualTo(1);
         await Assert.That(all[0].Pid).IsEqualTo(2);
-        await Assert.That(Directory.EnumerateFiles(Path.Combine(dir, "agents"), "*.tmp-*")).IsEmpty();
+        await Assert.That(Directory.EnumerateFiles(tmp.PathTo("agents"), "*.tmp-*")).IsEmpty();
     }
 
     [Test]
     public async Task ReadAll_decodes_a_legacy_record_with_no_identity_kind_key_as_present() {
-        var dir   = NewStateDir();
-        var store = new AgentPidRecordStore(dir, NullLogger.Instance);
+        using var tmp = new TempDir();
+        var store = new AgentPidRecordStore(tmp.Path, NullLogger.Instance);
 
         // Build the JSON via the REAL serializer first (so this test can't drift from the actual
         // schema/casing), then surgically remove the identity_kind member — this produces the
@@ -101,22 +95,21 @@ public class AgentPidRecordStoreTests {
 
         await Assert.That(legacyJson).DoesNotContain("identity_kind");
 
-        var agentsDir = Path.Combine(dir, "agents");
-        Directory.CreateDirectory(agentsDir);
-        File.WriteAllText(Path.Combine(agentsDir, "legacy.json"), legacyJson);
+        var agentsDir = tmp.CreateDir("agents");
+        agentsDir.CreateFile("legacy.json", legacyJson);
 
         var all = store.ReadAll();
         await Assert.That(all.Select(r => r.AgentId)).IsEquivalentTo(new[] { "legacy1" });
         await Assert.That(all[0].IdentityKind).IsEqualTo(PidIdentityKind.Present);
         await Assert.That(all[0].StartIdentity).IsEqualTo("tk:123456789");
         // NOT quarantined — this is the whole point of the backward-compat contract.
-        await Assert.That(File.Exists(Path.Combine(agentsDir, "legacy.json.corrupt"))).IsFalse();
+        await Assert.That(File.Exists(agentsDir.PathTo("legacy.json.corrupt"))).IsFalse();
     }
 
     [Test]
     public async Task ReadAll_round_trips_an_identity_unavailable_record() {
-        var dir   = NewStateDir();
-        var store = new AgentPidRecordStore(dir, NullLogger.Instance);
+        using var tmp = new TempDir();
+        var store = new AgentPidRecordStore(tmp.Path, NullLogger.Instance);
 
         store.Write(new AgentPidRecord("unresolved1", 42, "", PidIdentityKind.IdentityUnavailable,
             "ReviewFlow", "codex", "flow-1", "reviewer", "daemon-id", "epoch-1", DateTimeOffset.UtcNow));
@@ -125,14 +118,14 @@ public class AgentPidRecordStoreTests {
         await Assert.That(all).Count().IsEqualTo(1);
         await Assert.That(all[0].IdentityKind).IsEqualTo(PidIdentityKind.IdentityUnavailable);
         await Assert.That(all[0].StartIdentity).IsEmpty();
-        await Assert.That(File.Exists(Path.Combine(dir, "agents", Convert.ToHexString(
+        await Assert.That(File.Exists(tmp.PathTo("agents", Convert.ToHexString(
             System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes("unresolved1"))).ToLowerInvariant() + ".json.corrupt"))).IsFalse();
     }
 
     [Test]
     public async Task ReadAll_quarantines_present_with_empty_token_as_corrupt() {
-        var dir   = NewStateDir();
-        var store = new AgentPidRecordStore(dir, NullLogger.Instance);
+        using var tmp = new TempDir();
+        var store = new AgentPidRecordStore(tmp.Path, NullLogger.Instance);
 
         // An inconsistent NEW shape — Present claims a comparable identity but the token is
         // empty. This is a real corruption signal (unlike the legacy missing-key case above),
@@ -143,17 +136,16 @@ public class AgentPidRecordStoreTests {
         var all = store.ReadAll();
         await Assert.That(all).IsEmpty();
 
-        var agentsDir = Path.Combine(dir, "agents");
+        var agentsDir = tmp.PathTo("agents");
         var corruptFiles = Directory.GetFiles(agentsDir, "*.json.corrupt");
         await Assert.That(corruptFiles.Length).IsEqualTo(1);
     }
 
     [Test]
     public async Task ReadAll_quarantines_a_record_with_null_start_identity_without_throwing() {
-        var dir   = NewStateDir();
-        var store = new AgentPidRecordStore(dir, NullLogger.Instance);
-        var agentsDir = Path.Combine(dir, "agents");
-        Directory.CreateDirectory(agentsDir);
+        using var tmp = new TempDir();
+        var store = new AgentPidRecordStore(tmp.Path, NullLogger.Instance);
+        var agentsDir = tmp.CreateDir("agents");
 
         // A parseable record whose start_identity is JSON null — System.Text.Json binds null to
         // the non-nullable positional string parameter, so ReadAll used to NRE on the subsequent
@@ -170,20 +162,19 @@ public class AgentPidRecordStoreTests {
 
         // Also drop a healthy record so we prove the sweep CONTINUES past the null one.
         store.Write(Rec("healthy"));
-        File.WriteAllText(Path.Combine(agentsDir, "nulltoken.json"), nulledJson);
+        agentsDir.CreateFile("nulltoken.json", nulledJson);
 
         var all = store.ReadAll(); // must NOT throw
         await Assert.That(all.Select(r => r.AgentId)).IsEquivalentTo(new[] { "healthy" });
-        await Assert.That(File.Exists(Path.Combine(agentsDir, "nulltoken.json.corrupt"))).IsTrue();
-        await Assert.That(File.Exists(Path.Combine(agentsDir, "nulltoken.json"))).IsFalse();
+        await Assert.That(File.Exists(agentsDir.PathTo("nulltoken.json.corrupt"))).IsTrue();
+        await Assert.That(File.Exists(agentsDir.PathTo("nulltoken.json"))).IsFalse();
     }
 
     [Test]
     public async Task ReadAll_quarantines_a_record_with_an_unknown_identity_kind() {
-        var dir   = NewStateDir();
-        var store = new AgentPidRecordStore(dir, NullLogger.Instance);
-        var agentsDir = Path.Combine(dir, "agents");
-        Directory.CreateDirectory(agentsDir);
+        using var tmp = new TempDir();
+        var store = new AgentPidRecordStore(tmp.Path, NullLogger.Instance);
+        var agentsDir = tmp.CreateDir("agents");
 
         // An out-of-range numeric identity_kind (99) is neither Present nor IdentityUnavailable, so
         // it passes BOTH consistency predicates and would be silently accepted without an explicit
@@ -199,18 +190,18 @@ public class AgentPidRecordStoreTests {
 
         // A healthy record alongside proves the sweep CONTINUES past the bad one.
         store.Write(Rec("healthy"));
-        File.WriteAllText(Path.Combine(agentsDir, "unknownkind.json"), unknownJson);
+        agentsDir.CreateFile("unknownkind.json", unknownJson);
 
         var all = store.ReadAll();
         await Assert.That(all.Select(r => r.AgentId)).IsEquivalentTo(new[] { "healthy" });
-        await Assert.That(File.Exists(Path.Combine(agentsDir, "unknownkind.json.corrupt"))).IsTrue();
-        await Assert.That(File.Exists(Path.Combine(agentsDir, "unknownkind.json"))).IsFalse();
+        await Assert.That(File.Exists(agentsDir.PathTo("unknownkind.json.corrupt"))).IsTrue();
+        await Assert.That(File.Exists(agentsDir.PathTo("unknownkind.json"))).IsFalse();
     }
 
     [Test]
     public async Task ReadAll_quarantines_identity_unavailable_with_nonempty_token_as_corrupt() {
-        var dir   = NewStateDir();
-        var store = new AgentPidRecordStore(dir, NullLogger.Instance);
+        using var tmp = new TempDir();
+        var store = new AgentPidRecordStore(tmp.Path, NullLogger.Instance);
 
         store.Write(new AgentPidRecord("bad2", 1, "lx:boot:999", PidIdentityKind.IdentityUnavailable,
             "ReviewFlow", "codex", "flow-1", "reviewer", "daemon-id", "epoch-1", DateTimeOffset.UtcNow));
@@ -218,7 +209,7 @@ public class AgentPidRecordStoreTests {
         var all = store.ReadAll();
         await Assert.That(all).IsEmpty();
 
-        var corruptFiles = Directory.GetFiles(Path.Combine(dir, "agents"), "*.json.corrupt");
+        var corruptFiles = Directory.GetFiles(tmp.PathTo("agents"), "*.json.corrupt");
         await Assert.That(corruptFiles.Length).IsEqualTo(1);
     }
 }

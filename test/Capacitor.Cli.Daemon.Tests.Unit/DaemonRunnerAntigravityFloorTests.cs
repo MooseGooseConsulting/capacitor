@@ -13,7 +13,10 @@ namespace Capacitor.Cli.Daemon.Tests.Unit;
 /// <c>AntigravityReviewerLaunchTests</c>); what these pin is that the list this daemon advertises
 /// derives from that ladder rather than from a second, separately-maintained narrowing pass.
 /// </summary>
-public class DaemonRunnerAntigravityFloorTests {
+public class DaemonRunnerAntigravityFloorTests : IDisposable {
+    readonly TempDir _tmp = new();
+    public void Dispose() => _tmp.Dispose();
+
     sealed class FakeFactory(string vendor, bool advertised) : IHostedAgentRuntimeFactory {
         public string Vendor             { get; } = vendor;
         public bool   SupportsUnattended { get; } = advertised;
@@ -27,12 +30,11 @@ public class DaemonRunnerAntigravityFloorTests {
     /// <param name="minimum">Recorded exactly as enabling the reviewer does in production. Null
     /// records NOTHING — the gate is a daemon-owned record, not configuration, so "unset" is an absent
     /// file rather than a value.</param>
-    static DaemonConfig Config(string? minimum = "1.1.10") {
+    DaemonConfig Config(string? minimum = "1.1.10") {
         var config = new DaemonConfig {
             AntigravityPath                      = "agy",
             AntigravityUnattendedReviewerEnabled = true,
-            StateDir                             = Path.Combine(
-                Path.GetTempPath(), "kcap-agy-floor-" + Guid.NewGuid().ToString("N")),
+            StateDir                             = _tmp.Path,
             Name                                 = "test-daemon"
         };
 
@@ -58,21 +60,17 @@ public class DaemonRunnerAntigravityFloorTests {
     public async Task TheComputedVendorListAppliesTheFloorThroughTheFactory() {
         Skip.Unless(!OperatingSystem.IsWindows(), "The stub binary below is a POSIX shell script.");
 
-        var stub = await StubAgyAsync("0.9.0");
+        using var stubDir = StubAgy("0.9.0", out var stub);
 
-        try {
-            var config = Config();
-            config.AntigravityPath = stub;
+        var config = Config();
+        config.AntigravityPath = stub;
 
-            var vendors = DaemonRunner.ComputeUnattendedVendors(
-                [new AntigravityHostedAgentRuntimeFactory(config, NullLoggerFactory.Instance),
-                 new FakeFactory("claude", advertised: true)],
-                config);
+        var vendors = DaemonRunner.ComputeUnattendedVendors(
+            [new AntigravityHostedAgentRuntimeFactory(config, NullLoggerFactory.Instance),
+             new FakeFactory("claude", advertised: true)],
+            config);
 
-            await Assert.That(vendors).IsEquivalentTo(new[] { "claude" });
-        } finally {
-            File.Delete(stub);
-        }
+        await Assert.That(vendors).IsEquivalentTo(new[] { "claude" });
     }
 
     /// <summary>The positive twin of the test above — without it, an antigravity that never advertised
@@ -82,19 +80,15 @@ public class DaemonRunnerAntigravityFloorTests {
     public async Task TheComputedVendorListKeepsAFloorMeetingBuild() {
         Skip.Unless(!OperatingSystem.IsWindows(), "The stub binary below is a POSIX shell script.");
 
-        var stub = await StubAgyAsync("1.1.10");
+        using var stubDir = StubAgy("1.1.10", out var stub);
 
-        try {
-            var config = Config();
-            config.AntigravityPath = stub;
+        var config = Config();
+        config.AntigravityPath = stub;
 
-            var vendors = DaemonRunner.ComputeUnattendedVendors(
-                [new AntigravityHostedAgentRuntimeFactory(config, NullLoggerFactory.Instance)], config);
+        var vendors = DaemonRunner.ComputeUnattendedVendors(
+            [new AntigravityHostedAgentRuntimeFactory(config, NullLoggerFactory.Instance)], config);
 
-            await Assert.That(vendors).IsEquivalentTo(new[] { "antigravity" });
-        } finally {
-            File.Delete(stub);
-        }
+        await Assert.That(vendors).IsEquivalentTo(new[] { "antigravity" });
     }
 
     /// <summary>
@@ -113,25 +107,21 @@ public class DaemonRunnerAntigravityFloorTests {
     public async Task TheDaemonsSeededRecordIsTheOneTheFactoryReads() {
         Skip.Unless(!OperatingSystem.IsWindows(), "The stub binary below is a POSIX shell script.");
 
-        var stub = await StubAgyAsync("1.1.10");
+        using var stubDir = StubAgy("1.1.10", out var stub);
 
-        try {
-            var config = Config(minimum: null);
-            config.AntigravityPath = stub;
+        var config = Config(minimum: null);
+        config.AntigravityPath = stub;
 
-            // Restated rather than taken from the factory: this is the shape RunAsync computes.
-            var stateDir = Path.Combine(config.StateDir!, DaemonLockPaths.Sanitize(config.Name));
+        // Restated rather than taken from the factory: this is the shape RunAsync computes.
+        var stateDir = Path.Combine(config.StateDir!, DaemonLockPaths.Sanitize(config.Name));
 
-            DaemonRunner.SeedReviewerAffirmation(
-                stateDir, DaemonRunner.AntigravityVendor, enabled: true, stub);
+        DaemonRunner.SeedReviewerAffirmation(
+            stateDir, DaemonRunner.AntigravityVendor, enabled: true, stub);
 
-            var vendors = DaemonRunner.ComputeUnattendedVendors(
-                [new AntigravityHostedAgentRuntimeFactory(config, NullLoggerFactory.Instance)], config);
+        var vendors = DaemonRunner.ComputeUnattendedVendors(
+            [new AntigravityHostedAgentRuntimeFactory(config, NullLoggerFactory.Instance)], config);
 
-            await Assert.That(vendors).IsEquivalentTo(new[] { "antigravity" });
-        } finally {
-            File.Delete(stub);
-        }
+        await Assert.That(vendors).IsEquivalentTo(new[] { "antigravity" });
     }
 
     /// <summary>
@@ -161,40 +151,36 @@ public class DaemonRunnerAntigravityFloorTests {
     public async Task AConsentLessDaemonSeedsTheFloorThatAdmitsAHostedLaunch() {
         Skip.Unless(!OperatingSystem.IsWindows(), "The stub binary below is a POSIX shell script.");
 
-        var stub = await StubAgyAsync("1.1.10");
+        using var stubDir = StubAgy("1.1.10", out var stub);
+
+        var config = Config(minimum: null);
+        config.AntigravityPath                      = stub;
+        config.AntigravityUnattendedReviewerEnabled = false;
+
+        // Restated rather than taken from the factory: this is the shape RunAsync computes.
+        var stateDir = Path.Combine(config.StateDir!, DaemonLockPaths.Sanitize(config.Name));
+
+        DaemonRunner.SeedReviewerFloors(stateDir, config);
+
+        var spawned = false;
+        var factory = new AntigravityHostedAgentRuntimeFactory(
+            config, NullLoggerFactory.Instance,
+            turnSource: (_, _) => {
+                spawned = true;
+                throw new NotSupportedException("the launch itself is not what this test is about");
+            });
 
         try {
-            var config = Config(minimum: null);
-            config.AntigravityPath                      = stub;
-            config.AntigravityUnattendedReviewerEnabled = false;
-
-            // Restated rather than taken from the factory: this is the shape RunAsync computes.
-            var stateDir = Path.Combine(config.StateDir!, DaemonLockPaths.Sanitize(config.Name));
-
-            DaemonRunner.SeedReviewerFloors(stateDir, config);
-
-            var spawned = false;
-            var factory = new AntigravityHostedAgentRuntimeFactory(
-                config, NullLoggerFactory.Instance,
-                turnSource: (_, _) => {
-                    spawned = true;
-                    throw new NotSupportedException("the launch itself is not what this test is about");
-                });
-
-            try {
-                await factory.StartAsync(HostedCtx(), CancellationToken.None);
-            } catch (InvalidOperationException) {
-                // Expected: the turn source above cannot produce a conversation.
-            }
-
-            await Assert.That(spawned).IsTrue();
-
-            // The control: consent is still withheld, so the REVIEWER is still not advertised. Without
-            // it, seeding having somehow re-enabled the reviewer would read as a pass.
-            await Assert.That(factory.SupportsUnattended).IsFalse();
-        } finally {
-            File.Delete(stub);
+            await factory.StartAsync(HostedCtx(), CancellationToken.None);
+        } catch (InvalidOperationException) {
+            // Expected: the turn source above cannot produce a conversation.
         }
+
+        await Assert.That(spawned).IsTrue();
+
+        // The control: consent is still withheld, so the REVIEWER is still not advertised. Without
+        // it, seeding having somehow re-enabled the reviewer would read as a pass.
+        await Assert.That(factory.SupportsUnattended).IsFalse();
     }
 
     /// <summary>
@@ -218,35 +204,29 @@ public class DaemonRunnerAntigravityFloorTests {
     public async Task OnlyAntigravitySeedsAFloorWithoutConsent() {
         Skip.Unless(!OperatingSystem.IsWindows(), "The stub binaries below are POSIX shell scripts.");
 
-        var agy    = await StubAgyAsync("1.1.10");
-        var kiro   = await StubAgyAsync("2.0.0");
-        var gemini = await StubAgyAsync("3.0.0");
+        using var agyDir = StubAgy("1.1.10", out var agy);
+        using var kiroDir = StubAgy("2.0.0", out var kiro);
+        using var geminiDir = StubAgy("3.0.0", out var gemini);
 
-        try {
-            var config = Config(minimum: null);
-            config.AntigravityPath                      = agy;
-            config.KiroPath                             = kiro;
-            config.GeminiPath                           = gemini;
-            config.AntigravityUnattendedReviewerEnabled = false;
-            config.KiroUnattendedReviewerEnabled        = false;
-            config.GeminiUnattendedReviewerEnabled      = false;
+        var config = Config(minimum: null);
+        config.AntigravityPath                      = agy;
+        config.KiroPath                             = kiro;
+        config.GeminiPath                           = gemini;
+        config.AntigravityUnattendedReviewerEnabled = false;
+        config.KiroUnattendedReviewerEnabled        = false;
+        config.GeminiUnattendedReviewerEnabled      = false;
 
-            // Restated rather than taken from the factory: this is the shape RunAsync computes.
-            var stateDir = Path.Combine(config.StateDir!, DaemonLockPaths.Sanitize(config.Name));
+        // Restated rather than taken from the factory: this is the shape RunAsync computes.
+        var stateDir = Path.Combine(config.StateDir!, DaemonLockPaths.Sanitize(config.Name));
 
-            DaemonRunner.SeedReviewerFloors(stateDir, config);
+        DaemonRunner.SeedReviewerFloors(stateDir, config);
 
-            await Assert.That(ReviewerVersionStore.RecordExists(stateDir, DaemonRunner.AntigravityVendor))
-                .IsTrue();
-            await Assert.That(ReviewerVersionStore.RecordExists(stateDir, AcpVendorDescriptors.Kiro.Vendor))
-                .IsFalse();
-            await Assert.That(ReviewerVersionStore.RecordExists(stateDir, AcpVendorDescriptors.Gemini.Vendor))
-                .IsFalse();
-        } finally {
-            File.Delete(agy);
-            File.Delete(kiro);
-            File.Delete(gemini);
-        }
+        await Assert.That(ReviewerVersionStore.RecordExists(stateDir, DaemonRunner.AntigravityVendor))
+            .IsTrue();
+        await Assert.That(ReviewerVersionStore.RecordExists(stateDir, AcpVendorDescriptors.Kiro.Vendor))
+            .IsFalse();
+        await Assert.That(ReviewerVersionStore.RecordExists(stateDir, AcpVendorDescriptors.Gemini.Vendor))
+            .IsFalse();
     }
 
     /// <summary>The positive twin of the siblings' half above: with consent GIVEN they do seed, so
@@ -257,31 +237,25 @@ public class DaemonRunnerAntigravityFloorTests {
     public async Task ConsentingSiblingsSeedTheirOwnFloors() {
         Skip.Unless(!OperatingSystem.IsWindows(), "The stub binaries below are POSIX shell scripts.");
 
-        var agy    = await StubAgyAsync("1.1.10");
-        var kiro   = await StubAgyAsync("2.0.0");
-        var gemini = await StubAgyAsync("3.0.0");
+        using var agyDir = StubAgy("1.1.10", out var agy);
+        using var kiroDir = StubAgy("2.0.0", out var kiro);
+        using var geminiDir = StubAgy("3.0.0", out var gemini);
 
-        try {
-            var config = Config(minimum: null);
-            config.AntigravityPath                 = agy;
-            config.KiroPath                        = kiro;
-            config.GeminiPath                      = gemini;
-            config.KiroUnattendedReviewerEnabled   = true;
-            config.GeminiUnattendedReviewerEnabled = true;
+        var config = Config(minimum: null);
+        config.AntigravityPath                 = agy;
+        config.KiroPath                        = kiro;
+        config.GeminiPath                      = gemini;
+        config.KiroUnattendedReviewerEnabled   = true;
+        config.GeminiUnattendedReviewerEnabled = true;
 
-            var stateDir = Path.Combine(config.StateDir!, DaemonLockPaths.Sanitize(config.Name));
+        var stateDir = Path.Combine(config.StateDir!, DaemonLockPaths.Sanitize(config.Name));
 
-            DaemonRunner.SeedReviewerFloors(stateDir, config);
+        DaemonRunner.SeedReviewerFloors(stateDir, config);
 
-            await Assert.That(new ReviewerVersionStore(stateDir, AcpVendorDescriptors.Kiro.Vendor).Affirmed)
-                .IsEqualTo("2.0.0");
-            await Assert.That(new ReviewerVersionStore(stateDir, AcpVendorDescriptors.Gemini.Vendor).Affirmed)
-                .IsEqualTo("3.0.0");
-        } finally {
-            File.Delete(agy);
-            File.Delete(kiro);
-            File.Delete(gemini);
-        }
+        await Assert.That(new ReviewerVersionStore(stateDir, AcpVendorDescriptors.Kiro.Vendor).Affirmed)
+            .IsEqualTo("2.0.0");
+        await Assert.That(new ReviewerVersionStore(stateDir, AcpVendorDescriptors.Gemini.Vendor).Affirmed)
+            .IsEqualTo("3.0.0");
     }
 
     static RuntimeStartContext HostedCtx() => new(
@@ -295,13 +269,11 @@ public class DaemonRunnerAntigravityFloorTests {
         DaemonId: "daemon-1", DaemonEpoch: "epoch-1");
 
     [UnsupportedOSPlatform("windows")]
-    static async Task<string> StubAgyAsync(string version) {
-        var stub = Path.Combine(Path.GetTempPath(), "kcap-agy-stub-" + Guid.NewGuid().ToString("N"));
-
-        await File.WriteAllTextAsync(stub, $"#!/bin/sh\necho 'Antigravity CLI {version}'\n");
-        File.SetUnixFileMode(stub, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-
-        return stub;
+    static TempDir StubAgy(string version, out string stubPath) {
+        var tmp = new TempDir();
+        stubPath = tmp.CreateFile("agy", $"#!/bin/sh\necho 'Antigravity CLI {version}'\n");
+        File.SetUnixFileMode(stubPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        return tmp;
     }
 
     /// <summary>
@@ -316,22 +288,18 @@ public class DaemonRunnerAntigravityFloorTests {
     public async Task TheAdvertisedCapabilityCarriesTheProbedCliVersion() {
         Skip.Unless(!OperatingSystem.IsWindows(), "The stub binary below is a POSIX shell script.");
 
-        var stub = await StubAgyAsync("1.1.10");
+        using var stubDir = StubAgy("1.1.10", out var stub);
 
-        try {
-            var config = Config();
-            config.AntigravityPath = stub;
+        var config = Config();
+        config.AntigravityPath = stub;
 
-            var capabilities = DaemonRunner.ComputeUnattendedVendorCapabilities(
-                [new FakeFactory("antigravity", advertised: true)], config, advertised: ["antigravity"]);
+        var capabilities = DaemonRunner.ComputeUnattendedVendorCapabilities(
+            [new FakeFactory("antigravity", advertised: true)], config, advertised: ["antigravity"]);
 
-            var antigravity = capabilities.Single();
+        var antigravity = capabilities.Single();
 
-            await Assert.That(antigravity.CliVersion).IsEqualTo("1.1.10");
-            await Assert.That(antigravity.LauncherPolicyVersion)
-                .IsEqualTo(DaemonRunner.AntigravityLauncherPolicyVersion);
-        } finally {
-            File.Delete(stub);
-        }
+        await Assert.That(antigravity.CliVersion).IsEqualTo("1.1.10");
+        await Assert.That(antigravity.LauncherPolicyVersion)
+            .IsEqualTo(DaemonRunner.AntigravityLauncherPolicyVersion);
     }
 }

@@ -5,19 +5,16 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Harness.Cursor;
 public class CursorBorrowedReviewValidationTests {
     [Test]
     public async Task BundleDigest_IgnoresTransientRunningDirectory() {
-        var root = Directory.CreateTempSubdirectory("cursor-validation-");
-        try {
-            File.WriteAllText(Path.Combine(root.FullName, "cursor-agent"), "artifact");
-            var before = CursorBorrowedReviewValidation.ComputeBundleDigest(root.FullName);
-            var running = Directory.CreateDirectory(Path.Combine(root.FullName, ".running"));
-            File.WriteAllText(Path.Combine(running.FullName, "12345"), "");
+        using var tmp = new TempDir();
 
-            var after = CursorBorrowedReviewValidation.ComputeBundleDigest(root.FullName);
+        tmp.CreateFile("cursor-agent", "artifact");
+        var before = CursorBorrowedReviewValidation.ComputeBundleDigest(tmp.Path);
+        var running = tmp.CreateDir(".running");
+        running.CreateFile("12345", "");
 
-            await Assert.That(after).IsEqualTo(before);
-        } finally {
-            try { root.Delete(recursive: true); } catch { }
-        }
+        var after = CursorBorrowedReviewValidation.ComputeBundleDigest(tmp.Path);
+
+        await Assert.That(after).IsEqualTo(before);
     }
 
     /// <summary>The marker is informational: a build that does not match it must still return

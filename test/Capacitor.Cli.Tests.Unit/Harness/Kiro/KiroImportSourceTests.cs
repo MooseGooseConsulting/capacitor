@@ -15,11 +15,9 @@ public class KiroImportSourceTests {
     public async Task discovery_reads_jsonl_and_sibling_json_metadata() {
         using var tmp = new TempDir();
 
-        await File.WriteAllTextAsync(
-            Path.Combine(tmp.Path, $"{Dashed}.jsonl"),
+        tmp.CreateFile($"{Dashed}.jsonl",
             """{"version":"v1","kind":"Prompt","data":{"message_id":"m1","content":[{"kind":"text","data":"hi"}]}}""" + "\n");
-        await File.WriteAllTextAsync(
-            Path.Combine(tmp.Path, $"{Dashed}.json"),
+        tmp.CreateFile($"{Dashed}.json",
             """{"cwd":"/work","title":"Hi there","created_at":"2026-06-17T10:30:00Z","session_state":{"rts_model_state":{"model_info":{"model_id":"auto"}}}}""");
 
         var src = new KiroImportSource(sessionsDirOverride: tmp.Path);
@@ -40,7 +38,7 @@ public class KiroImportSourceTests {
     [Test]
     public async Task discovery_session_filter_matches_dashless_id() {
         using var tmp = new TempDir();
-        await File.WriteAllTextAsync(Path.Combine(tmp.Path, $"{Dashed}.jsonl"), "{}\n");
+        tmp.CreateFile($"{Dashed}.jsonl", "{}\n");
 
         var src = new KiroImportSource(sessionsDirOverride: tmp.Path);
 
@@ -59,16 +57,5 @@ public class KiroImportSourceTests {
     [Arguments("""not json""", false)]
     public async Task is_import_relevant_line(string line, bool expected) {
         await Assert.That(KiroImportSource.IsImportRelevantLine(line)).IsEqualTo(expected);
-    }
-
-    sealed class TempDir : IDisposable {
-        public string Path { get; } = System.IO.Path.Combine(
-            System.IO.Path.GetTempPath(),
-            $"kcap-kiro-import-test-{Guid.NewGuid().ToString("N")[..8]}"
-        );
-        public TempDir() => Directory.CreateDirectory(Path);
-        public void Dispose() {
-            try { Directory.Delete(Path, true); } catch { /* best effort */ }
-        }
     }
 }

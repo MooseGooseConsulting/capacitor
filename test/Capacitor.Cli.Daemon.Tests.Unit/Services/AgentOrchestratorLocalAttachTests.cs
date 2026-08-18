@@ -23,11 +23,10 @@ public class AgentOrchestratorLocalAttachTests {
 
     // Consent: a fresh, throwaway consent store/broker pair — these pre-existing LocalControlServer
     // tests don't exercise consent at all, so the wiring only needs to satisfy the ctor.
-    static LaunchConsentIpc TestConsentIpc(DaemonConfig config) {
-        var dir = Directory.CreateTempSubdirectory("kcap-consent-ipc-").FullName;
+    static LaunchConsentIpc TestConsentIpc(DaemonConfig config, string stateDir) {
         return new LaunchConsentIpc(
             new LaunchConsentBroker(),
-            new LaunchConsentStore(dir, NullLogger.Instance),
+            new LaunchConsentStore(stateDir, NullLogger.Instance),
             config,
             NullLogger<LaunchConsentIpc>.Instance);
     }
@@ -48,18 +47,14 @@ public class AgentOrchestratorLocalAttachTests {
 
     [Test]
     public async Task Claude_borrowed_cwd_prepare_writes_no_repo_files() {
-        var dir = Directory.CreateTempSubdirectory("kcap-inplace-");
+        using var tmp = new TempDir();
 
-        try {
-            var launcher = new ClaudeLauncher(LauncherCfg(), NullLogger<ClaudeLauncher>.Instance);
-            launcher.Prepare(CtxFor(dir.FullName));
+        var launcher = new ClaudeLauncher(LauncherCfg(), NullLogger<ClaudeLauncher>.Instance);
+        launcher.Prepare(CtxFor(tmp.Path));
 
-            await Assert.That(File.Exists(Path.Combine(dir.FullName, ".mcp.json"))).IsFalse();
-            await Assert.That(File.Exists(Path.Combine(dir.FullName, ".claude", "settings.local.json"))).IsFalse();
-            await Assert.That(Directory.Exists(Path.Combine(dir.FullName, ".claude"))).IsFalse();
-        } finally {
-            Directory.Delete(dir.FullName, true);
-        }
+        await Assert.That(File.Exists(tmp.PathTo(".mcp.json"))).IsFalse();
+        await Assert.That(File.Exists(tmp.PathTo(".claude", "settings.local.json"))).IsFalse();
+        await Assert.That(Directory.Exists(tmp.PathTo(".claude"))).IsFalse();
     }
 
     [Test]
@@ -116,60 +111,52 @@ public class AgentOrchestratorLocalAttachTests {
 
     [Test]
     public async Task Owned_worktree_cleanup_still_removes_it() {
-        var dir = Directory.CreateTempSubdirectory("kcap-owned-");
+        using var tmp = new TempDir();
 
-        try {
-            var server = new CaptureServerConnection();
-            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        var server = new CaptureServerConnection();
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
-            var agent = new AgentInstance(
-                "owned-1", null, "", null, dir.FullName, "claude",
-                new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo(dir.FullName, "", dir.FullName, IsStandalone: true), new CancellationTokenSource()
-            ) {
-                Work = WorkLocation.OwnedWorktree
-            };
+        var agent = new AgentInstance(
+            "owned-1", null, "", null, tmp.Path, "claude",
+            new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo(tmp.Path, "", tmp.Path, IsStandalone: true), new CancellationTokenSource()
+        ) {
+            Work = WorkLocation.OwnedWorktree
+        };
 
-            orch.RegisterAgentForTest(agent);
-            await orch.CleanupAgentForTest("owned-1");
+        orch.RegisterAgentForTest(agent);
+        await orch.CleanupAgentForTest("owned-1");
 
-            await Assert.That(Directory.Exists(dir.FullName)).IsFalse();
-        } finally {
-            try { Directory.Delete(dir.FullName, true); } catch { /* already gone — that's the assertion */ }
-        }
+        await Assert.That(Directory.Exists(tmp.Path)).IsFalse();
     }
 
     [Test]
     public async Task Private_spawn_makes_no_server_calls_and_omits_hosted_agent_env() {
-        var dir = Directory.CreateTempSubdirectory("kcap-priv-");
+        using var tmp = new TempDir();
 
-        try {
-            var server    = new TripwireServerConnection();
-            var pty       = new EnvCapturingPtyFactory();
-            var launchers = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = new SpyHostedAgentLauncher("claude", "spy-claude") };
+        var server    = new TripwireServerConnection();
+        var pty       = new EnvCapturingPtyFactory();
+        var launchers = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = new SpyHostedAgentLauncher("claude", "spy-claude") };
 
-            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, pty, launchers);
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, pty, launchers);
 
-            // Client read side: one Detach frame so the attach loop returns promptly.
-            var readBuf = new MemoryStream();
-            await FrameCodec.WriteAsync(readBuf, LocalFrame.Detach(), default);
-            readBuf.Position = 0;
-            using var client = new DuplexTestStream(readBuf, new MemoryStream());
+        // Client read side: one Detach frame so the attach loop returns promptly.
+        var readBuf = new MemoryStream();
+        await FrameCodec.WriteAsync(readBuf, LocalFrame.Detach(), default);
+        readBuf.Position = 0;
+        using var client = new DuplexTestStream(readBuf, new MemoryStream());
 
-            var spawn = FrameCodec.Spawn("claude", WorkLocation.BorrowedCwd, isPrivate: true, dir.FullName, ["--model", "opus"], 80, 24);
-            await orch.HandleLocalSpawnAsync(spawn, client, default);
+        var spawn = FrameCodec.Spawn("claude", WorkLocation.BorrowedCwd, isPrivate: true, tmp.Path, ["--model", "opus"], 80, 24);
+        await orch.HandleLocalSpawnAsync(spawn, client, default);
 
-            // Let the fire-and-forget read loop + cleanup finish, then assert no server call landed.
-            var deadline = DateTime.UtcNow.AddSeconds(5);
-            while (orch.ActiveAgentCountForTest > 0 && DateTime.UtcNow < deadline) await Task.Delay(20);
+        // Let the fire-and-forget read loop + cleanup finish, then assert no server call landed.
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (orch.ActiveAgentCountForTest > 0 && DateTime.UtcNow < deadline) await Task.Delay(20);
 
-            await Assert.That(server.Calls.Count).IsEqualTo(0);
-            await Assert.That(pty.LastEnv!.ContainsKey("KCAP_URL")).IsTrue();            // records as a plain local session
-            await Assert.That(pty.LastEnv!.ContainsKey("KCAP_AGENT_ID")).IsFalse();      // unregistered in Phase 1 → no agent_host_id tag
-            await Assert.That(pty.LastEnv!.ContainsKey("KCAP_RENDERED_AGENT")).IsFalse(); // native terminal permissions
-            await Assert.That(pty.LastEnv!.ContainsKey("KCAP_DAEMON_URL")).IsFalse();
-        } finally {
-            Directory.Delete(dir.FullName, true);
-        }
+        await Assert.That(server.Calls.Count).IsEqualTo(0);
+        await Assert.That(pty.LastEnv!.ContainsKey("KCAP_URL")).IsTrue();            // records as a plain local session
+        await Assert.That(pty.LastEnv!.ContainsKey("KCAP_AGENT_ID")).IsFalse();      // unregistered in Phase 1 → no agent_host_id tag
+        await Assert.That(pty.LastEnv!.ContainsKey("KCAP_RENDERED_AGENT")).IsFalse(); // native terminal permissions
+        await Assert.That(pty.LastEnv!.ContainsKey("KCAP_DAEMON_URL")).IsFalse();
     }
 
     [Test]
@@ -199,33 +186,29 @@ public class AgentOrchestratorLocalAttachTests {
 
     [Test]
     public async Task Registered_spawn_calls_server_and_sets_hosted_env() {
-        var dir = Directory.CreateTempSubdirectory("kcap-reg-");
+        using var tmp = new TempDir();
 
-        try {
-            var server    = new TripwireServerConnection();
-            var pty       = new EnvCapturingPtyFactory();
-            var launchers = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = new SpyHostedAgentLauncher("claude", "spy-claude") };
+        var server    = new TripwireServerConnection();
+        var pty       = new EnvCapturingPtyFactory();
+        var launchers = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = new SpyHostedAgentLauncher("claude", "spy-claude") };
 
-            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, pty, launchers);
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, pty, launchers);
 
-            var readBuf = new MemoryStream();
-            await FrameCodec.WriteAsync(readBuf, LocalFrame.Detach(), default);
-            readBuf.Position = 0;
-            using var client = new DuplexTestStream(readBuf, new MemoryStream());
+        var readBuf = new MemoryStream();
+        await FrameCodec.WriteAsync(readBuf, LocalFrame.Detach(), default);
+        readBuf.Position = 0;
+        using var client = new DuplexTestStream(readBuf, new MemoryStream());
 
-            var spawn = FrameCodec.Spawn("claude", WorkLocation.BorrowedCwd, isPrivate: false, dir.FullName, ["--model", "opus"], 80, 24);
-            await orch.HandleLocalSpawnAsync(spawn, client, default);
+        var spawn = FrameCodec.Spawn("claude", WorkLocation.BorrowedCwd, isPrivate: false, tmp.Path, ["--model", "opus"], 80, 24);
+        await orch.HandleLocalSpawnAsync(spawn, client, default);
 
-            var deadline = DateTime.UtcNow.AddSeconds(5);
-            while (orch.ActiveAgentCountForTest > 0 && DateTime.UtcNow < deadline) await Task.Delay(20);
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (orch.ActiveAgentCountForTest > 0 && DateTime.UtcNow < deadline) await Task.Delay(20);
 
-            await Assert.That(server.Calls).Contains(nameof(ServerConnection.AgentRegisteredAsync));
-            await Assert.That(pty.LastEnv!.ContainsKey("KCAP_URL")).IsTrue();
-            await Assert.That(pty.LastEnv!.ContainsKey("KCAP_AGENT_ID")).IsTrue();
-            await Assert.That(pty.LastEnv!.ContainsKey("KCAP_RENDERED_AGENT")).IsTrue();
-        } finally {
-            Directory.Delete(dir.FullName, true);
-        }
+        await Assert.That(server.Calls).Contains(nameof(ServerConnection.AgentRegisteredAsync));
+        await Assert.That(pty.LastEnv!.ContainsKey("KCAP_URL")).IsTrue();
+        await Assert.That(pty.LastEnv!.ContainsKey("KCAP_AGENT_ID")).IsTrue();
+        await Assert.That(pty.LastEnv!.ContainsKey("KCAP_RENDERED_AGENT")).IsTrue();
     }
 
     // Consent: the owner consent gate lives in HandleLaunchAgentCore (the SERVER-driven launch
@@ -234,37 +217,34 @@ public class AgentOrchestratorLocalAttachTests {
     // owner's by construction.
     [Test]
     public async Task Local_spawn_bypasses_consent_under_deny_default() {
-        var dir = Directory.CreateTempSubdirectory("kcap-consent-local-");
-        var consentDir = Directory.CreateTempSubdirectory("kcap-consent-local-state-").FullName;
+        using var tmp = new TempDir();
+        var dir = tmp.CreateDir("consent-local");
+        var consentDir = tmp.CreateDir("consent-local-state");
 
-        try {
-            var server    = new TripwireServerConnection();
-            var pty       = new EnvCapturingPtyFactory();
-            var launchers = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = new SpyHostedAgentLauncher("claude", "spy-claude") };
+        var server    = new TripwireServerConnection();
+        var pty       = new EnvCapturingPtyFactory();
+        var launchers = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = new SpyHostedAgentLauncher("claude", "spy-claude") };
 
-            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, pty, launchers, consentGate: AgentOrchestratorHarness.DenyDefaultGate(consentDir));
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, pty, launchers, consentGate: AgentOrchestratorHarness.DenyDefaultGate(consentDir));
 
-            var readBuf = new MemoryStream();
-            await FrameCodec.WriteAsync(readBuf, LocalFrame.Detach(), default);
-            readBuf.Position = 0;
-            using var client = new DuplexTestStream(readBuf, new MemoryStream());
+        var readBuf = new MemoryStream();
+        await FrameCodec.WriteAsync(readBuf, LocalFrame.Detach(), default);
+        readBuf.Position = 0;
+        using var client = new DuplexTestStream(readBuf, new MemoryStream());
 
-            var spawn = FrameCodec.Spawn("claude", WorkLocation.BorrowedCwd, isPrivate: false, dir.FullName, ["--model", "opus"], 80, 24);
-            await orch.HandleLocalSpawnAsync(spawn, client, default);
+        var spawn = FrameCodec.Spawn("claude", WorkLocation.BorrowedCwd, isPrivate: false, dir, ["--model", "opus"], 80, 24);
+        await orch.HandleLocalSpawnAsync(spawn, client, default);
 
-            var deadline = DateTime.UtcNow.AddSeconds(5);
-            while (orch.ActiveAgentCountForTest > 0 && DateTime.UtcNow < deadline) await Task.Delay(20);
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (orch.ActiveAgentCountForTest > 0 && DateTime.UtcNow < deadline) await Task.Delay(20);
 
-            // Spawn succeeds exactly like Registered_spawn_calls_server_and_sets_hosted_env above —
-            // same assertions, proving consent was never consulted on this path (a deny-default
-            // gate would otherwise make AgentRegisteredAsync unreachable).
-            await Assert.That(server.Calls).Contains(nameof(ServerConnection.AgentRegisteredAsync));
-            await Assert.That(pty.LastEnv!.ContainsKey("KCAP_URL")).IsTrue();
-            await Assert.That(pty.LastEnv!.ContainsKey("KCAP_AGENT_ID")).IsTrue();
-            await Assert.That(pty.LastEnv!.ContainsKey("KCAP_RENDERED_AGENT")).IsTrue();
-        } finally {
-            Directory.Delete(dir.FullName, true);
-        }
+        // Spawn succeeds exactly like Registered_spawn_calls_server_and_sets_hosted_env above —
+        // same assertions, proving consent was never consulted on this path (a deny-default
+        // gate would otherwise make AgentRegisteredAsync unreachable).
+        await Assert.That(server.Calls).Contains(nameof(ServerConnection.AgentRegisteredAsync));
+        await Assert.That(pty.LastEnv!.ContainsKey("KCAP_URL")).IsTrue();
+        await Assert.That(pty.LastEnv!.ContainsKey("KCAP_AGENT_ID")).IsTrue();
+        await Assert.That(pty.LastEnv!.ContainsKey("KCAP_RENDERED_AGENT")).IsTrue();
     }
 
     [Test]
@@ -407,7 +387,7 @@ public class AgentOrchestratorLocalAttachTests {
     [Test]
     [NotInParallel]
     public async Task Registered_spawn_env_includes_daemon_bridge_url_and_preserves_api_key() {
-        var dir     = Directory.CreateTempSubdirectory("kcap-reg-env-");
+        using var tmp = new TempDir();
         var prevKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
         Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", "sk-test-key");
 
@@ -425,7 +405,7 @@ public class AgentOrchestratorLocalAttachTests {
                 readBuf.Position = 0;
                 using var client = new DuplexTestStream(readBuf, new MemoryStream());
 
-                var spawn = FrameCodec.Spawn("claude", WorkLocation.BorrowedCwd, isPrivate: false, dir.FullName, [], 80, 24);
+                var spawn = FrameCodec.Spawn("claude", WorkLocation.BorrowedCwd, isPrivate: false, tmp.Path, [], 80, 24);
                 await orch.HandleLocalSpawnAsync(spawn, client, default);
 
                 var deadline = DateTime.UtcNow.AddSeconds(5);
@@ -438,7 +418,6 @@ public class AgentOrchestratorLocalAttachTests {
             }
         } finally {
             Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", prevKey);
-            Directory.Delete(dir.FullName, true);
         }
     }
 
@@ -617,8 +596,10 @@ public class AgentOrchestratorLocalAttachTests {
     public async Task Attach_over_the_real_socket_refuses_a_hosted_agent_with_no_terminal() {
         if (OperatingSystem.IsWindows()) return; // Unix-domain socket path
 
-        var sockDir = Directory.CreateTempSubdirectory("kcap-sock-");
-        DaemonLockPaths.OverrideDirectoryForTesting(sockDir.FullName);
+        // Short name: macOS allows 104 bytes of socket path and $TMPDIR takes 49.
+        using var sockDir = new TempDir("aola");
+        using var consentDir = new TempDir("aolac");
+        DaemonLockPaths.OverrideDirectoryForTesting(sockDir.Path);
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
 
         LocalControlServer? listener = null;
@@ -635,7 +616,7 @@ public class AgentOrchestratorLocalAttachTests {
             });
 
             var config = new DaemonConfig { Name = "test", ServerUrl = "http://127.0.0.1:1" };
-            listener = new LocalControlServer(config, orch, TestCoordinator(), TestConsentIpc(config), TestStatusIpc(config, orch, server), NullLogger<LocalControlServer>.Instance);
+            listener = new LocalControlServer(config, orch, TestCoordinator(), TestConsentIpc(config, consentDir.Path), TestStatusIpc(config, orch, server), NullLogger<LocalControlServer>.Instance);
             await listener.StartAsync(cts.Token);
 
             var sockPath = LocalSocketPaths.Socket("test");
@@ -660,7 +641,6 @@ public class AgentOrchestratorLocalAttachTests {
             if (orch is not null) await orch.DisposeAsync();
             if (listener is not null) { await listener.StopAsync(CancellationToken.None); listener.Dispose(); }
             DaemonLockPaths.OverrideDirectoryForTesting(null);
-            try { Directory.Delete(sockDir.FullName, true); } catch { /* best-effort */ }
         }
     }
 
@@ -669,8 +649,9 @@ public class AgentOrchestratorLocalAttachTests {
     public async Task Local_socket_list_round_trips_registered_agents_over_a_real_socket() {
         if (OperatingSystem.IsWindows()) return; // Unix-domain socket path
 
-        var sockDir = Directory.CreateTempSubdirectory("kcap-sock-");
-        DaemonLockPaths.OverrideDirectoryForTesting(sockDir.FullName);
+        using var sockDir = new TempDir("aola");
+        using var consentDir = new TempDir("aolac");
+        DaemonLockPaths.OverrideDirectoryForTesting(sockDir.Path);
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
 
         LocalControlServer? listener = null;
@@ -687,7 +668,7 @@ public class AgentOrchestratorLocalAttachTests {
             });
 
             var config = new DaemonConfig { Name = "test", ServerUrl = "http://127.0.0.1:1" };
-            listener = new LocalControlServer(config, orch, TestCoordinator(), TestConsentIpc(config), TestStatusIpc(config, orch, server), NullLogger<LocalControlServer>.Instance);
+            listener = new LocalControlServer(config, orch, TestCoordinator(), TestConsentIpc(config, consentDir.Path), TestStatusIpc(config, orch, server), NullLogger<LocalControlServer>.Instance);
             await listener.StartAsync(cts.Token);
 
             var sockPath = LocalSocketPaths.Socket("test");
@@ -709,7 +690,6 @@ public class AgentOrchestratorLocalAttachTests {
             if (orch is not null) await orch.DisposeAsync();
             if (listener is not null) { await listener.StopAsync(CancellationToken.None); listener.Dispose(); }
             DaemonLockPaths.OverrideDirectoryForTesting(null);
-            try { Directory.Delete(sockDir.FullName, true); } catch { /* best-effort */ }
         }
     }
 
@@ -720,8 +700,9 @@ public class AgentOrchestratorLocalAttachTests {
     /// isolation; only a real connection proves the server's frame switch wires them together.
     /// </summary>
     static async Task<LocalFrame?> StopV2OverRealSocketAsync(string daemonName, bool force, string agentId) {
-        var sockDir = Directory.CreateTempSubdirectory("kcap-sock-");
-        DaemonLockPaths.OverrideDirectoryForTesting(sockDir.FullName);
+        using var sockDir = new TempDir("aola");
+        using var consentDir = new TempDir("aolac");
+        DaemonLockPaths.OverrideDirectoryForTesting(sockDir.Path);
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
 
         LocalControlServer? listener = null;
@@ -733,7 +714,7 @@ public class AgentOrchestratorLocalAttachTests {
             orch.SeedAgentForTest("flow-1", kind: LaunchKind.ReviewFlow, flowRunId: "flow-7f3a", flowRole: "reviewer");
 
             var config = new DaemonConfig { Name = daemonName, ServerUrl = "http://127.0.0.1:1" };
-            listener = new LocalControlServer(config, orch, TestCoordinator(), TestConsentIpc(config), TestStatusIpc(config, orch, server), NullLogger<LocalControlServer>.Instance);
+            listener = new LocalControlServer(config, orch, TestCoordinator(), TestConsentIpc(config, consentDir.Path), TestStatusIpc(config, orch, server), NullLogger<LocalControlServer>.Instance);
             await listener.StartAsync(cts.Token);
 
             var sockPath = LocalSocketPaths.Socket(daemonName);
@@ -752,7 +733,6 @@ public class AgentOrchestratorLocalAttachTests {
             if (orch is not null) await orch.DisposeAsync();
             if (listener is not null) { await listener.StopAsync(CancellationToken.None); listener.Dispose(); }
             DaemonLockPaths.OverrideDirectoryForTesting(null);
-            try { Directory.Delete(sockDir.FullName, true); } catch { /* best-effort */ }
         }
     }
 
@@ -900,40 +880,36 @@ public class AgentOrchestratorLocalAttachTests {
     /// the default clock is non-null too.</summary>
     [Test]
     public async Task Local_spawn_builds_its_activity_clock_through_the_shared_factory() {
-        var dir = Directory.CreateTempSubdirectory("kcap-clockwire-");
+        using var tmp = new TempDir();
         using var cts = new CancellationTokenSource();
 
-        try {
-            var launchers = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = new SpyHostedAgentLauncher("claude", "spy-claude") };
-            // A PTY that emits one chunk and then blocks keeps the agent LIVE (a Noop PTY exits at
-            // once and the agent is finalized and unpublished before it can be observed).
-            await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
-                new TripwireServerConnection(), new FixedPtyProcessFactory(new OneChunkThenBlockPtyProcess()), launchers);
+        var launchers = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = new SpyHostedAgentLauncher("claude", "spy-claude") };
+        // A PTY that emits one chunk and then blocks keeps the agent LIVE (a Noop PTY exits at
+        // once and the agent is finalized and unpublished before it can be observed).
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
+            new TripwireServerConnection(), new FixedPtyProcessFactory(new OneChunkThenBlockPtyProcess()), launchers);
 
-            using var client = new DuplexTestStream(new ParkedReadStream(), new MemoryStream());
-            var spawn = FrameCodec.Spawn("claude", WorkLocation.BorrowedCwd, isPrivate: false, dir.FullName, [], 80, 24);
+        using var client = new DuplexTestStream(new ParkedReadStream(), new MemoryStream());
+        var spawn = FrameCodec.Spawn("claude", WorkLocation.BorrowedCwd, isPrivate: false, tmp.Path, [], 80, 24);
 
-            var spawnTask = orch.HandleLocalSpawnAsync(spawn, client, cts.Token);
+        var spawnTask = orch.HandleLocalSpawnAsync(spawn, client, cts.Token);
 
-            // Bounded: a build that never publishes simply fails the assertion below, fast.
-            var deadline = DateTime.UtcNow.AddSeconds(5);
-            while (orch.BuildLiveAgents().Count == 0 && DateTime.UtcNow < deadline) await Task.Delay(10);
+        // Bounded: a build that never publishes simply fails the assertion below, fast.
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (orch.BuildLiveAgents().Count == 0 && DateTime.UtcNow < deadline) await Task.Delay(10);
 
-            var live = orch.BuildLiveAgents();
-            await Assert.That(live.Count).IsEqualTo(1);
+        var live = orch.BuildLiveAgents();
+        await Assert.That(live.Count).IsEqualTo(1);
 
-            var agent = orch.GetAgentForTest(live[0].Id);
-            await Assert.That(agent).IsNotNull();
-            // A bool, not the delegate itself: TUnit's Assert.That(Action) overload is the delegate/Throws
-            // form and does NOT assert on the value, so `Assert.That(hook).IsNotNull()` would be a
-            // silent false negative here.
-            await Assert.That(agent!.ActivityClock.OnLaunchStageChanged is not null).IsTrue();
+        var agent = orch.GetAgentForTest(live[0].Id);
+        await Assert.That(agent).IsNotNull();
+        // A bool, not the delegate itself: TUnit's Assert.That(Action) overload is the delegate/Throws
+        // form and does NOT assert on the value, so `Assert.That(hook).IsNotNull()` would be a
+        // silent false negative here.
+        await Assert.That(agent!.ActivityClock.OnLaunchStageChanged is not null).IsTrue();
 
-            await cts.CancelAsync();
-            try { await spawnTask.WaitAsync(TimeSpan.FromSeconds(10)); } catch (OperationCanceledException) { }
-        } finally {
-            try { dir.Delete(recursive: true); } catch { /* best-effort */ }
-        }
+        await cts.CancelAsync();
+        try { await spawnTask.WaitAsync(TimeSpan.FromSeconds(10)); } catch (OperationCanceledException) { }
     }
 
     sealed class DuplexTestStream(Stream readSide, Stream writeSide) : Stream {

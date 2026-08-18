@@ -41,8 +41,8 @@ public class PiImportSourceTests {
     [Test]
     public async Task discovery_walks_nested_cwd_subdirs() {
         using var tmp = new TempDir();
-        WriteSession(Path.Combine(tmp.Path, "proj-a"), Sid1, cwd: "/work/a");
-        WriteSession(Path.Combine(tmp.Path, "proj-b"), Sid2, cwd: "/work/b");
+        WriteSession(tmp.PathTo("proj-a"), Sid1, cwd: "/work/a");
+        WriteSession(tmp.PathTo("proj-b"), Sid2, cwd: "/work/b");
 
         var source   = new PiImportSource(tmp.Path);
         var sessions = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
@@ -54,7 +54,7 @@ public class PiImportSourceTests {
     public async Task discovery_skips_non_pi_jsonl() {
         using var tmp = new TempDir();
         // A .jsonl whose first line is not a Pi session header.
-        await File.WriteAllTextAsync(Path.Combine(tmp.Path, "other.jsonl"), "{\"type\":\"something\",\"x\":1}\n");
+        tmp.CreateFile("other.jsonl", "{\"type\":\"something\",\"x\":1}\n");
 
         var source   = new PiImportSource(tmp.Path);
         var sessions = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
@@ -69,7 +69,7 @@ public class PiImportSourceTests {
         // file whose name also yields no uuid. Discovery must skip it rather than
         // minting an arbitrary non-GUID session id — mirrors the live hook path
         // (PiHookCommand.ExtractSessionId rejects non-GUID headers/filenames).
-        await File.WriteAllLinesAsync(Path.Combine(tmp.Path, "corrupt.jsonl"), new[] {
+        tmp.CreateFile("corrupt.jsonl", new[] {
             """{"type":"session","version":3,"id":"not-a-guid","timestamp":"2026-06-12T10:00:00.000Z","cwd":"/work/x"}""",
             """{"type":"message","id":"a1","parentId":null,"message":{"role":"user","content":"hello"}}"""
         });
@@ -86,8 +86,7 @@ public class PiImportSourceTests {
         // Header without an id, but the file is named "<timestamp>_<uuid>.jsonl"
         // (Pi's on-disk convention). Discovery falls back to the filename uuid,
         // the same recovery the live hook path uses for an unflushed header.
-        await File.WriteAllLinesAsync(
-            Path.Combine(tmp.Path, "2026-06-12T10-00-00_" + Sid1 + ".jsonl"),
+        tmp.CreateFile("2026-06-12T10-00-00_" + Sid1 + ".jsonl",
             new[] {
                 """{"type":"session","version":3,"timestamp":"2026-06-12T10:00:00.000Z","cwd":"/work/a"}""",
                 """{"type":"message","id":"a1","parentId":null,"message":{"role":"user","content":"hi"}}"""
@@ -120,7 +119,7 @@ public class PiImportSourceTests {
     [Test]
     public async Task is_available_false_when_dir_missing() {
         using var tmp = new TempDir();
-        var source = new PiImportSource(Path.Combine(tmp.Path, "nope"));
+        var source = new PiImportSource(tmp.PathTo("nope"));
         await Assert.That(source.IsAvailable).IsFalse();
     }
 
@@ -158,16 +157,5 @@ public class PiImportSourceTests {
     [Arguments("""{"type":"message","id":"a","message":{"role":"user","content":""}}""", false)]
     public async Task is_import_relevant_line_matches_normalizer(string line, bool expected) {
         await Assert.That(PiImportSource.IsImportRelevantLine(line)).IsEqualTo(expected);
-    }
-
-    sealed class TempDir : IDisposable {
-        public string Path { get; } = System.IO.Path.Combine(
-            System.IO.Path.GetTempPath(),
-            $"kcap-pi-import-test-{Guid.NewGuid().ToString("N")[..8]}"
-        );
-        public TempDir() => Directory.CreateDirectory(Path);
-        public void Dispose() {
-            try { Directory.Delete(Path, true); } catch { /* best effort */ }
-        }
     }
 }

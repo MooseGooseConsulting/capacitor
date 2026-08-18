@@ -356,36 +356,16 @@ public class ClaudeHookCommandTests {
     // discoverable .git entry (e.g. "/tmp") must omit the field entirely rather than send null.
     [Test]
     public async Task session_start_includes_workspace_root_when_cwd_is_inside_a_git_repo() {
-        var tmp = Directory.CreateTempSubdirectory("kcap-claude-hook-git-");
-        try {
-            Directory.CreateDirectory(Path.Combine(tmp.FullName, ".git"));
-            var nested = Path.Combine(tmp.FullName, "nested", "dir");
-            Directory.CreateDirectory(nested);
+        using var tmp = new TempDir();
+        tmp.CreateDir(".git");
+        var nested = tmp.CreateDir("nested", "dir");
 
-            using var fx = new Fixture();
-            await fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","cwd":"{{nested.Replace("\\", "\\\\")}}"}""");
+        using var fx = new Fixture();
+        await fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","cwd":"{{nested.Path.Replace("\\", "\\\\")}}"}""");
 
-            var posted = fx.Sent.Single(s => s.StartsWith("/hooks/session-start|", StringComparison.Ordinal));
-            var body   = JsonNode.Parse(posted[(posted.IndexOf('|') + 1)..]);
-            await Assert.That(body!["workspace_root"]?.GetValue<string>()).IsEqualTo(tmp.FullName);
-        } finally {
-            // Best-effort: on windows-latest runners the AV/indexer can transiently hold a
-            // handle on a just-created directory and fail the recursive delete with
-            // IOException ("being used by another process"). The temp dir is on an
-            // ephemeral runner — retry briefly, then let it go rather than fail the test.
-            for (var attempt = 1; ; attempt++) {
-                try {
-                    tmp.Delete(recursive: true);
-                    break;
-                } catch (IOException) when (attempt < 4) {
-                    await Task.Delay(100 * attempt);
-                } catch (IOException) {
-                    break;
-                } catch (UnauthorizedAccessException) {
-                    break;
-                }
-            }
-        }
+        var posted = fx.Sent.Single(s => s.StartsWith("/hooks/session-start|", StringComparison.Ordinal));
+        var body   = JsonNode.Parse(posted[(posted.IndexOf('|') + 1)..]);
+        await Assert.That(body!["workspace_root"]?.GetValue<string>()).IsEqualTo(tmp.Path);
     }
 
     [Test]
@@ -794,15 +774,16 @@ public class ClaudeHookCommandTests {
     }
 
     sealed class Fixture : IDisposable {
-        readonly string _tmpHome = Path.Combine(Path.GetTempPath(), $"kcap-claude-hook-{Guid.NewGuid():N}");
-        readonly string? _originalClaudeConfigDir;
-        readonly string _spoolPath;
-        public List<string> Sent { get; } = [];
-        public List<string> RouteOrder { get; } = [];
-        public HookSpool Spool { get; }
-        public HttpClient Client { get; }
-        public TimeSpan HoldOnPost { get; set; } = TimeSpan.Zero;
-        public string? RespondJson { get; set; }
+        readonly TempDir        _tmp = new();
+        readonly string         _tmpHome;
+        readonly string?        _originalClaudeConfigDir;
+        readonly string         _spoolPath;
+        public   List<string>   Sent        { get; } = [];
+        public   List<string>   RouteOrder  { get; } = [];
+        public   HookSpool      Spool       { get; }
+        public   HttpClient     Client      { get; }
+        public   TimeSpan       HoldOnPost  { get; set; } = TimeSpan.Zero;
+        public   string?        RespondJson { get; set; }
         readonly HttpStatusCode _postStatus;
 
         // Lets a test fake the shared SessionStart memory-index endpoint distinctly from the
@@ -814,12 +795,12 @@ public class ClaudeHookCommandTests {
         public int            MemoryIndexRequestCount  { get; private set; }
 
         public Fixture(HttpStatusCode postStatus = HttpStatusCode.OK) {
-            Directory.CreateDirectory(_tmpHome);
             // Isolate Claude's config dir (settings.json / plugins) to this temp home so ambient
             // plugin state on the dev machine can't leak in — notably the work-items-nudge availability
             // gate, which reads whether the kcap plugin is effectively installed. Safe under the class's
             // [NotInParallel("HomeEnvVarMutation")] lock. The kcap profile and the HTTP-stubbed memory
             // index are unaffected (they don't read CLAUDE_CONFIG_DIR).
+            _tmpHome                 = _tmp.Path;
             _originalClaudeConfigDir = Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR");
             Environment.SetEnvironmentVariable("CLAUDE_CONFIG_DIR", _tmpHome);
             _spoolPath  = Path.Combine(_tmpHome, "spool");
@@ -863,7 +844,7 @@ public class ClaudeHookCommandTests {
         public void Dispose() {
             Environment.SetEnvironmentVariable("CLAUDE_CONFIG_DIR", _originalClaudeConfigDir);
             Client.Dispose();
-            try { Directory.Delete(_tmpHome, true); } catch { }
+            _tmp.Dispose();
         }
     }
 

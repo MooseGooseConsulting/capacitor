@@ -54,7 +54,7 @@ public class GeminiImportSourceTests {
     [Test]
     public async Task unavailable_when_tmp_dir_missing() {
         using var tmp = new TempDir();
-        var source = new GeminiImportSource(tmpDirOverride: Path.Combine(tmp.Path, "does-not-exist"));
+        var source = new GeminiImportSource(tmpDirOverride: tmp.PathTo("does-not-exist"));
         await Assert.That(source.IsAvailable).IsFalse();
     }
 
@@ -68,13 +68,5 @@ public class GeminiImportSourceTests {
     [Arguments("""{"id":"g","type":"gemini","content":"answer"}""", true)]                                                                    // gemini turn
     public async Task import_relevant_line_mirrors_normalizer_skips(string line, bool expected) {
         await Assert.That(GeminiImportSource.IsImportRelevantLine(line)).IsEqualTo(expected);
-    }
-
-    sealed class TempDir : IDisposable {
-        public string Path { get; } = System.IO.Path.Combine(
-            System.IO.Path.GetTempPath(),
-            $"kcap-gemini-import-test-{Guid.NewGuid().ToString("N")[..8]}");
-        public TempDir() => Directory.CreateDirectory(Path);
-        public void Dispose() { try { Directory.Delete(Path, true); } catch { } }
     }
 }

@@ -346,10 +346,10 @@ public class UninstallCommandTests {
 
         // Fake project: a temp dir with a .git directory makes GitRepository.FindRoot
         // return it as the working tree root.
-        var projectDir = Directory.CreateTempSubdirectory("kcap-uninstall-project-");
-        Directory.CreateDirectory(Path.Combine(projectDir.FullName, ".git"));
+        using var tmp = new TempDir();
+        tmp.CreateDir(".git");
 
-        var projectClaude = Path.Combine(projectDir.FullName, ".claude", "settings.local.json");
+        var projectClaude = tmp.PathTo(".claude", "settings.local.json");
         Directory.CreateDirectory(Path.GetDirectoryName(projectClaude)!);
         await File.WriteAllTextAsync(projectClaude, """
             {
@@ -358,7 +358,7 @@ public class UninstallCommandTests {
             }
             """);
 
-        var projectCodex = Path.Combine(projectDir.FullName, ".codex", "hooks.json");
+        var projectCodex = tmp.PathTo(".codex", "hooks.json");
         Directory.CreateDirectory(Path.GetDirectoryName(projectCodex)!);
         await File.WriteAllTextAsync(projectCodex, """
             {
@@ -373,7 +373,7 @@ public class UninstallCommandTests {
 
         var originalCwd = Environment.CurrentDirectory;
         try {
-            Environment.CurrentDirectory = projectDir.FullName;
+            Environment.CurrentDirectory = tmp.Path;
 
             var exit = await UninstallCommand.HandleAsync(["uninstall", "--yes", "--project", "--keep-config"]);
             await Assert.That(exit).IsEqualTo(0);
@@ -388,7 +388,6 @@ public class UninstallCommandTests {
             await Assert.That(sessionStart[0]!["hooks"]![0]!["command"]!.GetValue<string>()).IsEqualTo("user-script");
         } finally {
             Environment.CurrentDirectory = originalCwd;
-            projectDir.Delete(recursive: true);
         }
     }
 
@@ -402,19 +401,18 @@ public class UninstallCommandTests {
         await using var fixture = await Fixture.CreateAsync();
 
         // A scratch dir with NO .git anywhere up the tree.
-        var noRepoDir = Directory.CreateTempSubdirectory("kcap-uninstall-norepo-");
+        using var tmp = new TempDir();
         var originalCwd = Environment.CurrentDirectory;
         using var capture = ConsoleOutput.StartErrorCapture();
 
         try {
-            Environment.CurrentDirectory = noRepoDir.FullName;
+            Environment.CurrentDirectory = tmp.Path;
 
             var exit = await UninstallCommand.HandleAsync(["uninstall", "--yes", "--project"]);
             await Assert.That(exit).IsEqualTo(1);
             await Assert.That(capture.GetCapturedError()).Contains("--project requires a git working tree");
         } finally {
             Environment.CurrentDirectory = originalCwd;
-            noRepoDir.Delete(recursive: true);
         }
     }
 
@@ -651,6 +649,8 @@ public class UninstallCommandTests {
     }
 
     sealed class Fixture : IAsyncDisposable {
+        TempDir? _tempDir;
+
         public required string Home      { get; init; }
         public required string ConfigDir { get; init; }
 
@@ -658,18 +658,19 @@ public class UninstallCommandTests {
         public string? OriginalConfigDir { get; init; }
 
         public static Task<Fixture> CreateAsync() {
-            var home      = Directory.CreateTempSubdirectory("kcap-uninstall-home-").FullName;
-            var configDir = Path.Combine(home, ".config", "kcap");
+            var tmp = new TempDir();
+            var configDir = tmp.PathTo(".config", "kcap");
             Directory.CreateDirectory(configDir);
 
             var f = new Fixture {
-                Home              = home,
+                Home              = tmp.Path,
                 ConfigDir         = configDir,
                 OriginalHome      = Environment.GetEnvironmentVariable("HOME"),
                 OriginalConfigDir = Environment.GetEnvironmentVariable("KCAP_CONFIG_DIR"),
+                _tempDir          = tmp
             };
 
-            Environment.SetEnvironmentVariable("HOME", home);
+            Environment.SetEnvironmentVariable("HOME", tmp.Path);
             // Pin the config dir under the test home so uninstall's
             // Directory.Delete only touches the test's temp tree, never the
             // assembly-wide config dir pinned by RepoPathStoreGlobalSetup.
@@ -681,7 +682,7 @@ public class UninstallCommandTests {
         public ValueTask DisposeAsync() {
             Environment.SetEnvironmentVariable("HOME", OriginalHome);
             Environment.SetEnvironmentVariable("KCAP_CONFIG_DIR", OriginalConfigDir);
-            try { Directory.Delete(Home, recursive: true); } catch { /* best effort */ }
+            _tempDir?.Dispose();
             return ValueTask.CompletedTask;
         }
     }

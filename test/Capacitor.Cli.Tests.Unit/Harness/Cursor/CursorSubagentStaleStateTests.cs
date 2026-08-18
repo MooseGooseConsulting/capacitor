@@ -85,7 +85,7 @@ public class CursorSubagentStaleStateTests {
         using var tmp = new TempDir();
         var child  = NewSessionId();
         var parent = NewSessionId();
-        var childFile = Path.Combine(tmp.Path, $"{child}.jsonl");
+        var childFile = tmp.PathTo($"{child}.jsonl");
         await File.WriteAllTextAsync(childFile, """{"role":"assistant","message":{"content":[]}}""" + "\n");
 
         var spawned = new List<string>();
@@ -102,7 +102,7 @@ public class CursorSubagentStaleStateTests {
                     : new HttpResponseMessage(HttpStatusCode.OK);
             });
             using var client = new HttpClient(handler);
-            var spool = new HookSpool(Path.Combine(tmp.Path, "spool"));
+            var spool = new HookSpool(tmp.PathTo("spool"));
 
             await CursorHookCommand.HandleCore(
                 client, "http://s",
@@ -159,7 +159,7 @@ public class CursorSubagentStaleStateTests {
                     : new HttpResponseMessage(HttpStatusCode.OK);
             });
             using var client = new HttpClient(handler);
-            var spool = new HookSpool(Path.Combine(tmp.Path, "spool"));
+            var spool = new HookSpool(tmp.PathTo("spool"));
 
             // Drive the REAL CALLER, not the divert directly. That matters: the leading remedy
             // changes the caller (make SaveLink report success and fail open before the start is
@@ -212,7 +212,7 @@ public class CursorSubagentStaleStateTests {
                     : new HttpResponseMessage(HttpStatusCode.OK);
             });
             using var client = new HttpClient(handler);
-            var spool = new HookSpool(Path.Combine(tmp.Path, "spool"));
+            var spool = new HookSpool(tmp.PathTo("spool"));
 
             // Again through the REAL CALLER — see the note in the test above.
             await CursorHookCommand.HandleCore(
@@ -252,13 +252,12 @@ public class CursorSubagentStaleStateTests {
     /// to) plus the child's transcript path.
     /// </summary>
     static (string Parent, string Child, string ChildPath) SeedLinkedPair(TempDir tmp, string prompt) {
-        var root = Path.Combine(tmp.Path, "agent-transcripts");
-        Directory.CreateDirectory(root);
+        var root = tmp.CreateDir("agent-transcripts");
 
         var parentRaw = Guid.NewGuid().ToString();
         var childRaw  = Guid.NewGuid().ToString();
 
-        var parentDir = Path.Combine(root, parentRaw);
+        var parentDir = root.PathTo(parentRaw);
         Directory.CreateDirectory(parentDir);
         var parentLine1 = """{"role":"user","message":{"content":[{"type":"text","text":"kick it off"}]}}""";
         var parentLine2 = System.Text.Json.JsonSerializer.Serialize(new {
@@ -267,7 +266,7 @@ public class CursorSubagentStaleStateTests {
         });
         File.WriteAllText(Path.Combine(parentDir, parentRaw + ".jsonl"), parentLine1 + "\n" + parentLine2 + "\n");
 
-        var childDir = Path.Combine(root, childRaw);
+        var childDir = root.PathTo(childRaw);
         Directory.CreateDirectory(childDir);
         var childPath = Path.Combine(childDir, childRaw + ".jsonl");
         var childLine = System.Text.Json.JsonSerializer.Serialize(new {
@@ -303,13 +302,5 @@ public class CursorSubagentStaleStateTests {
             var body = request.Content is null ? "" : await request.Content.ReadAsStringAsync(ct);
             return impl(request, body);
         }
-    }
-
-    sealed class TempDir : IDisposable {
-        public string Path { get; } = System.IO.Path.Combine(
-            System.IO.Path.GetTempPath(),
-            $"kcap-cursor-stale-state-{Guid.NewGuid().ToString("N")[..8]}");
-        public TempDir() => Directory.CreateDirectory(Path);
-        public void Dispose() { try { Directory.Delete(Path, true); } catch { } }
     }
 }

@@ -16,19 +16,6 @@ namespace Capacitor.Cli.Tests.Unit.Commands;
 /// </summary>
 [NotInParallel("TokenStoreProfileTests")]
 public class UseCommandTests {
-    sealed class TempDir : IDisposable {
-        public string Path { get; } = System.IO.Path.Combine(
-            System.IO.Path.GetTempPath(),
-            "kcap-test-" + Guid.NewGuid().ToString("N")[..8]
-        );
-
-        public TempDir() => Directory.CreateDirectory(Path);
-
-        public void Dispose() {
-            try { Directory.Delete(Path, true); } catch { /* best effort */ }
-        }
-    }
-
     [Before(Test)]
     public void Cleanup() {
         SharedConfigDirCleanup.ClearWithRetry("config.json", () => File.Delete(AppConfig.GetConfigPath()));
@@ -86,8 +73,7 @@ public class UseCommandTests {
     public async Task Use_Save_WritesRepoConfig() {
         var configPath = AppConfig.GetConfigPath();
         using var tmp = new TempDir();
-        var repoRoot = Path.Combine(tmp.Path, "repo");
-        Directory.CreateDirectory(repoRoot);
+        var repoRoot = tmp.CreateDir("repo");
 
         var initial = new ProfileConfig {
             Profiles = new Dictionary<string, Profile> {
@@ -102,7 +88,7 @@ public class UseCommandTests {
 
         await Assert.That(result).IsEqualTo(0);
 
-        var repoConfigPath = Path.Combine(repoRoot, ".kcap.json");
+        var repoConfigPath = repoRoot.PathTo(".kcap.json");
         await Assert.That(File.Exists(repoConfigPath)).IsTrue();
 
         var repoConfigJson = await File.ReadAllTextAsync(repoConfigPath);

@@ -55,7 +55,7 @@ public class SetupCommandTests {
     [Test]
     public async Task InstallPlugin_CreatesNewSettingsFile() {
         using var tmp          = new TempDir();
-        var       settingsPath = Path.Combine(tmp.Path, "settings.json");
+        var       settingsPath = tmp.PathTo("settings.json");
         var       marketplace  = "/opt/kcap";
 
         var result = SetupCommand.InstallPlugin(settingsPath, marketplace);
@@ -74,7 +74,7 @@ public class SetupCommandTests {
     [Test]
     public async Task InstallPlugin_PreservesExistingSettings() {
         using var    tmp          = new TempDir();
-        var          settingsPath = Path.Combine(tmp.Path, "settings.json");
+        var          settingsPath = tmp.PathTo("settings.json");
         const string marketplace  = "/opt/kcap";
 
         // Pre-populate with existing settings
@@ -112,7 +112,7 @@ public class SetupCommandTests {
     [Test]
     public async Task InstallPlugin_UpdatesExistingMarketplacePath() {
         using var    tmp          = new TempDir();
-        var          settingsPath = Path.Combine(tmp.Path, "settings.json");
+        var          settingsPath = tmp.PathTo("settings.json");
         const string newPath      = "/new/path";
 
         // Pre-populate with old marketplace path
@@ -141,7 +141,7 @@ public class SetupCommandTests {
     [Test]
     public async Task InstallPlugin_CreatesIntermediateDirectories() {
         using var    tmp          = new TempDir();
-        var          settingsPath = Path.Combine(tmp.Path, ".claude", "nested", "settings.json");
+        var          settingsPath = tmp.PathTo(".claude", "nested", "settings.json");
         const string marketplace  = "/opt/kcap";
 
         var result = SetupCommand.InstallPlugin(settingsPath, marketplace);
@@ -153,7 +153,7 @@ public class SetupCommandTests {
     [Test]
     public async Task InstallPlugin_MalformedJson_StartsFromScratch() {
         using var    tmp          = new TempDir();
-        var          settingsPath = Path.Combine(tmp.Path, "settings.json");
+        var          settingsPath = tmp.PathTo("settings.json");
         const string marketplace  = "/opt/kcap";
 
         await File.WriteAllTextAsync(settingsPath, "not json {{{");
@@ -362,7 +362,7 @@ public class SetupCommandTests {
         using var tmp = new TempDir();
 
         await Assert.That(SetupCommand.ShouldOfferGuidedTour(
-            true, Path.Combine(tmp.Path, ".claude", "settings.json"), GuidedTourPaths(tmp.Path))).IsFalse();
+            true, tmp.PathTo(".claude", "settings.json"), GuidedTourPaths(tmp.Path))).IsFalse();
     }
 
     [Test]
@@ -375,14 +375,14 @@ public class SetupCommandTests {
         Directory.CreateDirectory(Path.Combine(paths.AgentsSkillsDir, "kcap-guided-tour"));
 
         await Assert.That(SetupCommand.ShouldOfferGuidedTour(
-            false, Path.Combine(tmp.Path, ".claude", "settings.json"), paths)).IsFalse();
+            false, tmp.PathTo(".claude", "settings.json"), paths)).IsFalse();
     }
 
     [Test]
     public async Task ShouldOfferGuidedTour_true_when_the_registered_plugin_ships_the_skill() {
         using var tmp          = new TempDir();
-        var       settingsPath = Path.Combine(tmp.Path, ".claude", "settings.json");
-        var       marketplace  = Path.Combine(tmp.Path, "plugin");
+        var       settingsPath = tmp.PathTo(".claude", "settings.json");
+        var       marketplace  = tmp.PathTo("plugin");
 
         SetupCommand.InstallPlugin(settingsPath, marketplace);
         Directory.CreateDirectory(Path.Combine(marketplace, "skills", "guided-tour"));
@@ -397,8 +397,8 @@ public class SetupCommandTests {
         // the same key set, or the gate falls back to THIS build's plugin dir — which ships the
         // skill — while Claude actually loads the legacy dir, which does not.
         using var tmp          = new TempDir();
-        var       settingsPath = Path.Combine(tmp.Path, ".claude", "settings.json");
-        var       legacyDir    = Path.Combine(tmp.Path, "legacy-plugin");
+        var       settingsPath = tmp.PathTo(".claude", "settings.json");
+        var       legacyDir    = tmp.PathTo("legacy-plugin");
 
         Directory.CreateDirectory(Path.GetDirectoryName(settingsPath)!);
         await File.WriteAllTextAsync(settingsPath, $$"""
@@ -412,7 +412,7 @@ public class SetupCommandTests {
         Directory.CreateDirectory(Path.Combine(legacyDir, "skills", "recap"));
 
         // Current build's plugin dir DOES ship the skill — the wrong fallback target.
-        var modernPlugin = Path.Combine(tmp.Path, "modern-plugin");
+        var modernPlugin = tmp.PathTo("modern-plugin");
         Directory.CreateDirectory(Path.Combine(modernPlugin, "skills", "guided-tour"));
         await File.WriteAllTextAsync(Path.Combine(modernPlugin, "skills", "guided-tour", "SKILL.md"), "skill");
 
@@ -427,8 +427,8 @@ public class SetupCommandTests {
         // ResolvePluginPath finds nothing. Registration alone must not advertise a skill the
         // registered directory does not ship.
         using var tmp          = new TempDir();
-        var       settingsPath = Path.Combine(tmp.Path, ".claude", "settings.json");
-        var       oldPlugin    = Path.Combine(tmp.Path, "old-plugin");
+        var       settingsPath = tmp.PathTo(".claude", "settings.json");
+        var       oldPlugin    = tmp.PathTo("old-plugin");
 
         SetupCommand.InstallPlugin(settingsPath, oldPlugin);
         Directory.CreateDirectory(Path.Combine(oldPlugin, "skills", "recap")); // pre-guided-tour layout
@@ -456,7 +456,7 @@ public class SetupCommandTests {
             Path.Combine(paths.AgentsSkillsDir, "kcap-guided-tour", "SKILL.md"), "skill");
 
         await Assert.That(SetupCommand.ShouldOfferGuidedTour(
-            true, Path.Combine(tmp.Path, ".claude", "settings.json"), paths)).IsTrue();
+            true, tmp.PathTo(".claude", "settings.json"), paths)).IsTrue();
     }
 
     [Test]
@@ -469,7 +469,7 @@ public class SetupCommandTests {
         Directory.CreateDirectory(Path.Combine(paths.AgentsSkillsDir, "kcap-guided-tour"));
 
         await Assert.That(SetupCommand.ShouldOfferGuidedTour(
-            true, Path.Combine(tmp.Path, ".claude", "settings.json"), paths)).IsFalse();
+            true, tmp.PathTo(".claude", "settings.json"), paths)).IsFalse();
     }
 
     [Test]
@@ -484,17 +484,15 @@ public class SetupCommandTests {
         using var kiro = new TempDir();
         using var anti = new TempDir();
 
-        Directory.CreateDirectory(Path.Combine(kiro.Path, "kiro-skills", "kcap-guided-tour"));
-        await File.WriteAllTextAsync(
-            Path.Combine(kiro.Path, "kiro-skills", "kcap-guided-tour", "SKILL.md"), "skill");
+        kiro.CreateDir("kiro-skills", "kcap-guided-tour");
+        kiro.CreateFile(["kiro-skills", "kcap-guided-tour", "SKILL.md"], "skill");
         await Assert.That(SetupCommand.ShouldOfferGuidedTour(
-            true, Path.Combine(kiro.Path, "none.json"), GuidedTourPaths(kiro.Path))).IsTrue();
+            true, kiro.PathTo("none.json"), GuidedTourPaths(kiro.Path))).IsTrue();
 
-        Directory.CreateDirectory(Path.Combine(anti.Path, "antigravity-skills", "kcap-guided-tour"));
-        await File.WriteAllTextAsync(
-            Path.Combine(anti.Path, "antigravity-skills", "kcap-guided-tour", "SKILL.md"), "skill");
+        anti.CreateDir("antigravity-skills", "kcap-guided-tour");
+        anti.CreateFile(["antigravity-skills", "kcap-guided-tour", "SKILL.md"], "skill");
         await Assert.That(SetupCommand.ShouldOfferGuidedTour(
-            true, Path.Combine(anti.Path, "none.json"), GuidedTourPaths(anti.Path))).IsTrue();
+            true, anti.PathTo("none.json"), GuidedTourPaths(anti.Path))).IsTrue();
     }
 
     [Test]
@@ -509,15 +507,15 @@ public class SetupCommandTests {
 
         await Assert.That(AgentsSkillsInstaller.IsInstalled(paths.AgentsSkillsDir)).IsTrue();
         await Assert.That(SetupCommand.ShouldOfferGuidedTour(
-            true, Path.Combine(tmp.Path, ".claude", "settings.json"), paths)).IsFalse();
+            true, tmp.PathTo(".claude", "settings.json"), paths)).IsFalse();
     }
 
     [Test]
     public async Task ShouldOfferGuidedTour_false_when_the_claude_plugin_dir_lacks_the_skill() {
         // Registration alone isn't enough when the resolved plugin dir is a stale install.
         using var tmp          = new TempDir();
-        var       settingsPath = Path.Combine(tmp.Path, ".claude", "settings.json");
-        var       pluginDir    = Path.Combine(tmp.Path, "stale-plugin");
+        var       settingsPath = tmp.PathTo(".claude", "settings.json");
+        var       pluginDir    = tmp.PathTo("stale-plugin");
 
         SetupCommand.InstallPlugin(settingsPath, pluginDir);
         Directory.CreateDirectory(Path.Combine(pluginDir, "skills", "recap"));
@@ -924,25 +922,27 @@ public class SetupCommandTests {
     /// preceding them for what each piece of isolation guards against.
     /// </summary>
     sealed class HandleAsyncE2EFixture : IAsyncDisposable {
-        public string RepoDir { get; }
-        public string Home    { get; }
-
+        readonly TempDir _repoDir;
+        readonly TempDir _home;
         readonly string  _originalCwd;
         readonly string? _originalHome;
 
-        HandleAsyncE2EFixture(string repoDir, string home, string originalCwd, string? originalHome) {
-            RepoDir       = repoDir;
-            Home          = home;
+        public string RepoDir => _repoDir.Path;
+        public string Home    => _home.Path;
+
+        HandleAsyncE2EFixture(TempDir repoDir, TempDir home, string originalCwd, string? originalHome) {
+            _repoDir      = repoDir;
+            _home         = home;
             _originalCwd  = originalCwd;
             _originalHome = originalHome;
         }
 
         public static async Task<HandleAsyncE2EFixture> CreateAsync(string owner, string repo) {
-            var repoDir = Directory.CreateTempSubdirectory("kcap-setup-e2e-repo-").FullName;
-            await RunGitAsync("init", repoDir);
-            await RunGitAsync($"remote add origin https://github.com/{owner}/{repo}.git", repoDir);
+            var repoDir = new TempDir();
+            await RunGitAsync("init", repoDir.Path);
+            await RunGitAsync($"remote add origin https://github.com/{owner}/{repo}.git", repoDir.Path);
 
-            var home = Directory.CreateTempSubdirectory("kcap-setup-e2e-home-").FullName;
+            var home = new TempDir();
 
             var originalCwd  = Environment.CurrentDirectory;
             var originalHome = Environment.GetEnvironmentVariable("HOME");
@@ -960,8 +960,8 @@ public class SetupCommandTests {
             var legacyTokens = PathHelpers.ConfigPath("tokens.json");
             if (File.Exists(legacyTokens)) File.Delete(legacyTokens);
 
-            Environment.CurrentDirectory = repoDir;
-            Environment.SetEnvironmentVariable("HOME", home);
+            Environment.CurrentDirectory = repoDir.Path;
+            Environment.SetEnvironmentVariable("HOME", home.Path);
 
             return new HandleAsyncE2EFixture(repoDir, home, originalCwd, originalHome);
         }
@@ -971,8 +971,8 @@ public class SetupCommandTests {
             Environment.SetEnvironmentVariable("HOME", _originalHome);
             HttpClientExtensions.ResetProviderCacheForTesting();
 
-            try { Directory.Delete(RepoDir, recursive: true); } catch { /* best effort */ }
-            try { Directory.Delete(Home, recursive: true); } catch { /* best effort */ }
+            _repoDir.Dispose();
+            _home.Dispose();
 
             return ValueTask.CompletedTask;
         }
@@ -993,21 +993,6 @@ public class SetupCommandTests {
                 var err = await process.StandardError.ReadToEndAsync();
 
                 throw new InvalidOperationException($"git {arguments} failed: {err}");
-            }
-        }
-    }
-
-    sealed class TempDir : IDisposable {
-        public string Path { get; } = System.IO.Path.Combine(
-            System.IO.Path.GetTempPath(),
-            $"kcap-test-{Guid.NewGuid().ToString("N")[..8]}"
-        );
-
-        public TempDir() => Directory.CreateDirectory(Path);
-
-        public void Dispose() {
-            try { Directory.Delete(Path, true); } catch {
-                /* best effort */
             }
         }
     }

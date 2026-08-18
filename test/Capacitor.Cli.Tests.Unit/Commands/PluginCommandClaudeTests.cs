@@ -10,12 +10,12 @@ public class PluginCommandClaudeTests {
     [Test]
     public async Task InstallPlugin_stamps_marker_on_success() {
         using var tmp = new TempDir();
-        var settingsPath = Path.Combine(tmp.Path, "settings.json");
+        var settingsPath = tmp.PathTo("settings.json");
 
         var ok = SetupCommand.InstallPlugin(settingsPath, "/some/marketplace");
         await Assert.That(ok).IsTrue();
 
-        var marker = Path.Combine(tmp.Path, ClaudePluginInstaller.MarkerFileName);
+        var marker = tmp.PathTo(ClaudePluginInstaller.MarkerFileName);
         await Assert.That(File.Exists(marker)).IsTrue();
         await Assert.That((await File.ReadAllTextAsync(marker)).Trim())
             .IsEqualTo(CapacitorVersion.Current());
@@ -29,7 +29,7 @@ public class PluginCommandClaudeTests {
         var exit = await PluginCommand.HandleAsync(["plugin", "install", "--if-installed"], env);
         await Assert.That(exit).IsEqualTo(0);
 
-        var settingsPath = Path.Combine(fakeHome.Path, ".claude", "settings.json");
+        var settingsPath = fakeHome.PathTo(".claude", "settings.json");
         await Assert.That(File.Exists(settingsPath)).IsFalse();
     }
 
@@ -39,9 +39,8 @@ public class PluginCommandClaudeTests {
         using var pluginDir = new TempDir();
 
         // Seed pre-marker install: enabledPlugins entry, no marker.
-        var claudeDir = Path.Combine(fakeHome.Path, ".claude");
-        Directory.CreateDirectory(claudeDir);
-        var settingsPath = Path.Combine(claudeDir, "settings.json");
+        var claudeDir = fakeHome.CreateDir(".claude");
+        var settingsPath = claudeDir.PathTo("settings.json");
         await File.WriteAllTextAsync(settingsPath, """
             {
               "extraKnownMarketplaces": { "kcap": { "source": { "source": "directory", "path": "/old/path" } } },
@@ -60,21 +59,19 @@ public class PluginCommandClaudeTests {
         await Assert.That(path).IsEqualTo(pluginDir.Path);
 
         // Marker stamped.
-        await Assert.That(File.Exists(Path.Combine(claudeDir, ClaudePluginInstaller.MarkerFileName))).IsTrue();
+        await Assert.That(File.Exists(claudeDir.PathTo(ClaudePluginInstaller.MarkerFileName))).IsTrue();
     }
 
     [Test]
     public async Task Install_claude_with_if_installed_is_noop_when_marker_matches_current_version() {
         using var fakeHome = new TempDir();
 
-        var claudeDir = Path.Combine(fakeHome.Path, ".claude");
-        Directory.CreateDirectory(claudeDir);
-        var settingsPath = Path.Combine(claudeDir, "settings.json");
+        var claudeDir = fakeHome.CreateDir(".claude");
+        var settingsPath = claudeDir.PathTo("settings.json");
 
         // Sentinel content + matching marker.
         await File.WriteAllTextAsync(settingsPath, """{"sentinel": "must-survive"}""");
-        await File.WriteAllTextAsync(
-            Path.Combine(claudeDir, ClaudePluginInstaller.MarkerFileName),
+        claudeDir.CreateFile(ClaudePluginInstaller.MarkerFileName,
             CapacitorVersion.Current());
 
         var exit = await PluginCommand.HandleAsync(["plugin", "install", "--if-installed"], TestEnv(fakeHome.Path));
@@ -91,10 +88,8 @@ public class PluginCommandClaudeTests {
         var capturedErr     = new StringWriter();
 
         // Seed: marker present so the gate proceeds…
-        var claudeDir = Path.Combine(fakeHome.Path, ".claude");
-        Directory.CreateDirectory(claudeDir);
-        await File.WriteAllTextAsync(
-            Path.Combine(claudeDir, ClaudePluginInstaller.MarkerFileName),
+        var claudeDir = fakeHome.CreateDir(".claude");
+        claudeDir.CreateFile(ClaudePluginInstaller.MarkerFileName,
             "some-old-version");
 
         // …but plugin dir resolution fails (null = no plugin available).
@@ -129,9 +124,8 @@ public class PluginCommandClaudeTests {
         var       stdout    = new StringWriter();
 
         // Seed a pre-marker install so --if-installed proceeds to refresh.
-        var claudeDir = Path.Combine(fakeHome.Path, ".claude");
-        Directory.CreateDirectory(claudeDir);
-        await File.WriteAllTextAsync(Path.Combine(claudeDir, "settings.json"), """
+        var claudeDir = fakeHome.CreateDir(".claude");
+        claudeDir.CreateFile("settings.json", """
             {
               "extraKnownMarketplaces": { "kcap": { "source": { "source": "directory", "path": "/old/path" } } },
               "enabledPlugins": { "kcap@kcap": true }
@@ -152,23 +146,19 @@ public class PluginCommandClaudeTests {
     public async Task Remove_claude_deletes_marker() {
         using var fakeHome = new TempDir();
 
-        var claudeDir = Path.Combine(fakeHome.Path, ".claude");
-        Directory.CreateDirectory(claudeDir);
-        var settingsPath = Path.Combine(claudeDir, "settings.json");
-        await File.WriteAllTextAsync(settingsPath, """
+        var claudeDir = fakeHome.CreateDir(".claude");
+        claudeDir.CreateFile("settings.json", """
             {
               "extraKnownMarketplaces": { "kcap": { "source": { "source": "directory", "path": "/p" } } },
               "enabledPlugins": { "kcap@kcap": true }
             }
             """);
-        await File.WriteAllTextAsync(
-            Path.Combine(claudeDir, ClaudePluginInstaller.MarkerFileName),
-            CapacitorVersion.Current());
+        claudeDir.CreateFile(ClaudePluginInstaller.MarkerFileName, CapacitorVersion.Current());
 
         var exit = await PluginCommand.HandleAsync(["plugin", "remove"], TestEnv(fakeHome.Path));
         await Assert.That(exit).IsEqualTo(0);
 
-        await Assert.That(File.Exists(Path.Combine(claudeDir, ClaudePluginInstaller.MarkerFileName))).IsFalse();
+        await Assert.That(File.Exists(claudeDir.PathTo(ClaudePluginInstaller.MarkerFileName))).IsFalse();
     }
 
     static PluginEnvironment TestEnv(
@@ -182,15 +172,4 @@ public class PluginCommandClaudeTests {
         Stdout:            stdout ?? TextWriter.Null,
         Stderr:            stderr ?? TextWriter.Null
     );
-
-    sealed class TempDir : IDisposable {
-        public string Path { get; } = System.IO.Path.Combine(
-            System.IO.Path.GetTempPath(),
-            $"kcap-claude-plugin-cmd-test-{Guid.NewGuid().ToString("N")[..8]}"
-        );
-        public TempDir() => Directory.CreateDirectory(Path);
-        public void Dispose() {
-            try { Directory.Delete(Path, true); } catch { /* best effort */ }
-        }
-    }
 }

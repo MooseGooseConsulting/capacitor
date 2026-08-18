@@ -600,9 +600,9 @@ public class AgentOrchestratorBorrowLaunchTests {
         // RepoPath is an allowed git repo (passes the early repo-allowed/exists guards); the borrow
         // cwd is a NON-git directory, which the authorizer rejects under an empty allowlist.
         var (repoPath, cleanupRepo) = GitRepoHarness.CreateGitRepo();
-        var borrowCwd = Path.Combine(Path.GetTempPath(), "kcap-borrow-nogit-" + Guid.NewGuid().ToString("N")[..8]);
-        Directory.CreateDirectory(borrowCwd);
-        File.WriteAllText(Path.Combine(borrowCwd, "user-file.txt"), "precious");
+        using var tmpBorrow = new TempDir();
+        tmpBorrow.CreateFile("user-file.txt", "precious");
+        var borrowCwd = tmpBorrow.Path;
 
         try {
             var server     = new CaptureServerConnection();
@@ -641,7 +641,6 @@ public class AgentOrchestratorBorrowLaunchTests {
             await Assert.That(File.ReadAllText(Path.Combine(borrowCwd, "user-file.txt"))).IsEqualTo("precious");
         } finally {
             cleanupRepo();
-            try { Directory.Delete(borrowCwd, true); } catch { /* best-effort */ }
         }
     }
 
@@ -826,12 +825,13 @@ public class AgentOrchestratorBorrowLaunchTests {
     /// linked worktree path — a realistic "borrow the user's git worktree" cwd.</summary>
     static (string mainRepo, string linkedCwd, Action cleanup) CreateLinkedWorktree() {
         var (mainRepo, cleanupMain) = GitRepoHarness.CreateGitRepo();
-        var linkedCwd = Path.Combine(Path.GetTempPath(), "kcap-borrow-link-" + Guid.NewGuid().ToString("N")[..8]);
+        var tmp       = new TempDir();
+        var linkedCwd = tmp.PathTo("linked");
 
         GitRepoHarness.Git(mainRepo, "worktree", "add", linkedCwd);
 
         return (mainRepo, linkedCwd, () => {
-            try { if (Directory.Exists(linkedCwd)) Directory.Delete(linkedCwd, true); } catch { /* best-effort */ }
+            tmp.Dispose();
             cleanupMain();
         });
     }

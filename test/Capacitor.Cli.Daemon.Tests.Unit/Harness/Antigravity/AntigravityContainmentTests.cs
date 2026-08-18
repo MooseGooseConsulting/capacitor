@@ -76,12 +76,13 @@ public class AntigravityContainmentTests {
         var logsBefore     = SnapshotNames(kcapLogs);
         var watchersBefore = SnapshotNames(kcapWatchers);
 
-        var stateDir  = CreateTemp("kcap-agy-containment-state-");
-        var workspace = CreateTemp("kcap-agy-containment-ws-");
+        using var tmp = new TempDir();
+        var stateDir  = tmp.CreateDir("state");
+        var workspace = tmp.CreateDir("ws");
         string? home  = null;
 
         try {
-            await File.WriteAllTextAsync(Path.Combine(workspace, "README.md"), "containment probe workspace\n");
+            workspace.CreateFile("README.md", "containment probe workspace\n");
 
             // Production home and production argv/env — an assertion over a re-derived spawn shape
             // would certify the test's idea of the launch, not the launch.
@@ -169,8 +170,6 @@ public class AntigravityContainmentTests {
             }
         } finally {
             if (home is not null) AntigravityReviewerHome.Delete(home, stateDir);
-            TryDelete(stateDir);
-            TryDelete(workspace);
         }
     }
 
@@ -331,15 +330,5 @@ public class AntigravityContainmentTests {
         } catch {
             return false;
         }
-    }
-
-    static string CreateTemp(string prefix) {
-        var dir = Path.Combine(Path.GetTempPath(), prefix + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(dir);
-        return dir;
-    }
-
-    static void TryDelete(string dir) {
-        try { Directory.Delete(dir, recursive: true); } catch { /* temp dir */ }
     }
 }
