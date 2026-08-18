@@ -2,6 +2,7 @@ using System.IO.Pipelines;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Daemon.Harness.Codex;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -38,6 +39,9 @@ sealed class FakeCodexAppServer : IAsyncDisposable {
     public string      ApprovalMethod = "item/commandExecution/requestApproval";
     public int         Fail32001TimesOnTurnStart;
     public (long input, long output, long total)? EmitUsageOnTurn;
+    // When set, turn/start responds inProgress and does NOT auto-emit turn/completed — the turn stays
+    // active so a follow-up input is steered onto it. Complete it with CompleteHeldTurnAsync.
+    public bool        HoldTurnOpen;
 
     // ── Observed ───────────────────────────────────────────────────────────────────────────────
     public readonly List<string>       ReceivedMethods    = [];
@@ -45,8 +49,11 @@ sealed class FakeCodexAppServer : IAsyncDisposable {
     public string?                     LastThreadStartSandbox;
     public string?                     LastTurnApprovalPolicy;
     public string?                     LastTurnEffort;
+    public string?                     LastSteerExpectedTurnId;
+    public string?                     LastSteerText;
     public JsonElement?                ApprovalResponse; // the client's response to the injected request
-    int _turnStartCount;
+    int    _turnStartCount;
+    string _lastTurnId = "turn-x";
 
     public CodexAppServerConnection ConnectClient() {
         var conn = new CodexAppServerConnection(
@@ -126,6 +133,7 @@ sealed class FakeCodexAppServer : IAsyncDisposable {
                     LastTurnEffort = ef.GetString();
 
                 var turnId = "turn-" + _turnStartCount;
+                _lastTurnId = turnId;
                 await RespondAsync(id, new JsonObject {
                     ["turn"] = new JsonObject { ["id"] = turnId, ["status"] = "inProgress", ["items"] = new JsonArray() },
                 }, ct);
@@ -136,6 +144,8 @@ sealed class FakeCodexAppServer : IAsyncDisposable {
                         new JsonObject { ["threadId"] = ThreadId, ["turnId"] = turnId }, ct);
                     ApprovalResponse = resp;
                 }
+
+                if (HoldTurnOpen) break; // stay active for a follow-up turn/steer; test drives completion
 
                 if (EmitUsageOnTurn is { } u)
                     await NotifyAsync("thread/tokenUsage/updated", new JsonObject {
@@ -157,6 +167,13 @@ sealed class FakeCodexAppServer : IAsyncDisposable {
                 break;
             }
 
+            case "turn/steer":
+                LastSteerExpectedTurnId = @params.Str("expectedTurnId");
+                if (@params.Arr("input") is { } steerInput && steerInput.GetArrayLength() > 0)
+                    LastSteerText = steerInput[0].Str("text");
+                await RespondAsync(id, new JsonObject { ["accepted"] = true }, ct);
+                break;
+
             case "turn/interrupt":
                 await RespondAsync(id, new JsonObject(), ct);
                 await NotifyAsync("turn/completed", new JsonObject {
@@ -170,6 +187,14 @@ sealed class FakeCodexAppServer : IAsyncDisposable {
                 break;
         }
     }
+
+    /// <summary>Emits <c>turn/completed</c> for the most recently started turn — the test's way to end
+    /// a <see cref="HoldTurnOpen"/> turn once it has steered follow-up input onto it.</summary>
+    public Task CompleteHeldTurnAsync(string status = "completed") =>
+        NotifyAsync("turn/completed", new JsonObject {
+            ["threadId"] = ThreadId,
+            ["turn"]     = new JsonObject { ["id"] = _lastTurnId, ["status"] = status, ["items"] = new JsonArray() },
+        }, _cts.Token);
 
     async Task<JsonElement> ServerRequestAsync(string method, JsonNode @params, CancellationToken ct) {
         var id  = Interlocked.Increment(ref _nextServerId);
