@@ -1,6 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json.Nodes;
-using Capacitor.Cli.Commands;
+using Capacitor.Cli.Commands.Harness;
 using Capacitor.Cli.Core;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;

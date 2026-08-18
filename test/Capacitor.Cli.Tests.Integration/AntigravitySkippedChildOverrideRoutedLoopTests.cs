@@ -1,7 +1,8 @@
 using System.Net;
 using System.Text.RegularExpressions;
 using Capacitor.Cli.Commands;
-using Capacitor.Tests.Helpers;
+using Capacitor.Cli.Harness.Antigravity;
+using Capacitor.Cli.Harness.Gemini;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;

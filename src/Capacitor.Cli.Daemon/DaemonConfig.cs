@@ -1,4 +1,5 @@
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Daemon.Harness.Claude;
 
 namespace Capacitor.Cli.Daemon;
 
@@ -13,7 +14,7 @@ public class DaemonConfig {
     /// (<see cref="Capacitor.Cli.Core.Mcp.KcapBinaryCommand.ResolveCliSibling"/>) — inside the
     /// daemon, <see cref="Environment.ProcessPath"/> is <c>kcap-daemon</c>, NOT the binary that
     /// generated MCP registrations point at. Used to recognize a canonical absolute-path kcap
-    /// entry (e.g. <see cref="Services.ClaudeLauncher"/>'s worktree merge-skip). Null when no
+    /// entry (e.g. <see cref="ClaudeLauncher"/>'s worktree merge-skip). Null when no
     /// sibling resolves; consumers then recognize only the literal <c>"kcap"</c>.
     /// </summary>
     public string? KcapCliPath { get; set; } = Core.Mcp.KcapBinaryCommand.ResolveCliSibling();

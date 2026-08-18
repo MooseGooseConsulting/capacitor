@@ -9,6 +9,11 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.Harness.Claude;
+using Capacitor.Cli.Core.Harness.Codex;
+using Capacitor.Cli.Daemon.Harness.Antigravity;
+using Capacitor.Cli.Daemon.Harness.Claude;
+using Capacitor.Cli.Daemon.Harness.Codex;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
