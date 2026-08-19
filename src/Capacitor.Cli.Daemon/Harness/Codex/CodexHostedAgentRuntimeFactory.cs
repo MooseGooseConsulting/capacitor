@@ -76,7 +76,11 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
 
         var (sandbox, approval) = CodexPosturePolicy.Resolve(ctx.Work, ctx.IsReviewFlow, ctx.CodexPosture);
         var appServerArgs = _launcher.BuildAppServerLaunchArgs(launcherCtx);
-        var env           = BuildEnv(ctx);
+
+        // Marker stamping (guard-1) and the runtime's envelope emission must use the SAME decision, or a
+        // session could be hook-suppressed with no envelope source. The activation slice flips it on.
+        var emitEnvelopeTranscript = false;
+        var env                    = BuildEnv(ctx, emitEnvelopeTranscript);
 
         var launch = new CodexAppServerLaunch(
             Cwd:           ctx.Worktree.Path,
@@ -93,7 +97,8 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
 
         var runtime = new CodexAppServerHostedAgentRuntime(
             spawn, launch, ctx.ActivityClock,
-            _loggerFactory.CreateLogger<CodexAppServerHostedAgentRuntime>());
+            _loggerFactory.CreateLogger<CodexAppServerHostedAgentRuntime>(),
+            emitEnvelopeTranscript: emitEnvelopeTranscript);
 
         // StartAsync may spawn a child before it throws (a failed hooks/list, thread/start, or initial
         // turn on the fail-closed paths). The orchestrator never receives a runtime it did not get a
@@ -126,7 +131,9 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
         CodexPosture = ctx.CodexPosture,
     };
 
-    static Dictionary<string, string> BuildEnv(RuntimeStartContext ctx) {
+    internal const string HostedAppServerMarkerEnv = "KCAP_HOSTED_APPSERVER";
+
+    internal static Dictionary<string, string> BuildEnv(RuntimeStartContext ctx, bool emitEnvelopeTranscript) {
         var env = new Dictionary<string, string> {
             ["KCAP_RENDERED_AGENT"] = "1",
             ["KCAP_AGENT_ID"]       = ctx.AgentId,
@@ -135,7 +142,19 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
         if (!string.IsNullOrEmpty(ctx.DaemonEpoch))     env["KCAP_DAEMON_EPOCH"] = ctx.DaemonEpoch;
         if (!string.IsNullOrEmpty(ctx.ServerUrl))       env["KCAP_URL"]          = ctx.ServerUrl;
         if (!string.IsNullOrEmpty(ctx.DaemonBridgeUrl)) env["KCAP_DAEMON_URL"]   = ctx.DaemonBridgeUrl;
+        // guard-1: only an envelope-sourced session carries this marker; the codex hook + watcher read it
+        // and stand down so the rollout is not double-ingested alongside the envelopes.
+        if (emitEnvelopeTranscript) env[HostedAppServerMarkerEnv] = "1";
         return env;
+    }
+
+    // Materialize the child's environment. The marker must reflect THIS launch's emit decision only —
+    // never a value inherited from the daemon's own environment, or a non-emitting child would suppress
+    // its hook watcher and lose transcript ingestion. Clear any inherited marker, then apply the overlay
+    // (which carries the marker only when emitting).
+    internal static void ApplyChildEnv(IDictionary<string, string?> childEnv, IReadOnlyDictionary<string, string> overlay) {
+        childEnv.Remove(HostedAppServerMarkerEnv);
+        foreach (var (k, v) in overlay) childEnv[k] = v;
     }
 
     /// <summary>The real spawn: <c>codex app-server</c> as a child process, its stdio wrapped by the
@@ -157,7 +176,7 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
             UseShellExecute        = false,
             WorkingDirectory       = cwd,
         };
-        foreach (var (k, v) in env) psi.Environment[k] = v;
+        ApplyChildEnv(psi.Environment, env);
 
         var process = Process.Start(psi)
             ?? throw new InvalidOperationException($"Failed to start '{cliPath} {string.Join(' ', argv)}'.");
