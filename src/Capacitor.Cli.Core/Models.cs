@@ -1230,6 +1230,23 @@ public static class AcpEventKind {
     /// cursor (verified against <c>CapacitorHub.AcpSessionEvents</c>'s unrecognised-Kind branch), so
     /// a newer daemon degrades to log-only rather than wedging the forwarder.</summary>
     public const string SystemNote         = "system_note";
+
+    /// <summary>A full plan snapshot (codex app-server <c>turn/plan/updated</c>, which always sends
+    /// complete revisions). Canonical, latest-snapshot-wins; the server maps it to
+    /// <c>PlanContentUpdatedEvent</c>, landing envelope-sourced sessions on the same native-plan path
+    /// <c>PlanArtifactExtractor</c> already consumes. Additive for other ACP vendors (their translator
+    /// may keep dropping plan updates until wired). An older server treats it as an unrecognised Kind
+    /// (dropped, cursor still advances).</summary>
+    public const string Plan               = "plan";
+
+    /// <summary>A per-event additive token-usage DELTA (codex app-server <c>thread/tokenUsage/updated</c>,
+    /// daemon-converted from cumulative to delta and attributed to the model resolved at that instant).
+    /// Distinct from <see cref="Usage"/>, which is context-window OCCUPANCY (the ACP context-usage
+    /// reading), not additive
+    /// billing buckets. The server stamps these buckets into Eventuous <c>$usage</c> metadata so the
+    /// existing additive folds (session totals, per-model attribution, cost) count them unchanged. An
+    /// older server treats it as an unrecognised Kind (dropped, cursor still advances).</summary>
+    public const string TokenUsage         = "token_usage";
 }
 
 /// <summary>
@@ -1285,7 +1302,33 @@ public readonly record struct AcpEventEnvelope(
         long?   ContextWindowTokens = null,
 
         // transcript-authoritative time (ISO-8601); server falls back to now if absent
-        string? TimestampIso      = null
+        string? TimestampIso      = null,
+
+        // Ephemeral live lane (codex app-server envelope transcript). Additive/default-false, so
+        // ContractVersion stays 1: an older server ignores both and its canonical-only path is
+        // unchanged. Ephemeral=true marks a transient live chunk (accumulated content-so-far for its
+        // item) that is relayed but NEVER persisted and carries NO seq — it consumes no canonical
+        // sequence number and is excluded from the dup/gap logic (the server relays it in batch order).
+        // The pure-replacement viewer rule (state[ItemId] = latest ephemeral payload; the item's
+        // canonical completed envelope replaces and finalizes it) makes a dropped/duplicated ephemeral
+        // harmless. ItemId is the app-server item id — the stable key a viewer uses to know which
+        // transient state a completed item supersedes; it rides BOTH the ephemeral envelopes and their
+        // item's canonical completed envelope, and the server stamps it into the canonical event's
+        // METADATA (the event records are not ours to change).
+        bool    Ephemeral         = false,
+        string? ItemId            = null,
+
+        // token_usage — a per-event additive token DELTA (codex app-server). Additive/nullable, so
+        // ContractVersion stays 1: an older server ignores them. The model rides the Model field
+        // above (attributed to the model resolved at the delta's instant — correct across a reroute).
+        // input is GROSS (server converts to net = input − cached before stamping $usage, matching
+        // UsageMetadataHelper's cross-vendor contract). cache-write is the cache-CREATION tier, billed
+        // separately from cached reads. total is derived server-side and not carried.
+        long?   UsageInputTokens       = null,
+        long?   UsageCachedInputTokens = null,
+        long?   UsageCacheWriteInputTokens = null,
+        long?   UsageOutputTokens      = null,
+        long?   UsageReasoningTokens   = null
     );
 
 /// <summary>
