@@ -8,6 +8,11 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Pty.Unix;
 /// (bypassing UnixPtyProcess/the spawner thread, which Task 4/5 layer on top). These tests
 /// exercise the raw native contract in isolation.
 /// </summary>
+/// <remarks>
+/// Bare <c>[NotInParallel]</c>: these waitpid a reaped pid, which the OS can reassign to a concurrent spawn.
+/// Stealing a child System.Diagnostics.Process owns FailFasts the host, killing the whole run.
+/// </remarks>
+[NotInParallel]
 public class PtySpawnTests {
     [Test, RunOn(OS.Linux | OS.MacOs)]
     public async Task Successful_spawn_returns_a_reapable_child_and_a_captured_identity() {

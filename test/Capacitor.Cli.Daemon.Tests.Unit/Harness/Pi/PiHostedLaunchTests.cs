@@ -97,9 +97,14 @@ public class PiHostedLaunchTests {
 
     [Test]
     public async Task BuildPsi_OmitsServerUrl_WhenContextCarriesNone() {
-        var psi = PiRpcHostedAgentRuntimeFactory.BuildPsi(new DaemonConfig(), Ctx(serverUrl: null));
+        // Not absence: psi inherits this process's environment, and .envrc exports KCAP_URL — so
+        // asserting the key is missing would test the developer's shell.
+        var inherited = Environment.GetEnvironmentVariable("KCAP_URL");
 
-        await Assert.That(psi.Environment.ContainsKey("KCAP_URL")).IsFalse();
+        var psi = PiRpcHostedAgentRuntimeFactory.BuildPsi(new DaemonConfig(), Ctx(serverUrl: null));
+        psi.Environment.TryGetValue("KCAP_URL", out var actual);
+
+        await Assert.That(actual).IsEqualTo(inherited);
     }
 
     [Test]
