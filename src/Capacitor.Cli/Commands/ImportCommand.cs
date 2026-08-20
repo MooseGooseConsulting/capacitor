@@ -131,8 +131,17 @@ static class ImportCommand {
                 FinalCounts                               f,
                 IReadOnlyDictionary<string, FinalCounts>? bySource = null
             ) {
+            // Says nothing about the skipped: too-short and excluded were never sent, so "everything else
+            // is in" would claim they landed. Re-running is safe — classification asks the server first.
+            var failureNote = $"{f.Failed} didn't land. Re-run to retry them — anything already imported isn't sent again.";
+
             if (Tty) {
                 AnsiConsole.Write(new Rule("[green]Done[/]").LeftJustified());
+
+                // Three buckets, not one: import knows the difference and a single number would hide it.
+                AnsiConsole.MarkupLine(
+                    $"[green]{f.Imported}[/] imported · {f.Skipped} skipped · "
+                  + (f.Failed > 0 ? $"[red]{f.Failed}[/] failed" : "0 failed"));
 
                 if (bySource is { Count: > 1 }) {
                     AnsiConsole.Write(new Rule("[green]By source[/]").LeftJustified());
@@ -197,9 +206,12 @@ static class ImportCommand {
                 }
 
                 AnsiConsole.Write(grid);
+
+                if (f.Failed > 0) AnsiConsole.MarkupLine($"[dim]{failureNote}[/]");
             } else {
                 Console.WriteLine();
                 Console.WriteLine("== Done ==");
+                Console.WriteLine($"  {f.Imported} imported · {f.Skipped} skipped · {f.Failed} failed");
 
                 if (bySource is { Count: > 1 }) {
                     Console.WriteLine();
@@ -235,6 +247,8 @@ static class ImportCommand {
                     if (f.RequestedSummaries)
                         Console.WriteLine($"  Summaries           {f.SummariesGenerated} generated, {f.SummariesFailed} failed");
                 }
+
+                if (f.Failed > 0) Console.WriteLine($"  {failureNote}");
             }
         }
 
@@ -571,7 +585,16 @@ static class ImportCommand {
             bool RanBackground,
             bool RequestedSummaries,
             bool RequestedTitles = false
-        );
+        ) {
+        /// <summary>Reached the server this run. A resume is an import that finished, not a third thing.</summary>
+        internal int Imported => Loaded + Resumed;
+
+        /// <summary>Deliberately not sent — already there, too short, or an excluded repo. Not failures.</summary>
+        internal int Skipped => AlreadyLoaded + TooShort + Excluded;
+
+        /// <summary>Should have landed and did not. Re-running retries exactly these.</summary>
+        internal int Failed => ProbeError + Errored;
+    }
 
     /// <summary>
     /// Every "found nothing" exit still reports. Zero sessions is an answer; no output at all is
