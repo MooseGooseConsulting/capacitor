@@ -51,6 +51,12 @@ public static class PiPaths {
 
     public static string KcapExtension(string? home = null) => Path.Combine(ExtensionsDir(home), "kcap.ts");
 
+    /// <summary>Pure kcap-extension path for fully-injected callers (nudge wiring-probe): built from
+    /// <see cref="AgentDirPure"/>, so a null <paramref name="agentDir"/> means "unset → home
+    /// default", never a real <c>PI_CODING_AGENT_DIR</c> read.</summary>
+    public static string KcapExtensionPure(string? home, string? agentDir) =>
+        Path.Combine(AgentDirPure(home, agentDir), "extensions", "kcap.ts");
+
     /// <summary>Marker recording the installed extension version (sibling of kcap.ts).</summary>
     public static string KcapExtensionMarker(string? home = null) => Path.Combine(ExtensionsDir(home), ".kcap-extension-version");
 

@@ -178,6 +178,18 @@ public static class AntigravityPaths {
     public static string CliConfigRootPure(string? home, string? geminiCliHome)
         => Path.Combine(GeminiPaths.RootPure(home, geminiCliHome), "antigravity-cli");
 
+    /// <summary>Pure variant of <see cref="GuiConfigRoot"/> (<c>&lt;gemini-root&gt;/config</c>) — the
+    /// GUI plugin root, NOT the <c>antigravity</c> data root that <see cref="RootPure"/> points at.</summary>
+    public static string GuiConfigRootPure(string? home, string? geminiCliHome)
+        => Path.Combine(GeminiPaths.RootPure(home, geminiCliHome), "config");
+
+    /// <summary>Pure global-hooks path for fully-injected callers (nudge wiring-probe): mirrors the
+    /// production <see cref="GlobalHooksJson"/> resolution (<see cref="GuiConfigRoot"/>/plugins/kcap/
+    /// hooks.json) but via <see cref="GuiConfigRootPure"/>, so a null <paramref name="geminiCliHome"/>
+    /// means "unset → home default", never a real <c>GEMINI_CLI_HOME</c> read.</summary>
+    public static string GlobalHooksJsonPure(string? home, string? geminiCliHome)
+        => Path.Combine(GuiConfigRootPure(home, geminiCliHome), "plugins", AntigravityHooks.BlockName, "hooks.json");
+
     /// <summary>Pure variant of <see cref="IsInstalled"/> — never falls back to the real process
     /// environment for <c>GEMINI_CLI_HOME</c>.</summary>
     public static bool IsInstalledPure(string? home, string? geminiCliHome)

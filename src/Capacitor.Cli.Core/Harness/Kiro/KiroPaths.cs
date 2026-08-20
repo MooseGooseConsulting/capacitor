@@ -70,6 +70,12 @@ public static class KiroPaths {
     /// </summary>
     public static string KcapAgentJson(string? home = null) => Path.Combine(AgentsDir(home), "kcap.json");
 
+    /// <summary>Pure kcap-agent path for fully-injected callers (nudge wiring-probe): built from
+    /// <see cref="ConfigRootPure"/>, so a null <paramref name="kiroHome"/> means "unset → home
+    /// default", never a real <c>KIRO_HOME</c> read — matching how detection resolves the root.</summary>
+    public static string KcapAgentJsonPure(string? home, string? kiroHome) =>
+        Path.Combine(ConfigRootPure(home, kiroHome), "agents", "kcap.json");
+
     /// <summary>The running process's name — a real binary, so an exact match.</summary>
     public const string ProcessName = "kiro-cli";
 
