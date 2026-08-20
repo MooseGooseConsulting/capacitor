@@ -100,6 +100,12 @@ internal record AgentInstance(
     /// and every reconnect re-registration report the same value.</summary>
     public string?              PermissionPreset  { get; init; }
 
+    /// <summary>The runtime transport this agent actually launched on, reported to the server on
+    /// AgentRegistered so it can validate its launch decision. Each runtime owns its own transport
+    /// (<see cref="IHostedAgentRuntime.RuntimeTransport"/>), so this reports the same value on initial
+    /// registration and every reconnect re-registration (the same instance survives a reconnect).</summary>
+    public string RuntimeTransport => Runtime.RuntimeTransport;
+
     /// <summary>Phase B (D1): single-flight teardown latch — a plain field (not a property) so
     /// <see cref="System.Threading.Interlocked.CompareExchange(ref int,int,int)"/> can gate it. Exactly
     /// one teardown runs even if the launch-catch and the read-loop's finally race.</summary>
@@ -3678,7 +3684,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     async Task RegisterAgentAsync(AgentInstance agent) {
         if (agent.IsPrivate) return;
 
-        await _server.AgentRegisteredAsync(agent.Id, agent.Prompt, agent.Model, agent.Effort, agent.RepoPath, agent.SandboxPolicy, agent.ApprovalPolicy, agent.PermissionPreset);
+        await _server.AgentRegisteredAsync(agent.Id, agent.Prompt, agent.Model, agent.Effort, agent.RepoPath, agent.SandboxPolicy, agent.ApprovalPolicy, agent.PermissionPreset, agent.RuntimeTransport);
 
         // Report the PTY size so read-only viewers lock their xterm to it. Best-effort.
         try {
@@ -4078,7 +4084,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             for (var attempt = 1; ; attempt++) {
                 try {
-                    await _server.AgentRegisteredAsync(agent.Id, agent.Prompt, agent.Model, agent.Effort, agent.RepoPath, agent.SandboxPolicy, agent.ApprovalPolicy, agent.PermissionPreset);
+                    await _server.AgentRegisteredAsync(agent.Id, agent.Prompt, agent.Model, agent.Effort, agent.RepoPath, agent.SandboxPolicy, agent.ApprovalPolicy, agent.PermissionPreset, agent.RuntimeTransport);
 
                     // Re-gate the status send atomically under _reapLock, per attempt (finding 1
                     // refinement): the outer pre-check cannot cover a verdict published DURING the
