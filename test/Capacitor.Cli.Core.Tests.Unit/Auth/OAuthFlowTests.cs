@@ -22,6 +22,23 @@ public class OAuthFlowTests {
         await Assert.That(options.LoadProfile).IsFalse();
     }
 
+    /// <summary>
+    /// The WorkOS browser runs INSIDE <c>OidcClient.LoginAsync</c>, unlike the GitHub flow
+    /// which calls <c>InvokeAsync</c> itself. Duende does not wrap it, so a loopback bind failure
+    /// surfaces as an exception rather than <c>result.IsError</c>, and the device-code fallback can
+    /// catch it exactly as the GitHub arm already does. If a Duende upgrade starts folding it into an
+    /// error result, that fallback goes silently dead and this test is what says so.
+    /// </summary>
+    [Test]
+    public async Task WorkOS_login_lets_a_loopback_bind_failure_propagate() {
+        using var server  = WireMockServer.Start();
+        var       thrower = new FakeBrowser(_ => throw new System.Net.HttpListenerException(5, "Access is denied"));
+
+        await Assert.That(async () => await OAuthLoginFlow.AuthenticateWorkOSAsync(
+                  "client_d", "org_a", thrower, apiBase: server.Urls[0]))
+            .Throws<System.Net.HttpListenerException>();
+    }
+
     [Test]
     public async Task WorkOS_authorize_url_omits_org_when_null() {
         var options = OAuthLoginFlow.BuildWorkOSOptions("client_d", "https://api.workos.com", "http://127.0.0.1:5555/callback");
@@ -81,9 +98,9 @@ public class OAuthFlowTests {
     public async Task WorkOSSignInError_preserves_actionable_detail() {
         await Assert.That(OAuthLoginFlow.WorkOSSignInError("Timeout", null)).Contains("Timed out");
         await Assert.That(OAuthLoginFlow.WorkOSSignInError("Invalid state.", null))
-            .IsEqualTo("WorkOS sign-in failed: Invalid state.");
+            .IsEqualTo("Sign-in failed: Invalid state.");
         await Assert.That(OAuthLoginFlow.WorkOSSignInError("invalid_grant", "bad code"))
-            .IsEqualTo("WorkOS sign-in failed: invalid_grant — bad code");
+            .IsEqualTo("Sign-in failed: invalid_grant - bad code");
     }
 
     [Test]
@@ -203,54 +220,27 @@ public class OAuthFlowTests {
 
     [Test]
     public async Task ChooseDiscoveryProvider_honors_flags_and_default() {
-        await Assert.That(OAuthLoginFlow.ChooseDiscoveryProvider(["--github"], isInteractive: true)).IsEqualTo(AuthProvider.GitHubApp);
-        await Assert.That(OAuthLoginFlow.ChooseDiscoveryProvider([], isInteractive: true)).IsEqualTo(AuthProvider.WorkOS);   // default = org SSO, no prompt
+        await Assert.That(OAuthLoginFlow.ChooseDiscoveryProvider(["--github"])).IsEqualTo(AuthProvider.GitHubApp);
+        await Assert.That(OAuthLoginFlow.ChooseDiscoveryProvider([])).IsEqualTo(AuthProvider.WorkOS);
     }
 
-    // A non-interactive session used to fall back to GitHub App auth, because GitHub has a device
-    // flow and WorkOS's loopback callback can't reach a CLI on a remote box. That fallback was the
-    // ONLY remaining source of new GitHub App sign-ins, and it dead-ended: the GitHub App branch has
-    // no provisioning path, so a headless user with no workspace authenticated and was then told to
-    // ask an admin to install a GitHub App. No implicit routing onto the legacy provider — the
-    // caller fails fast instead.
+    // Discovery no longer consults the environment at all. It used to: a non-interactive session fell
+    // back to GitHub App auth (the only provider with a device flow), which dead-ended because that
+    // branch cannot provision — and when that implicit fallback went, `--device` was left behind as an
+    // explicit way to reach it. WorkOS has a device grant of its own now, so neither is needed:
+    // headless discovery stays on org SSO and signs in with a device code.
     [Test]
-    public async Task Headless_discovery_does_not_fall_back_to_legacy_github_app() =>
-        await Assert.That(OAuthLoginFlow.ChooseDiscoveryProvider([], isInteractive: false)).IsNull();
-
-    // The explicit opt-in is a deliberate statement, not a silent default, so it still works for
-    // someone who genuinely needs the legacy provider on a headless box.
-    [Test]
-    public async Task Explicit_github_flag_still_selects_legacy_provider_when_headless() =>
-        await Assert.That(OAuthLoginFlow.ChooseDiscoveryProvider(["--github"], isInteractive: false))
-            .IsEqualTo(AuthProvider.GitHubApp);
-
-    // `--device` is the documented way to authenticate from SSH / a container (help-login.txt,
-    // help-setup.txt, README's command tour), and only GitHub has a device flow. Dropping headless
-    // discovery must not take that contract with it: this is an explicit request, same class as
-    // --github, not the implicit fallback this change removed.
-    [Test]
-    public async Task Explicit_device_flag_still_selects_legacy_provider_when_headless() =>
-        await Assert.That(OAuthLoginFlow.ChooseDiscoveryProvider(["--device"], isInteractive: false))
-            .IsEqualTo(AuthProvider.GitHubApp);
-
-    // ...but ONLY when headless. On a machine with a browser, `--device` has always meant "use the
-    // device flow if the login step needs GitHub", never "switch discovery off org SSO" — routing it
-    // to the legacy provider here would be a regression in the opposite direction.
-    [Test]
-    public async Task Device_flag_does_not_divert_an_interactive_session_away_from_sso() =>
-        await Assert.That(OAuthLoginFlow.ChooseDiscoveryProvider(["--device"], isInteractive: true))
-            .IsEqualTo(AuthProvider.WorkOS);
-
-    // The message a headless user gets instead. It must not send anyone to the legacy GitHub App,
-    // and it must name both real routes: create a workspace, or point at an existing one.
-    [Test]
-    public async Task Headless_discovery_message_offers_signup_and_server_url_but_never_the_github_app() {
-        var message = OAuthLoginFlow.HeadlessDiscoveryUnsupportedMessage();
-
-        await Assert.That(message).DoesNotContain("GitHub App");
-        await Assert.That(message).Contains("/signup");
-        await Assert.That(message).Contains("--server-url");
+    public async Task Discovery_stays_on_org_sso_whatever_the_environment() {
+        await Assert.That(OAuthLoginFlow.ChooseDiscoveryProvider(["--device"])).IsEqualTo(AuthProvider.WorkOS);
+        await Assert.That(OAuthLoginFlow.ChooseDiscoveryProvider(["--no-prompt"])).IsEqualTo(AuthProvider.WorkOS);
     }
+
+    // --github keeps its discovery meaning. It is the route for a GitHub-App-only user, and the one
+    // flag that still moves discovery off org SSO.
+    [Test]
+    public async Task Explicit_github_flag_still_selects_the_legacy_provider() =>
+        await Assert.That(OAuthLoginFlow.ChooseDiscoveryProvider(["--github", "--device"]))
+            .IsEqualTo(AuthProvider.GitHubApp);
 
     [Test]
     public async Task ShouldDiscoverLogin_true_when_no_server_or_discover_flag() {

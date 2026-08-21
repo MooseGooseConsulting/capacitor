@@ -14,7 +14,10 @@ public static class LoginCommand {
 
     internal static async Task<int> HandleAsync(
             string[] args, string? baseUrl, OnboardingFacade facade, IAuthProgress progress) {
-        var forceDevice = args.Contains("--device");
+        // Also when there is no keyboard: a redirected stdin cannot press the escape-hatch key, so a
+        // loopback wait there can only end in the listener timeout. Not a headless guess - an
+        // interactive SSH session has a keyboard and keeps the browser.
+        var forceDevice = OAuthLoginFlow.DeviceRouteRequired(args.Contains("--device"), ConsoleKeyWatcher.Instance.CanWatch);
 
         // No configured server (or explicit --discover) → run tenant discovery (pick provider,
         // then your tenants). Otherwise log into the configured server.
@@ -31,15 +34,7 @@ public static class LoginCommand {
 
     static async Task<int> HandleDiscoverAsync(
             OnboardingFacade facade, string[] args, bool forceDevice, IAuthProgress progress) {
-        // Before any network call: a non-interactive session has no discovery provider, so there
-        // is nothing to ask about (see OAuthLoginFlow.ChooseDiscoveryProvider).
-        var provider = OAuthLoginFlow.ChooseDiscoveryProvider(args, isInteractive: !HeadlessEnvironment.IsHeadless());
-
-        if (provider is null) {
-            await Console.Error.WriteLineAsync(OAuthLoginFlow.HeadlessDiscoveryUnsupportedMessage());
-
-            return 1;
-        }
+        var provider = OAuthLoginFlow.ChooseDiscoveryProvider(args);
 
         var result = await facade.DiscoverAsync(provider, forceDevice, CancellationToken.None);
 
@@ -68,6 +63,16 @@ public static class LoginCommand {
         }
     }
 
+    /// <summary>
+    /// The provisioner is not optional here. `kcap login --discover` is the reachable zero-workspace
+    /// path, and since org SSO gained a device grant a user with no workspace completes the
+    /// sign-in rather than failing before it — without this they would hold a live credential and be
+    /// told to ask an admin.
+    /// </summary>
     internal static OnboardingFacade NewFacade() =>
-        new(ConsoleAuthProgress.Instance, new SpectreTenantPicker(), provisioner: null, beforeCommit: null);
+        new(ConsoleAuthProgress.Instance, new SpectreTenantPicker(),
+            new SpectreTenantProvisioner(new TenantProvisioningClient(new HttpClient()), ProvisioningEndpoint.Url),
+            beforeCommit: null) {
+            KeyWatcher = ConsoleKeyWatcher.Instance
+        };
 }

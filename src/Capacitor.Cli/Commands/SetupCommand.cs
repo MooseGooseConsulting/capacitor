@@ -41,7 +41,7 @@ sealed class SetupAuthProgress(IAuthProgress inner) : IAuthProgress {
 
     public void BrowserOpening(string url) => inner.BrowserOpening(url);
 
-    public void DeviceCode(string code, string verificationUri) => inner.DeviceCode(code, verificationUri);
+    public void DeviceCode(string code, string verificationUri, string? provider, bool prefilled) => inner.DeviceCode(code, verificationUri, provider, prefilled);
 
     public void PollTick() => inner.PollTick();
 
@@ -64,7 +64,10 @@ public static class SetupCommand {
         if (serverUrlArg is null && args.Length > 1 && !args[1].StartsWith('-'))
             serverUrlArg = ServerInput.ResolveTenantArg(args[1]);
         var noPrompt         = args.Contains("--no-prompt");
-        var forceDevice      = args.Contains("--device");
+        // Also when there is no keyboard: a redirected stdin cannot press the escape-hatch key, so a
+        // loopback wait there can only end in the listener timeout. Not a headless guess - an
+        // interactive SSH session has a keyboard and keeps the browser.
+        var forceDevice      = OAuthLoginFlow.DeviceRouteRequired(args.Contains("--device"), ConsoleKeyWatcher.Instance.CanWatch);
         var skipClaudeFlag   = args.Contains("--skip-claude-hooks");
         var skipCodexFlag    = args.Contains("--skip-codex-hooks");
         var skipCodexNetworkFlag = args.Contains("--skip-codex-network-access");
@@ -832,7 +835,9 @@ public static class SetupCommand {
 
     static OnboardingFacade NewFacade(ITenantProvisioner? provisioner) =>
         FacadeOverride?.Invoke(provisioner)
-            ?? new OnboardingFacade(StepProgress, new SpectreTenantPicker(), provisioner, beforeCommit: null);
+            ?? new OnboardingFacade(StepProgress, new SpectreTenantPicker(), provisioner, beforeCommit: null) {
+                KeyWatcher = ConsoleKeyWatcher.Instance
+            };
 
     /// <summary>
     /// Step 2 (Login) as a standalone step: a discovery-completed sign-in just reports what
@@ -873,28 +878,23 @@ public static class SetupCommand {
 
     internal static async Task<(string ServerUrl, string Provider, bool LoginComplete)?> RunDiscoveryAsync(
             string[] args, bool forceDevice) {
-        // Resolved before contacting the auth service: a non-interactive session has no discovery
-        // provider at all, so there is nothing to ask the proxy about.
-        var chosen = OAuthLoginFlow.ChooseDiscoveryProvider(args, isInteractive: !HeadlessEnvironment.IsHeadless());
-
-        if (chosen is null) {
-            await Console.Error.WriteLineAsync(OAuthLoginFlow.HeadlessDiscoveryUnsupportedMessage());
-
-            return null;
-        }
+        var chosen   = OAuthLoginFlow.ChooseDiscoveryProvider(args);
+        var headless = HeadlessEnvironment.IsHeadless();
 
         AnsiConsole.MarkupLine($"  Proxy: [dim]{Markup.Escape(AuthProxyEndpoint.Url)}[/]");
 
-        // WorkOS discovery always authenticates via a loopback browser — headless never switches it
-        // to a device flow the way GitHub App's AcquireGitHubTokenAsync does, so the label must not
-        // vary with headlessness for this provider.
+        // WorkOS no longer follows headlessness: its ladder opens the browser either way, and only an
+        // explicit --device takes the device grant. GitHub's exchange URL is not known until the proxy
+        // answers inside DiscoverAsync, so its label stays the environment guess it has always been.
         var signinMode = chosen == AuthProvider.WorkOS
-            ? "browser"
-            : HeadlessEnvironment.IsHeadless() ? "device" : "browser";
+            ? OAuthLoginFlow.ChooseWorkOSFlow(forceDevice) == WorkOSFlow.Device ? "device" : "browser"
+            : forceDevice || headless ? "device" : "browser";
         SetupFunnel.SigninOpened(signinMode, chosen);
 
-        // Headless WorkOS keeps the legacy "ask your admin" dead-end; GitHub never provisions.
-        var provisioner = chosen == AuthProvider.WorkOS && !HeadlessEnvironment.IsHeadless()
+        // Armed for every WorkOS session, headless included: that path has a device grant now, so
+        // a zero-workspace headless user now completes a sign-in and would otherwise hold a live
+        // credential with nowhere to spend it. GitHub never provisions.
+        var provisioner = chosen == AuthProvider.WorkOS
             ? new SpectreTenantProvisioner(new TenantProvisioningClient(new HttpClient()), ProvisioningEndpoint.Url)
             : null;
 
