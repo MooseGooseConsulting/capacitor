@@ -12,6 +12,7 @@ using Capacitor.Cli.Core.Harness.Gemini;
 using Capacitor.Cli.Core.Harness.Kiro;
 using Capacitor.Cli.Core.Harness.OpenCode;
 using Capacitor.Cli.Core.Harness.Pi;
+using Capacitor.Cli.Core.RepoEvidence;
 using Capacitor.Cli.Harness.Antigravity;
 using Capacitor.Cli.Harness.Codex;
 using Capacitor.Cli.Harness.Cursor;
@@ -161,6 +162,18 @@ static partial class WatchCommand {
         using var reader = new StreamReader(stream);
 
         return reader.ReadToEnd();
+    }
+
+    /// <summary>Line-yielding sibling of <see cref="ReadAllTextShared"/> — same FileShare.ReadWrite
+    /// reasoning, but streamed (like <c>File.ReadLines</c>) rather than materialized, for a
+    /// best-effort evidence scan that wants to stop reading as soon as it finds what it needs.
+    /// <c>File.ReadLines</c> opens FileShare.Read, which is mandatory-exclusive on Windows and can
+    /// block the very agent whose transcript is being scanned mid-flush.</summary>
+    internal static IEnumerable<string> ReadLinesShared(string path) {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using var reader = new StreamReader(stream);
+
+        while (reader.ReadLine() is { } line) yield return line;
     }
 
     /// <summary>
@@ -486,6 +499,28 @@ static partial class WatchCommand {
             state.LastRepoDetection = DateTimeOffset.UtcNow;
         }
 
+        // No cwd-derived repo (launched outside any checkout, or no cwd at all): fall back to
+        // scanning the transcript's own tool-use paths for a git root. Session-watcher only
+        // (agentId is null), matching the scope of the cwd-based detection above — a subagent
+        // watcher is always spawned with cwd: null too and has never had its own repo detection.
+        if (vendor == "claude" && agentId is null && (cwd is null || GitRepository.FindRoot(cwd) is null)) {
+            state.EvidenceScanner = new RepoEvidenceScanner<RepositoryPayload>(
+                GitRepository.FindRoot, root => RepositoryDetection.DetectRepositoryAsync(root),
+                p => p.Owner is not null && p.RepoName is not null);
+
+            try {
+                foreach (var line in ReadLinesShared(transcriptPath)) {
+                    if (await state.EvidenceScanner.OnLineAsync(vendor, line) is { } repo) {
+                        ApplyEvidenceRepo(state, repo);
+
+                        break;
+                    }
+                }
+            } catch {
+                // fail-open: this one-shot prefix scan is best-effort and must never block startup
+            }
+        }
+
         Log($"Watching {transcriptPath} for session {sessionId}" + (agentId is not null ? $" agent {agentId}" : ""));
 
         // Build SignalR hub connection
@@ -711,7 +746,14 @@ static partial class WatchCommand {
 
                 // Periodically refresh repository info (every 60s)
                 if (cwd is not null && DateTimeOffset.UtcNow - state.LastRepoDetection > TimeSpan.FromSeconds(60)) {
-                    state.Repository        = await RepositoryDetection.DetectRepositoryAsync(cwd);
+                    var detected = await RepositoryDetection.DetectRepositoryAsync(cwd);
+
+                    // An evidence-derived repo may only be replaced by another real detection,
+                    // never cleared back to null by a launch-cwd probe that still finds nothing.
+                    if (ShouldReplaceRepository(detected, state.RepositoryFromEvidence)) {
+                        state.Repository = detected;
+                    }
+
                     state.LastRepoDetection = DateTimeOffset.UtcNow;
                 }
 
@@ -911,6 +953,14 @@ static partial class WatchCommand {
         // eventually fires. Cursor's other exit paths (StopWatcher, parent-exit) are unaffected —
         // this skip is scoped to idleExit specifically.
         var cursorSuppressesEndPost = CursorSuppressesEndPost(vendor, idleExit);
+
+        // Belt-and-suspenders: normally a no-op by now — the final drain above (inside
+        // DrainNewLines's isFinalDrain branch) already promoted and applied any read fallback as
+        // part of the same batch that reaches the server on a clean exit. This only still matters
+        // if that branch didn't run at all (e.g. the final drain found the transcript file gone).
+        if (state.EvidenceScanner is { } scanner && await scanner.PromoteReadFallbackAsync() is { } fallbackRepo) {
+            ApplyEvidenceRepo(state, fallbackRepo);
+        }
 
         if (endReason is not null && agentId is null && state.ThresholdReached && !cursorSuppressesEndPost) {
             await PostSessionEndOnParentExitAsync(baseUrl, sessionId, transcriptPath, cwd, vendor, state.Repository, endReason);
@@ -2142,6 +2192,11 @@ static partial class WatchCommand {
                 newLines = EnrichKiroContextUsage(newLines, transcriptPath);
             }
 
+            // Evidence-based repo detection for a session launched outside any repo — extracted
+            // to ApplyEvidenceScanAsync so the final-drain fallback delivery (the actual send
+            // path, not just the promotion) is directly unit-testable with a fake scanner.
+            await ApplyEvidenceScanAsync(state, vendor, newLines, isFinalDrain);
+
             // Only include repository info when it has changed since last send
             var repoToSend = RepoPayloadChanged(state.Repository, state.LastSentRepository)
                 ? state.Repository
@@ -3247,6 +3302,40 @@ static partial class WatchCommand {
          || current.PrUrl     != lastSent.PrUrl
          || current.PrTitle   != lastSent.PrTitle
          || current.PrHeadRef != lastSent.PrHeadRef;
+    }
+
+    // An evidence-derived repo (from RepoEvidenceScanner, for a session launched outside any
+    // checkout) has no cwd to re-probe, so a periodic cwd-based refresh finding nothing must
+    // never be allowed to clear it back to null.
+    internal static bool ShouldReplaceRepository(RepositoryPayload? detected, bool repositoryFromEvidence) =>
+        detected is not null || !repositoryFromEvidence;
+
+    // Shared by every EvidenceScanner call site — the scanner already resolved and validated
+    // completeness (RepoEvidenceScanner's isComplete), so this just records the result.
+    static void ApplyEvidenceRepo(WatchState state, RepositoryPayload repo) {
+        state.Repository             = repo;
+        state.RepositoryFromEvidence = true;
+    }
+
+    // Extracted out of DrainNewLines so the final-drain fallback DELIVERY (not just
+    // RepoEvidenceScanner's own promotion, which was already covered) is unit-testable with a
+    // fake scanner and no HubConnection: a caller can assert state.Repository directly after
+    // isFinalDrain: true, and that a non-final drain leaves it untouched. No-op when
+    // state.EvidenceScanner is null (every non-Claude / already-in-repo session) or already Done.
+    internal static async Task ApplyEvidenceScanAsync(WatchState state, string vendor, IReadOnlyList<string> newLines, bool isFinalDrain) {
+        if (state.EvidenceScanner is not { Done: false } scanner) return;
+
+        foreach (var line in newLines) {
+            if (await scanner.OnLineAsync(vendor, line) is { } repo) {
+                ApplyEvidenceRepo(state, repo);
+
+                return;
+            }
+        }
+
+        if (isFinalDrain && await scanner.PromoteReadFallbackAsync() is { } fallback) {
+            ApplyEvidenceRepo(state, fallback);
+        }
     }
 
     static string TruncateForTitle(string text, int maxLength) {
