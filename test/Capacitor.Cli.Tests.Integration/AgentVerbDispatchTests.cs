@@ -119,8 +119,11 @@ public class AgentVerbDispatchTests {
         // A string, not ArgumentList: quote-aware parsing, so an argument may contain a space.
         psi.Arguments = $"{argLine} --no-update-check";
 
-        // Isolate from the developer's own profile so these assertions don't depend on whether
-        // this machine happens to have a server configured.
+        // Isolate the config surface to a FRESH dir: clearing KCAP_URL alone isn't enough — the CLI
+        // also reads a persisted profile under the assembly's SHARED KCAP_CONFIG_DIR, which a sibling
+        // test can populate. A per-call dir makes KCAP_URL the only server signal.
+        using var configDir = new TempDir();
+        psi.Environment["KCAP_CONFIG_DIR"] = configDir.Path;
         psi.Environment["KCAP_URL"] = clearServerUrl ? "" : "http://127.0.0.1:1";
 
         using var process = Process.Start(psi)
