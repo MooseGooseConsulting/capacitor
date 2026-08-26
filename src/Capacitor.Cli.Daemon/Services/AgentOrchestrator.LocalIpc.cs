@@ -54,7 +54,7 @@ internal partial class AgentOrchestrator {
                 // unchanged) — but the wire contract pins absent = null. Normalize here, at the
                 // wire boundary, rather than changing what AgentInstance stores.
                 string.IsNullOrWhiteSpace(a.Model) ? null : a.Model, a.RequesterDisplay,
-                HasTerminal: a.Runtime.EmitsTerminalOutput))];
+                HasTerminal: a.Runtime.EmitsTerminalOutput, Title: a.Title))];
 
     /// <summary>
     /// Serves the legacy <c>Stop</c> frame from older clients that predate --force. That frame

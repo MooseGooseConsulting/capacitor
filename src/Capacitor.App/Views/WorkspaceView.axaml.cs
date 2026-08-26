@@ -19,6 +19,11 @@ namespace Capacitor.App.Views;
 /// Resize with worse (font-metric-unaware) width/height than TerminalControl's own
 /// _consoleTextSize-based computation.
 public partial class WorkspaceView : UserControl {
+    // The workspace header doubles as the draggable chrome on its side of the split — see
+    // WindowChrome.
+    void OnHeaderPointerPressed(object? sender, Avalonia.Input.PointerPressedEventArgs e) =>
+        WindowChrome.BeginDrag(this, e);
+
     public WorkspaceView() {
         InitializeComponent();
         // Keyboard focus is a view concern: the control draws its filled caret (and receives

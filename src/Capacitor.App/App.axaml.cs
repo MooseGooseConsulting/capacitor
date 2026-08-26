@@ -84,6 +84,11 @@ public partial class App : Application {
     // construction path or a signature change to BuildAndShowMainWindow (AppStartupTests calls
     // that method directly, with no Home argument).
     HomeViewModel? _home;
+    // Same reasoning as _home just above: constructed INSIDE BuildAndShowMainWindow (over the
+    // SAME `service` instance) and read back off the built window's DataContext right after, so
+    // this field never needs a second construction path or a signature change to
+    // BuildAndShowMainWindow either.
+    SessionRailViewModel? _rail;
     // Home's launch transport, held here because it is the one graph object that outlives a
     // window rebuild (MainWindowCoordinator can build a second window over the same client) and
     // owns a live HubConnection. Disposed after _home on both teardown paths — never before, or a
@@ -187,7 +192,7 @@ public partial class App : Application {
             Console.Error.WriteLine($"kcap app failed to start: {ex}");
             await _workspaceTeardown.DrainAsync();
             await HandleStartupFailureAsync(
-                desktop, ex, _service, _shutdown, [_tray, _trayVm, _promptCoordinator, _consent, _activity, _home, _pause], _lifecycle, _lane);
+                desktop, ex, _service, _shutdown, [_tray, _trayVm, _promptCoordinator, _consent, _activity, _home, _rail, _pause], _lifecycle, _lane);
             await DisposeLaunchClientAsync(); // after _home above — its only caller
             // all already disposed above — never let a later OnShutdownRequested (e.g. Cmd+Q
             // while the error window is up) dispose any of them a second time
@@ -203,6 +208,7 @@ public partial class App : Application {
             _pause = null;
             _activity = null;
             _home = null;
+            _rail = null;
             _wizardAuth = null; // its attempt, if any, already settled through the wizard's own close path
             _wizardImport = null; // same — any in-flight run already settled through the wizard's own close path
             _wizardWindow = null;
@@ -311,7 +317,9 @@ public partial class App : Application {
         _coordinator = new MainWindowCoordinator(
             () => BuildAndShowMainWindow(
                 service, _config, actions, notifier, ticker, _shutdown.Token, activity, lifecycle.StartActionAsync,
-                lifecycleStatus, launch, _navigation, _workspaceTeardown.Track, BuildWorkspace),
+                lifecycleStatus, launch, _navigation, _workspaceTeardown.Track, BuildWorkspace,
+                // The tenant slug the rail footer shows — profiles are named after it at sign-in.
+                tenantName: profiles?.Resolution?.ProfileName),
             // Both close paths release the workspace: hide-to-tray keeps the window (and its
             // attach) alive, a real close discards the window the next Show() would rebuild.
             releaseWorkspace: window => (window.DataContext as MainWindowViewModel)?.CloseWorkspace());
@@ -326,6 +334,7 @@ public partial class App : Application {
         // the window's own DataContext rather than threading a new parameter through, so
         // AppStartupTests' existing direct call to that method needs no change.
         _home = (_coordinator.Window?.DataContext as MainWindowViewModel)?.Home;
+        _rail = (_coordinator.Window?.DataContext as MainWindowViewModel)?.Rail;
 
         // LAST, deliberately (spec §9): anything above throwing lands in the catch with no
         // tray icon ever created, leaving the error window as the only surface.
@@ -625,7 +634,7 @@ public partial class App : Application {
             CancellationToken shutdownToken, ActivityViewModel activity, Func<CancellationToken, Task>? startAction = null,
             IObservable<string?>? lifecycleStatus = null, ILaunchClient? launch = null,
             NavigationGate? navigation = null, Action<Func<Task>>? trackWorkspaceTeardown = null,
-            Func<string, WorkspaceViewModel>? workspaceFactory = null) {
+            Func<string, WorkspaceViewModel>? workspaceFactory = null, string? tenantName = null) {
         // Notifier is set on the WINDOW (spec §11 toast overlay), not the ViewModel — the toast
         // is a View-level concern (WindowNotificationManager lives on MainWindow) independent of
         // the VM's WhenActivated-scoped projections.
@@ -649,9 +658,13 @@ public partial class App : Application {
             openSession: agentId => vm?.OpenSession(agentId),
             navigationGeneration: () => vm?.NavigationGeneration ?? 0,
             openSessionIfCurrent: (agentId, generation) => vm?.OpenSessionIfCurrent(agentId, generation));
+        // Same knot as home above, over the SAME `service` instance — its own openSession
+        // callback closes over `vm`, not a local, so no two-step forward-declaration is needed.
+        var rail = new SessionRailViewModel(service, openSession: agentId => vm?.OpenSession(agentId));
         vm = new MainWindowViewModel(
-            service, actions, ticker, shutdownToken, activity, startAction, lifecycleStatus, home: home,
-            navigation: navigation, trackWorkspaceTeardown: trackWorkspaceTeardown, workspaceFactory: workspaceFactory);
+            service, shutdownToken, activity, startAction, lifecycleStatus, home: home,
+            navigation: navigation, trackWorkspaceTeardown: trackWorkspaceTeardown, workspaceFactory: workspaceFactory,
+            rail: rail, tenantName: tenantName);
         var window = new MainWindow {
             DataContext = vm,
             Notifier = notifier,
@@ -1104,7 +1117,7 @@ public partial class App : Application {
             // disposed one. A resolve already in flight was cancelled by _shutdown at the top of
             // OnShutdownRequested and settles on the ViewModel's silent-abort path.
             await DisposeUiThenConfirmShutdownAsync(
-                [_tray, _trayVm, _promptCoordinator, _consent, _activity, _home, _pause],
+                [_tray, _trayVm, _promptCoordinator, _consent, _activity, _home, _rail, _pause],
                 DisposeLifecycleAndServiceAsync, () => _shutdownConfirmed = true, desktop, _exitCode);
         } else {
             await DisposeLifecycleAndServiceAsync();

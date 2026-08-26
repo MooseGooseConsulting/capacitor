@@ -80,7 +80,7 @@ public class WorkspaceNavigationTests {
         gate ??= new NavigationGate();
 
         var vm = new MainWindowViewModel(
-            daemon, actions, new FakeTicker(), CancellationToken.None, TestActivity.New(),
+            daemon, CancellationToken.None, TestActivity.New(),
             navigation: gate,
             trackWorkspaceTeardown: track ?? tracker.Track,
             workspaceFactory: agentId => {
@@ -119,11 +119,8 @@ public class WorkspaceNavigationTests {
 
             await Assert.That(nav.Vm.CurrentWorkspace).IsNotNull();
             await Assert.That(nav.Vm.CurrentWorkspace!.AgentId).IsEqualTo(Id1);
-            // The window binds Back to the VM's own close command — never left null on a workspace
-            // the VM itself built (WorkspaceView hides the button while it is).
-            await Assert.That(nav.Vm.CurrentWorkspace!.BackCommand).IsNotNull();
 
-            await nav.Vm.CurrentWorkspace!.BackCommand!.Execute();
+            await nav.Vm.CloseWorkspaceCommand.Execute();
 
             await Assert.That(nav.Vm.CurrentWorkspace).IsNull();
             await Assert.That(nav.Tracker.Registered.Count).IsEqualTo(1);

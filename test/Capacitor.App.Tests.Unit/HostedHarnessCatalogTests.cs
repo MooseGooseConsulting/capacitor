@@ -94,4 +94,32 @@ public class HostedHarnessCatalogTests {
         await Assert.That(HostedHarnessCatalog.EffectiveFamily(null, "claude")).IsEqualTo("pty");
         await Assert.That(HostedHarnessCatalog.EffectiveFamily(true, "claude")).IsEqualTo("pty");
     }
+
+    [Test]
+    public async Task Model_choices_are_curated_for_the_pty_vendors_and_empty_elsewhere() {
+        await Assert.That(HostedHarnessCatalog.ModelChoicesFor("claude").Count).IsGreaterThan(0);
+        await Assert.That(HostedHarnessCatalog.ModelChoicesFor("codex").Count).IsGreaterThan(0);
+        await Assert.That(HostedHarnessCatalog.ModelChoicesFor("gemini")).IsEmpty();
+        await Assert.That(HostedHarnessCatalog.ModelChoicesFor("no-such-vendor")).IsEmpty();
+    }
+
+    [Test]
+    public async Task Every_mapped_vendor_has_a_tile_and_unknown_tokens_get_an_initial() {
+        // Same guard shape as the TransportFamilies pin: adding a vendor means one catalog file.
+        foreach (var vendor in HostedHarnessCatalog.MappedVendors) {
+            var (glyph, color) = HostedHarnessCatalog.TileFor(vendor);
+            await Assert.That(glyph).IsNotEmpty();
+            await Assert.That(color).StartsWith("#");
+        }
+        await Assert.That(HostedHarnessCatalog.TileFor("zed").Glyph).IsEqualTo("Z");
+    }
+
+    [Test]
+    public async Task Model_label_prefers_the_curated_name_and_falls_back_to_the_slug() {
+        await Assert.That(HostedHarnessCatalog.ModelLabelFor("claude", "claude-fable-5")).IsEqualTo("Claude Fable 5");
+        await Assert.That(HostedHarnessCatalog.ModelLabelFor("claude", "CLAUDE-FABLE-5")).IsEqualTo("Claude Fable 5");
+        await Assert.That(HostedHarnessCatalog.ModelLabelFor("claude", "some-future-id")).IsEqualTo("some-future-id");
+        await Assert.That(HostedHarnessCatalog.ModelLabelFor("claude", "")).IsEqualTo("default");
+        await Assert.That(HostedHarnessCatalog.ModelLabelFor("gemini", "  ")).IsEqualTo("default");
+    }
 }

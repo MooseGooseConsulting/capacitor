@@ -13,6 +13,7 @@
             <SolidColorBrush x:Key="KcapBorderBrush" Color="#2A3040" />
             <SolidColorBrush x:Key="KcapTextBrush" Color="#F1F3F7" />
             <SolidColorBrush x:Key="KcapMutedBrush" Color="#9299AA" />
+            <SolidColorBrush x:Key="KcapFaintBrush" Color="#6F7687" />
             <SolidColorBrush x:Key="KcapAccentBrush" Color="#5BE0B3" />
             <SolidColorBrush x:Key="KcapAccentDimBrush" Color="#173F36" />
             <SolidColorBrush x:Key="KcapWarningBrush" Color="#F4B860" />
@@ -23,5 +24,14 @@
     </Application.Resources>
     <Application.Styles>
         <FluentTheme />
+        <!-- Popup panels drawn on our tokens: the flyout presenter IS the panel (no inner Border
+             fighting the theme's own chrome). Opted into per flyout via FlyoutPresenterClasses. -->
+        <Style Selector="FlyoutPresenter.kcapPanel">
+            <Setter Property="Background" Value="{StaticResource KcapSurfaceBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="12" />
+            <Setter Property="Padding" Value="0" />
+        </Style>
     </Application.Styles>
 </Application>
