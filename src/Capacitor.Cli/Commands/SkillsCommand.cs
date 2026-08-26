@@ -17,7 +17,12 @@ namespace Capacitor.Cli.Commands;
 class SkillsCommand(ConfigRoot config, ProfileContext profiles) {
     const string Vendor = "claude";
 
-    public async Task<int> HandleSync(bool dryRun) {
+    // The background refresh keys off the manifest's synced_at, so a burst of session starts
+    // costs one network round-trip per interval, not one per session.
+    static readonly TimeSpan AutoSyncInterval = TimeSpan.FromHours(6);
+
+    public async Task<int> HandleSync(bool dryRun, bool auto = false) {
+        void Info(string line) { if (!auto) Console.WriteLine(line); }
         var baseUrl = profiles.Resolution.ServerUrl!;
         var cwd = Environment.CurrentDirectory;
 
@@ -32,8 +37,26 @@ class SkillsCommand(ConfigRoot config, ProfileContext profiles) {
         }
         var hash = RepoHashHelper.ComputeRepoHash(repo.Owner, repo.RepoName);
 
-        var manifestPath = config.Path("skills", hash, Vendor, "manifest.json");
+        var manifestName = Path.Combine("skills", hash, Vendor, "manifest.json");
+        var manifestPath = config.Path(manifestName);
+
+        // One sync per (repo, harness) at a time, machine-wide: a burst of session starts must
+        // collapse to ONE refresh — the throttle alone cannot do that, since every child of the
+        // burst reads the same stale synced_at before the winner stamps it. The manifest is
+        // re-read UNDER the lock, so waiters see the winner's stamp. In auto mode contention IS
+        // the answer (someone else is refreshing); a manual sync reports it instead.
+        IDisposable syncLock;
+        try {
+            syncLock = config.AcquireLock(manifestName, auto ? TimeSpan.FromMilliseconds(1) : null);
+        } catch (TimeoutException) {
+            if (auto) return 0;
+            await Console.Error.WriteLineAsync("Another kcap skills sync is already running for this repo.");
+            return 1;
+        }
+        using var heldSyncLock = syncLock;
+
         if (!TryLoadManifest(manifestPath, out var manifest)) return 1;
+        if (auto && AutoThrottled(manifest, DateTimeOffset.UtcNow)) return 0;
 
         // Metadata alone cannot prove a skill is served: a deleted or hand-edited SKILL.md must be
         // re-materialized, so local drift forfeits the conditional request — a 304 would otherwise
@@ -58,7 +81,7 @@ class SkillsCommand(ConfigRoot config, ProfileContext profiles) {
 
         if (resp.StatusCode == HttpStatusCode.NotModified) {
             if (!dryRun) SaveManifest(manifestPath, manifest! with { SyncedAt = DateTimeOffset.UtcNow });
-            Console.WriteLine($"Skills up to date ({manifest?.Skills?.Length ?? 0} materialized).");
+            Info($"Skills up to date ({manifest?.Skills?.Length ?? 0} materialized).");
             return 0;
         }
         if (await HttpClientExtensions.HandleUnauthorizedAsync(resp)) return 1;
@@ -100,22 +123,28 @@ class SkillsCommand(ConfigRoot config, ProfileContext profiles) {
 
         if (writes.Count == 0 && plan.Prunes.Count == 0) {
             if (!dryRun) SaveManifest(manifestPath, BuildManifest(dto.Etag, snapshot, root));
-            Console.WriteLine($"Skills up to date ({snapshot.Length} materialized).");
+            Info($"Skills up to date ({snapshot.Length} materialized).");
             return 0;
         }
 
         foreach (var w in writes)
-            Console.WriteLine($"{(dryRun ? "would write" : "write"),-12} {ClaudeSkillsMaterializer.SkillDirFor(root, w.Slug)} (v{w.Version})");
+            Info($"{(dryRun ? "would write" : "write"),-12} {ClaudeSkillsMaterializer.SkillDirFor(root, w.Slug)} (v{w.Version})");
         foreach (var p in plan.Prunes)
-            Console.WriteLine($"{(dryRun ? "would prune" : "prune"),-12} {p.Path}");
+            Info($"{(dryRun ? "would prune" : "prune"),-12} {p.Path}");
         if (dryRun) return 0;
 
         foreach (var w in writes) ClaudeSkillsMaterializer.Write(root, w);
         foreach (var p in plan.Prunes) ClaudeSkillsMaterializer.Prune(root, p);
         SaveManifest(manifestPath, BuildManifest(dto.Etag, snapshot, root));
-        Console.WriteLine($"Synced {writes.Count} skill(s), pruned {plan.Prunes.Count}; {snapshot.Length} materialized.");
+        Info($"Synced {writes.Count} skill(s), pruned {plan.Prunes.Count}; {snapshot.Length} materialized.");
         return 0;
     }
+
+    internal static bool AutoThrottled(SkillsManifest? manifest, DateTimeOffset now) =>
+        // A future stamp (clock correction, tampered file) must read as stale, not as an
+        // unbounded suppression of every revocation refresh until that future arrives.
+        manifest?.SyncedAt is { } syncedAt && now - syncedAt is { } age
+            && age >= TimeSpan.Zero && age < AutoSyncInterval;
 
     static SkillsManifest BuildManifest(string? etag, SkillSnapshotItem[] snapshot, string root) => new() {
         Etag = etag, SyncedAt = DateTimeOffset.UtcNow,
