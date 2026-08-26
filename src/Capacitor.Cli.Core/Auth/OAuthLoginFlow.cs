@@ -79,13 +79,14 @@ public static class OAuthLoginFlow {
 
     /// <summary>
     /// What a session with no keyboard is told once discovery has found no workspace. Signing in
-    /// headless works; creating a workspace asks for an organization name and a slug, and there is
-    /// nothing to ask on — so this is the only step of the two that still needs a terminal.
+    /// headless works; creating a workspace asks for an organization name and a slug, so without a
+    /// terminal those two have to arrive as flags instead.
     /// </summary>
     internal static string WorkspaceCreationNeedsATerminalMessage() =>
-        "Creating a workspace needs an interactive terminal, and this session is non-interactive.\n"
-      + $"  • Create one at {ProvisioningEndpoint.Url}/signup, then run: kcap setup <slug>\n"
-      + "  • Or point at a workspace you already belong to: kcap setup --server-url <url>";
+        "Creating a workspace asks for a name and a slug, and this session is non-interactive.\n"
+      + "  • Answer up front: kcap setup --org \"<name>\" --slug <slug> --no-prompt\n"
+      + $"  • Or create one at {ProvisioningEndpoint.Url}/signup, then run: kcap setup <slug> --no-prompt\n"
+      + "  • Or point at a workspace you already belong to: kcap setup --server-url <url> --no-prompt";
 
     /// <summary>
     /// `kcap login` runs tenant discovery when there's no configured server (nothing to log into yet)

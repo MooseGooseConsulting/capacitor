@@ -1055,4 +1055,193 @@ public class SetupCommandTests {
             }
         }
     }
+
+    // --- --org / --slug, the create-a-workspace prompts answered up front ---
+
+    static (RequestedWorkspace? Workspace, string? Error) Parse(params string[] args) =>
+        SetupCommand.ParseRequestedWorkspace(args, haveServerUrl: false);
+
+    [Test]
+    public async Task ParseRequestedWorkspace_asks_for_nothing_when_neither_flag_is_passed() {
+        var (workspace, error) = Parse("setup", "--no-prompt");
+
+        await Assert.That(workspace).IsNull();
+        await Assert.That(error).IsNull();
+    }
+
+    [Test]
+    public async Task ParseRequestedWorkspace_carries_both_answers_through() {
+        var (workspace, error) = Parse("setup", "--org", "  Acme  ", "--slug", "  ACME  ");
+
+        await Assert.That(error).IsNull();
+        await Assert.That(workspace!.OrgName).IsEqualTo("Acme");
+        await Assert.That(workspace.Slug).IsEqualTo("acme");
+        await Assert.That(workspace.Origin).IsEqualTo("https://acme.kcap.ai");
+    }
+
+    [Test]
+    public async Task ParseRequestedWorkspace_refuses_half_a_pair() {
+        await Assert.That(Parse("setup", "--org", "Acme").Error).Contains("--slug");
+        await Assert.That(Parse("setup", "--slug", "acme").Error).Contains("--org");
+    }
+
+    [Test]
+    public async Task ParseRequestedWorkspace_refuses_a_flag_where_a_value_should_be() {
+        var (workspace, error) = Parse("setup", "--org", "--slug", "acme");
+
+        await Assert.That(workspace).IsNull();
+        await Assert.That(error!).Contains("--org needs a value");
+    }
+
+    [Test]
+    public async Task ParseRequestedWorkspace_refuses_a_flag_with_no_value_at_all() {
+        await Assert.That(Parse("setup", "--slug", "acme", "--org").Error!).Contains("--org needs a value");
+    }
+
+    [Test]
+    public async Task ParseRequestedWorkspace_refuses_a_blank_value() {
+        await Assert.That(Parse("setup", "--org", "   ", "--slug", "acme").Error!).Contains("--org needs a value");
+        await Assert.That(Parse("setup", "--org", "Acme", "--slug", "   ").Error!).Contains("--slug needs a value");
+    }
+
+    // Not this CLI's spelling, so an exact-token search cannot see it - and the flags would be
+    // dropped in silence, which is the one outcome this parse refuses.
+    [Test]
+    public async Task ParseRequestedWorkspace_refuses_the_equals_spelling() {
+        await Assert.That(Parse("setup", "--org=Acme", "--slug=acme").Error!).Contains("--org needs a value");
+    }
+
+    [Test]
+    public async Task ParseRequestedWorkspace_refuses_an_empty_value() {
+        await Assert.That(Parse("setup", "--org", "", "--slug", "acme").Error!).Contains("--org needs a value");
+    }
+
+    // Caught here rather than only on the path that reaches the provisioner, so one message describes
+    // a malformed slug wherever the run happens to notice it.
+    [Test]
+    public async Task ParseRequestedWorkspace_refuses_a_slug_that_could_never_be_a_hostname() {
+        await Assert.That(Parse("setup", "--org", "Acme", "--slug", "Acme Corp").Error!).Contains("not a valid slug");
+        await Assert.That(Parse("setup", "--org", "Acme", "--slug", "api").Error!).Contains("reserved");
+    }
+
+    [Test]
+    public async Task ParseRequestedWorkspace_refuses_to_create_and_point_at_a_positional_tenant_at_once() {
+        var (workspace, error) = SetupCommand.ParseRequestedWorkspace(
+            ["setup", "acme", "--org", "Acme", "--slug", "acme"], haveServerUrl: true);
+
+        await Assert.That(workspace).IsNull();
+        await Assert.That(error!).Contains("kcap setup <tenant>");
+    }
+
+    [Test]
+    public async Task ParseRequestedWorkspace_refuses_to_create_and_point_at_a_server_at_once() {
+        var (workspace, error) = SetupCommand.ParseRequestedWorkspace(
+            ["setup", "--org", "Acme", "--slug", "acme"], haveServerUrl: true);
+
+        await Assert.That(workspace).IsNull();
+        await Assert.That(error!).Contains("--server-url");
+    }
+
+    static Task Guard(RequestedWorkspace requested, params string[] profiles) =>
+        SetupCommand.WorkspaceGuard(requested)!(
+            [.. profiles.Select(p => new AuthIdentity(p, $"https://{p}.kcap.ai"))], CancellationToken.None);
+
+    // Refusing on the commit boundary's last cancellable step is what keeps the stop free of a
+    // published profile, stamp or token.
+    [Test]
+    public async Task WorkspaceGuard_refuses_a_commit_that_would_publish_another_workspace() {
+        var thrown = await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await Guard(new RequestedWorkspace("Acme", "acme"), "globex"));
+
+        await Assert.That(thrown!.Message).Contains("acme");
+        await Assert.That(thrown.Message).Contains("globex");
+    }
+
+    // A re-run once the workspace exists lands on it, which is the asked-for outcome.
+    [Test]
+    public async Task WorkspaceGuard_lets_the_workspace_that_was_asked_for_through() {
+        await Guard(new RequestedWorkspace("Acme", "acme"), "acme");
+    }
+
+    // The profile name is the comparison, not the URL: the server names the workspace it creates, so
+    // a url in any other shape must not read as landing somewhere else.
+    [Test]
+    public async Task WorkspaceGuard_judges_by_slug_rather_than_by_the_url_the_server_returned() {
+        await Guard(new RequestedWorkspace("Acme", "acme"), "acme");
+
+        await SetupCommand.WorkspaceGuard(new RequestedWorkspace("Acme", "acme"))!(
+            [new AuthIdentity("acme", "https://acme.eu.kcap.ai")], CancellationToken.None);
+    }
+
+    [Test]
+    public async Task WorkspaceGuard_is_absent_when_no_workspace_was_asked_for() {
+        await Assert.That(SetupCommand.WorkspaceGuard(null)).IsNull();
+    }
+
+    // These drive argv. The three rejections return before any config read, network call or console
+    // rule, so they need none of the E2E fixture below.
+    [Test]
+    [NotInParallel]
+    public async Task HandleAsync_rejects_half_a_pair_before_doing_anything() {
+        using var capture = ConsoleOutput.StartErrorCapture();
+
+        var exit = await new SetupCommand(Config.Root, Resolutions.None(Config.Root), new RecordingBrowser()).HandleAsync(["setup", "--org", "Acme"]);
+
+        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(capture.GetCapturedError()).Contains("--slug");
+    }
+
+    [Test]
+    [NotInParallel]
+    public async Task HandleAsync_rejects_creating_and_pointing_at_a_server_at_once() {
+        using var capture = ConsoleOutput.StartErrorCapture();
+
+        var exit = await new SetupCommand(Config.Root, Resolutions.None(Config.Root), new RecordingBrowser()).HandleAsync(
+            ["setup", "--org", "Acme", "--slug", "acme", "--server-url", "https://other.kcap.ai"]);
+
+        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(capture.GetCapturedError()).Contains("--server-url");
+    }
+
+    [Test]
+    [NotInParallel]
+    public async Task HandleAsync_rejects_a_provider_that_cannot_create() {
+        using var capture = ConsoleOutput.StartErrorCapture();
+
+        var exit = await new SetupCommand(Config.Root, Resolutions.None(Config.Root), new RecordingBrowser()).HandleAsync(["setup", "--org", "Acme", "--slug", "acme", "--github"]);
+
+        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(capture.GetCapturedError()).Contains("--github");
+    }
+
+    [Test]
+    [NotInParallel]
+    public async Task HandleAsync_still_requires_a_server_url_with_no_prompt_and_no_answers() {
+        using var capture = ConsoleOutput.StartErrorCapture();
+
+        var exit = await new SetupCommand(Config.Root, Resolutions.None(Config.Root), new RecordingBrowser()).HandleAsync(["setup", "--no-prompt"]);
+
+        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(capture.GetCapturedError()).Contains("--server-url is required");
+        await Assert.That(capture.GetCapturedError()).Contains("--org");
+    }
+
+    // Presence, not value: a valueless --server-url parses as absent, and taking that as "no conflict"
+    // turns a run meant to point at a workspace into one that creates a different one.
+    [Test]
+    public async Task ParseRequestedWorkspace_refuses_a_server_flag_that_carries_no_value() {
+        var (workspace, error) = SetupCommand.ParseRequestedWorkspace(
+            ["setup", "--org", "Acme", "--slug", "acme", "--server-url"], haveServerUrl: true);
+
+        await Assert.That(workspace).IsNull();
+        await Assert.That(error!).Contains("--server-url");
+    }
+
+    [Test]
+    public async Task ParseRequestedWorkspace_refuses_a_provider_that_cannot_create() {
+        var (workspace, error) = Parse("setup", "--org", "Acme", "--slug", "acme", "--github");
+
+        await Assert.That(workspace).IsNull();
+        await Assert.That(error!).Contains("--github");
+    }
 }

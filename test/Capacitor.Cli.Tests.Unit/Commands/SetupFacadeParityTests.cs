@@ -184,6 +184,53 @@ public class SetupFacadeParityTests {
         await Assert.That(console.GetCapturedError()).Contains(SetupAuthProgress.UnreachableGuidance);
     }
 
+    // The flags must reach the provisioner discovery is given, and the workspace it lands on must be
+    // checked against them once it commits.
+
+    [Test]
+    [NotInParallel]
+    public async Task RunDiscoveryAsync_hands_the_requested_workspace_to_the_provisioner() {
+        using var handler = AuthHttp.Script(); // no /config route — discovery fails after construction
+
+        ITenantProvisioner? captured = null;
+        SetupCommand.FacadeOverride = provisioner => {
+            captured = provisioner;
+            return NewFacade(Config.Root, new RecordingAuthProgress(), handler);
+        };
+
+        await new SetupCommand(Config.Root, Resolutions.None(Config.Root), new RecordingBrowser())
+            .RunDiscoveryAsync([], forceDevice: true, new RequestedWorkspace("Acme", "acme"));
+
+        await Assert.That(captured).IsTypeOf<SpectreTenantProvisioner>();
+        await Assert.That(((SpectreTenantProvisioner)captured!).Scripted).IsTrue();
+    }
+
+    // The guard is only worth anything if the boundary is the thing that refuses, so this drives the
+    // real facade with it attached and asserts nothing durable was written.
+    [Test]
+    [NotInParallel]
+    public async Task A_commit_that_would_publish_another_workspace_writes_nothing() {
+        using var handler = AuthHttp.Script(
+            proxyConfig: """{"github_client_id":"cid"}""",
+            tenants: TwoGitHubTenants);
+
+        var progress = new RecordingAuthProgress();
+        var facade   = NewFacade(Config.Root, progress, handler, PickerReturningFirst(),
+            beforeCommit: SetupCommand.WorkspaceGuard(new RequestedWorkspace("Globex", "globex")));
+
+        var result = await facade.DiscoverAsync(AuthProvider.GitHubApp, forceDevice: true, CancellationToken.None);
+
+        await Assert.That(result).IsTypeOf<AuthResult.Failed>();
+        await Assert.That(TokenFileExists("acme")).IsFalse();
+        await Assert.That(TokenFileExists("contoso")).IsFalse();
+
+        var cfg = ReadConfig();
+
+        await Assert.That(cfg.Profiles.ContainsKey("acme")).IsFalse();
+        await Assert.That(cfg.ActiveProfile).IsNotEqualTo("acme");
+        await Assert.That(string.Join("\n", progress.Errors)).Contains("globex");
+    }
+
     // ── the setup-scoped progress sink ───────────────────────────────────────
 
     [Test]
