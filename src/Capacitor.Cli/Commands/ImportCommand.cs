@@ -1369,17 +1369,17 @@ class ImportCommand(ConfigRoot config, ProfileContext profiles) {
         // deliberately a separate issue, not something this gate covers.
         var privateScopeSessionIds = new ConcurrentBag<string>();
 
-        // Every session the scope selected, captured before the import rather than from its outcome.
-        // importedSessionIds gains one only where this run did new work, so a session already fully
-        // loaded — the ordinary case for a re-run, and one discovery still counts and offers — would
-        // never receive the explicit visibility the user chose for it.
+        // Every in-scope session the server already has, captured before the import rather than from
+        // its outcome. A stamp cannot narrow a session that already exists, and importedSessionIds
+        // gains one only where this run did new work — so for anything this run merely revisits, the
+        // explicit write is the only mechanism there is, and an outcome must not decide whether the
+        // visibility the user chose is applied.
         var scopedSessionIds = new ConcurrentBag<string>();
 
         // Sessions whose explicit visibility write was lost — part of the run's outcome, because one
         // the user chose a visibility for that still carries the old one is a failure of the thing
         // they asked for, whatever the transcript did.
         var visibilityFailures = 0;
-
         // Read-only inside the parallel loops below; resolved from the sources actually in play.
         var replayChildContentVendors = byVendor.Values
             .Where(s => s.AttachesChildContentOnReplay)
@@ -1395,17 +1395,68 @@ class ImportCommand(ConfigRoot config, ProfileContext profiles) {
             _                                             => (prev.Loaded, prev.Skipped, prev.Failed + 1),
         };
 
-        // The chain path builds its own New-session-start payload (ImportSingleSessionAsync)
-        // and has no ImportContext/ForcePrivate of its own to guard against — so the
-        // force-private precedence is enforced HERE, up front, rather than via a per-call
-        // invariant. Zeroing it out before a New session's session-start POST guarantees a
-        // force-private import never stamps a non-private default, even if the session later
-        // fails mid-stream (before session-end / importedSessionIds, i.e. before the post-hoc
-        // SetVisibilityNoneForAll below would ever see it).
-        var chainDefaultVisibility = forcePrivate ? null : defaultVisibility;
+        // ImportContext.VisibilityStampFor's rule, for the one path that has no ImportContext. A
+        // stamp and not an omission: an absent default_visibility coalesces to org_public.
+        //
+        // It only decides a session's visibility AT CREATION. The read model's import-overlap branch
+        // omits default_visibility from its update, so a stamp on a session that already exists is
+        // discarded — which is why scopedSessionIds above, and not this, is what privacy rests on
+        // for anything this run only revisits.
+        var chainDefaultVisibility = forcePrivate ? "private" : defaultVisibility;
 
-        // Shared only. Private-set membership has rules of its own — see privateScopeSessionIds and
-        // RoutedPrivatizeMembershipTests — and widening it from here would overturn them sideways.
+        // Close the window before anything is uploaded into it.
+        //
+        // A stamp cannot narrow a session that already exists, so for one this run revisits the only
+        // way to avoid publishing new content into a session the user just asked to be private is to
+        // make it private FIRST. New sessions are absent on purpose: they do not exist yet, so there
+        // is nothing to narrow and their creation stamp is the mechanism that works.
+        //
+        // The closing pass stays, as recovery for a session created during the run.
+        //
+        // <b>Fail-closed per session.</b> The write is best-effort — it logs and swallows — so awaiting
+        // it does not establish that anything is private. A session whose write was lost is dropped
+        // from this run instead: uploading into it would publish new content to exactly the audience
+        // the user just excluded, which is worse than not importing it at all.
+        if (forcePrivate) {
+            var existing = classifications
+                .Where(c => c.Status is ClassificationStatus.Partial
+                                     or ClassificationStatus.AlreadyLoaded)
+                .Select(c => c.SessionId)
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
+
+            if (existing.Count > 0) {
+                display.BeginPhase("Making existing sessions private");
+
+                var unprivatized = await SetVisibilityNoneForAll(httpClient, baseUrl, existing);
+
+                if (unprivatized.Count > 0) {
+                    var blocked = unprivatized.ToHashSet(StringComparer.Ordinal);
+
+                    visibilityFailures += blocked.Count;
+
+                    chains = [
+                        .. chains
+                            .Select(chain => chain.Where(c => !blocked.Contains(c.SessionId)).ToList())
+                            .Where(chain => chain.Count > 0)
+                    ];
+
+                    routed = [.. routed.Where(c => !blocked.Contains(c.SessionId))];
+
+                    foreach (var sessionId in blocked) {
+                        await Console.Error.WriteLineAsync(
+                            $"  ! skipping {sessionId}: could not make it private first, and importing "
+                          + "into it would publish new content to the audience it already has");
+                    }
+                }
+            }
+        }
+
+        // The shared stop only, because it is the only one with nothing else: there is no pass above it
+        // (sharing widens, so it opens no window to close) and no stamp it can use, since org_public as
+        // a default lands in `default:org` rather than the class the predicate admits unconditionally.
+        // Under --private this would add writes and no protection — New is private from creation and
+        // everything else was narrowed above.
         //
         // Status carries both filters by this point: the scope filter ran before classification, and an
         // excluded source had its status flipped to Excluded — so these three statuses are exactly the
@@ -1739,9 +1790,12 @@ class ImportCommand(ConfigRoot config, ProfileContext profiles) {
         //
         // The set unions three: importedSessionIds (what did new work), privateScopeSessionIds
         // (routed classifications under --private whose source can attach child content on a replay),
-        // and scopedSessionIds (every in-scope session the server has, populated for the shared stop
-        // alone). Widening, never replacing — an outcome must not decide whether the visibility the
-        // user chose is applied.
+        // and scopedSessionIds (every in-scope session the server has). Widening, never replacing —
+        // an outcome must not decide whether the visibility the user chose is applied.
+        //
+        // For the private stop this is recovery only: New sessions are private from creation, existing
+        // ones were narrowed before any content moved, and what is left here is a retry for a write
+        // that pass lost. scopedSessionIds is therefore empty under --private, by design.
         if (ExplicitVisibility(forcePrivate, shareWithOrg) is { } explicitVisibility) {
             var touched = new HashSet<string>(importedSessionIds, StringComparer.Ordinal);
             touched.UnionWith(privateScopeSessionIds);
@@ -1751,8 +1805,8 @@ class ImportCommand(ConfigRoot config, ProfileContext profiles) {
                 display.BeginPhase(forcePrivate
                     ? "Marking imported sessions private"
                     : "Sharing imported sessions with your workspace");
-                visibilityFailures = await SetVisibilityForAll(
-                    httpClient, baseUrl, [.. touched], explicitVisibility);
+                visibilityFailures += (await SetVisibilityForAll(
+                    httpClient, baseUrl, [.. touched], explicitVisibility)).Count;
             }
         }
 
@@ -2951,9 +3005,7 @@ class ImportCommand(ConfigRoot config, ProfileContext profiles) {
         if (meta.FirstTimestamp is not null) startHook["started_at"]                = meta.FirstTimestamp.Value.ToString("O");
         if (session.PreviousSessionId is not null) startHook["previous_session_id"] = session.PreviousSessionId;
         if (meta.Slug is not null) startHook["slug"]                                = meta.Slug;
-        // Step 3 visibility stamp (New-only — this branch only runs for ClassificationStatus.New;
-        // Partial returned above). The caller (HandleImport) already zeroed this out under
-        // forcePrivate, so no separate check is needed here.
+        // New-only: this branch runs only for ClassificationStatus.New, Partial having returned above.
         if (defaultVisibility is not null) startHook["default_visibility"]          = defaultVisibility;
 
         // best-effort git-root discovery from the (already remap-resolved) cwd, so
@@ -3145,7 +3197,7 @@ class ImportCommand(ConfigRoot config, ProfileContext profiles) {
     }
 
     /// <summary>PUT visibility=none for every imported session id.</summary>
-    internal static Task<int> SetVisibilityNoneForAll(
+    internal static Task<IReadOnlyList<string>> SetVisibilityNoneForAll(
             HttpClient            httpClient,
             string                baseUrl,
             IReadOnlyList<string> sessionIds
@@ -3153,17 +3205,18 @@ class ImportCommand(ConfigRoot config, ProfileContext profiles) {
 
     /// <summary>
     /// Failures are logged inline (one line per session) but never throw — the import already
-    /// succeeded; users can re-run `kcap hide` or `kcap share` for any that failed. <b>Returns how
-    /// many were lost</b>, because a caller reporting the run cannot call it a success while a session
-    /// the user chose a visibility for still carries the old one.
+    /// succeeded; users can re-run `kcap hide` or `kcap share` for any that failed. <b>Returns the ids
+    /// it could not write</b>, because a caller cannot report the run a success while a session the
+    /// user chose a visibility for still carries the old one — and a caller writing BEFORE the content
+    /// has to know which sessions it must now leave alone.
     /// </summary>
-    internal static async Task<int> SetVisibilityForAll(
+    internal static async Task<IReadOnlyList<string>> SetVisibilityForAll(
             HttpClient            httpClient,
             string                baseUrl,
             IReadOnlyList<string> sessionIds,
             string                visibility
         ) {
-        var lost = 0;
+        var lost = new List<string>();
 
         foreach (var sessionId in sessionIds) {
             var       payload = new JsonObject { ["visibility"] = visibility };
@@ -3176,14 +3229,14 @@ class ImportCommand(ConfigRoot config, ProfileContext profiles) {
                 );
 
                 if (!resp.IsSuccessStatusCode) {
-                    lost++;
+                    lost.Add(sessionId);
 
                     await Console.Error.WriteLineAsync(
                         $"  ! visibility={visibility} failed for {sessionId}: HTTP {(int)resp.StatusCode}"
                     );
                 }
             } catch (Exception ex) {
-                lost++;
+                lost.Add(sessionId);
 
                 await Console.Error.WriteLineAsync(
                     $"  ! visibility={visibility} failed for {sessionId}: {ex.Message}"

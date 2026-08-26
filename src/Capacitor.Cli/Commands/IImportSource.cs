@@ -41,17 +41,31 @@ internal sealed record ClassifyContext(
 
 /// <summary>
 /// Dependencies passed to ImportSessionAsync. ForcePrivate carries the
-/// effective --private flag from the orchestrator (so each source can
-/// stamp visibility consistently). DefaultVisibility carries the Step 3
-/// setup visibility choice (or null for standalone `kcap import`) — sources
-/// stamp it onto New sessions only, guarded by !ForcePrivate (see the
-/// unified-agent-install-and-import spec's Visibility section).
+/// effective --private flag from the orchestrator; DefaultVisibility carries
+/// the Step 3 setup visibility choice, or null for standalone `kcap import`.
+/// Neither is read directly by a source — <see cref="VisibilityStampFor"/> is.
 /// </summary>
 internal sealed record ImportContext(
     HttpClient HttpClient,
     string     BaseUrl,
     bool       ForcePrivate,
-    string?    DefaultVisibility = null);
+    string?    DefaultVisibility = null) {
+    /// <summary>
+    /// The <c>default_visibility</c> to stamp on a session-start, or null to leave the field off.
+    /// <b>An omitted stamp is not "no default"</b> — the server coalesces an absent one to
+    /// <c>org_public</c> — so force-private must say <c>private</c> out loud.
+    ///
+    /// <para>Asymmetric on purpose, and neither half narrows a session that already exists: the read
+    /// model's import-overlap branch omits this column, so a stamp is a creation-time value only. The
+    /// Step 3 default therefore lands on New alone, while <c>private</c> is sent on every status
+    /// because it costs nothing and the one status it can still reach is worth reaching. Privatising
+    /// an existing session is <c>HandleImport</c>'s closing pass, not this.</para>
+    /// </summary>
+    public string? VisibilityStampFor(ImportCommand.ClassificationStatus status) =>
+        ForcePrivate                                        ? "private"
+      : status is ImportCommand.ClassificationStatus.New    ? DefaultVisibility
+      :                                                       null;
+}
 
 internal enum ImportOutcome { Loaded, Resumed, Skipped, Failed }
 

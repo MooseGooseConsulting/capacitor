@@ -503,12 +503,9 @@ internal sealed class CursorImportSource : IImportSource {
         // Errored and the user re-runs, which is idempotent on the server
         // (canonical event ids are deterministic).
         var startPayload = BuildSessionStartPayload(classification.SessionId, workspaceFolder, transcriptPath, createdUtc, repositoryNode);
-        // Step 3 visibility stamp — New-only, and never overrides existing force-private
-        // handling (Cursor privatizes post-hoc via privateScopeSessionIds, not inline here;
-        // this guard still keeps the two mechanisms from conflicting). New for Cursor: the
-        // live hook has no default_visibility injection today, so this is import-only.
-        if (!ctx.ForcePrivate && classification.Status == ImportCommand.ClassificationStatus.New && ctx.DefaultVisibility is not null) {
-            startPayload["default_visibility"] = ctx.DefaultVisibility;
+        // The only Cursor path that stamps one: its live hook sets no default_visibility at all.
+        if (ctx.VisibilityStampFor(classification.Status) is { } visibility) {
+            startPayload["default_visibility"] = visibility;
         }
 
         var startOk = await PostSyntheticHookAsync(

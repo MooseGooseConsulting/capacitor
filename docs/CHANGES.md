@@ -7,6 +7,46 @@ Not release notes. Each entry is written as of the change that produced it and i
 code moves on; where an entry disagrees with the code, the code wins.
 
 
+## `--private` stamps a value
+
+An omitted `default_visibility` is not "no default": the server's generated column reads
+`COALESCE(default_visibility,'org_public') = 'org_public'`, so a session-start that says nothing
+lands as `default:org` — a class two `VisibilitySql` arms admit, one of them provider-independent.
+Six of the nine import sources omitted the field under `--private` and left privacy to the closing
+`SetVisibilityNoneForAll` pass, which meant minutes of org-visibility on a large import and
+permanent exposure for any session whose PUT failed, since those failures are swallowed by design.
+The other three stamped `"private"` in their own payload builder, which is why checking one source
+found it correct.
+
+`ImportContext.VisibilityStampFor(status)` is now the only place that decides the stamp, and the
+chain path resolves the same rule into `chainDefaultVisibility`. The Step-3 default lands on `New`
+alone, while `private` is sent on every status because it costs nothing.
+
+**A stamp only decides visibility at creation.** The read model's import-overlap branch — the one a
+re-import of an already-closed session takes — omits `default_visibility` from its update, so
+re-asserting `private` on a session that already exists is discarded. For anything a run merely
+revisits, the closing `visibility=none` pass is the only mechanism, which is why membership in it is
+now the in-scope classification set rather than whatever the import concluded: `importedSessionIds`
+gains a session only where new work happened, and `privateScopeSessionIds` excludes Copilot, Kiro, Pi
+and OpenCode, so a failed routed replay or a chain resume whose session-end POST failed was
+privatised by nothing. The bound is status — the scope filter runs before classification and an
+excluded source has its status flipped — so `New | Partial | AlreadyLoaded` is the selected-and-
+present set and a too-short session is left alone.
+
+**And it happens before the content, not after.** A closing pass guarantees a revisited session ends
+up owner-only; it does not stop what this run uploads into it being readable meanwhile, which is the
+window the defect is named after. So the in-scope `Partial` and `AlreadyLoaded` sessions are narrowed
+ahead of both import phases — `New` is excluded, having nothing to narrow and no row to name — and the
+closing pass becomes recovery for a session created during the run.
+
+That pass is fail-closed per session: the write logs and swallows its failures, so a session it could
+not narrow is dropped from `chains` and `routed` and counted as a failure, rather than replayed into
+while still carrying the audience the user just excluded.
+
+The 2026-07-20 unified-import spec scoped this expansion out while already arguing that post-hoc
+privatisation is unsafe for a session that fails mid-stream; this is that argument applied to the
+eight other paths.
+
 ## The first-run flow's import lane
 
 `kcap setup`'s browser leg now feeds and reads the Import screen. Discovery reports per repository AND
