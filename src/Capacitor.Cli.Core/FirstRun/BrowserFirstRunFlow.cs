@@ -6,12 +6,16 @@ namespace Capacitor.Cli.Core.FirstRun;
 /// the browser is opened so the flow has an owner from its first request, and the URL is composed
 /// here rather than taken from the server — nothing server-supplied reaches the shell-executed open
 /// to validate.</summary>
+/// <param name="actions">What this host can do to the machine when the browser asks. Null performs
+/// nothing, which is the honest state for a host with no such capability — the request stays outstanding
+/// and the screen goes on saying it is waiting.</param>
 public sealed class BrowserFirstRunFlow(
-        IFirstRunFlowChannel  channel,
-        IFirstRunFlowProgress progress,
-        IBrowserLauncher      launcher,
-        TimeProvider?         clock = null,
-        IKeyWatcher?          keys  = null) {
+        IFirstRunFlowChannel     channel,
+        IFirstRunFlowProgress    progress,
+        IBrowserLauncher         launcher,
+        TimeProvider?            clock   = null,
+        IKeyWatcher?             keys    = null,
+        IFirstRunMachineActions? actions = null) {
     readonly TimeProvider _clock = clock ?? TimeProvider.System;
     readonly IKeyWatcher  _keys  = keys ?? ConsoleKeyWatcher.Instance;
 
@@ -32,6 +36,11 @@ public sealed class BrowserFirstRunFlow(
     /// <summary>The delay is slept in slices this long so a keypress is noticed within one slice
     /// rather than after the whole interval — a 30s backoff must not swallow the escape hatch.</summary>
     static readonly TimeSpan KeyPollSlice = TimeSpan.FromMilliseconds(200);
+
+    /// <summary>Retries the finishing tick gives an outcome that has not been reported, on top of the
+    /// attempt it already made. Small: it covers a blip, and holding a finished flow open longer than that
+    /// trades the result the user is waiting for against a report they are no longer looking at.</summary>
+    const int FlushRetries = 2;
 
     /// <summary>
     /// How many fresh ids to try against a 409. A 409 means the id belongs to someone else, which
@@ -120,6 +129,12 @@ public sealed class BrowserFirstRunFlow(
 
         FirstRunFlowResponse? last = null;
 
+        // Keyed on the REQUEST, not the capability, so a second press after an outcome runs again. Two
+        // collections because they guard opposite things: an admin prompt must never be raised twice, and
+        // a report must keep being retried until it lands.
+        var performed = new Dictionary<FirstRunMachineActionRequest, FirstRunMachineActionResult>();
+        var reported  = new HashSet<FirstRunMachineActionRequest>();
+
         while (_clock.GetUtcNow() < deadline) {
             // Polled before the first sleep: a flow the browser has already finished — a resumed link,
             // or a tab that was quicker than this process — should not wait out an interval to be noticed.
@@ -154,7 +169,16 @@ public sealed class BrowserFirstRunFlow(
                     // at the speed the human works at.
                     interval = PollInterval;
 
-                    if (FirstRunFlowOutcomes.IsFinished(last!)) return new FirstRunFlowResult.Finished(last!);
+                    // Before the finished test, so a request made on the last screen is not abandoned by a
+                    // flow that settles in the same tick — and the finished test then runs again below,
+                    // because the budget can pass while the user answers an admin prompt.
+                    await PerformRequestedAsync(serverUrl, flowId, last!, performed, reported, ct);
+
+                    if (FirstRunFlowOutcomes.IsFinished(last!)) {
+                        await FlushReportsAsync(serverUrl, flowId, performed, reported, ct);
+
+                        return new FirstRunFlowResult.Finished(last!);
+                    }
 
                     progress.PollTick();
 
@@ -188,6 +212,101 @@ public sealed class BrowserFirstRunFlow(
         }
 
         return new FirstRunFlowResult.Abandoned(last);
+    }
+
+    /// <summary>Performs the actions the browser is asking for, and reports each one back. <b>Nothing here
+    /// composes a command from what the server said</b> — a capability token crossed, and the host resolves
+    /// the operation behind it.</summary>
+    async Task PerformRequestedAsync(
+            string                                                               serverUrl,
+            string                                                               flowId,
+            FirstRunFlowResponse                                                 view,
+            Dictionary<FirstRunMachineActionRequest, FirstRunMachineActionResult> performed,
+            HashSet<FirstRunMachineActionRequest>                                reported,
+            CancellationToken                                                    ct) {
+        if (actions is null) return;
+
+        foreach (var request in FirstRunFlowOutcomes.MachineActions(view)) {
+            // An unadvertised capability is left outstanding rather than reported as failed: "this machine
+            // cannot do that" and "it was tried and did not work" are different facts.
+            if (!actions.Capabilities.Contains(request.Capability, StringComparer.Ordinal)) continue;
+
+            if (!performed.TryGetValue(request, out var result)) {
+                // Said before the attempt, not after: the shim prompts for an admin password, and a
+                // password dialog nobody was warned about is indistinguishable from malware.
+                progress.PerformingAction(request.Capability);
+
+                try {
+                    result = await actions.PerformAsync(request.Capability, ct);
+                } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+                    // Propagated, not swallowed: every other await in this loop lets the caller's cancel
+                    // out, and catching it here would let a cancelled leg go on to report itself finished.
+                    throw;
+                } catch (Exception) {
+                    // `failed` rather than a refusal: something was attempted. A screen left waiting on an
+                    // outcome that threw is the state this lane exists to avoid. An internal cancellation
+                    // that is not the caller's lands here too, which is what it is.
+                    result = new FirstRunMachineActionResult(FirstRunMachineActionOutcomes.Failed, null);
+                }
+
+                // Recorded before the report, so a POST that fails cannot re-raise the prompt.
+                performed[request] = result;
+            }
+
+            if (reported.Contains(request)) continue;
+
+            await ReportAsync(serverUrl, flowId, request, result, reported, ct);
+        }
+    }
+
+    /// <summary>Reports one outcome, recording it as reported only when the server took it. A refusal
+    /// leaves the request outstanding, which is what the next tick retries against.</summary>
+    async Task ReportAsync(
+            string serverUrl, string flowId, FirstRunMachineActionRequest request,
+            FirstRunMachineActionResult result, HashSet<FirstRunMachineActionRequest> reported,
+            CancellationToken ct) {
+        var outcome = await channel.ReportMachineActionAsync(
+            serverUrl, flowId,
+            new ReportFirstRunMachineActionRequest {
+                Capability  = request.Capability,
+                RequestedAt = request.RequestedAt,
+                Outcome     = result.Outcome,
+                Reason      = result.Reason
+            },
+            ct);
+
+        if (outcome.Recorded) reported.Add(request);
+    }
+
+    /// <summary>
+    /// A last bounded attempt at any outcome that has not been reported yet, for the tick that ends the
+    /// loop.
+    ///
+    /// <para><b>The per-tick retry needs a next tick, and the finishing one has none.</b> A user who
+    /// presses the fix and then clicks through to the end can otherwise lose the outcome to a single blip,
+    /// on the one path where nothing comes back to try again.</para>
+    ///
+    /// <para><b>Bounded, because a finished flow must not be held open for this.</b> What survives a
+    /// sustained failure here is the request staying outstanding, which is the honest reading anyway — the
+    /// browser goes on saying it asked. Interrupted exits do not flush at all, for the same reason: an
+    /// abandoned or dismissed leg has not finished doing anything.</para>
+    /// </summary>
+    async Task FlushReportsAsync(
+            string serverUrl, string flowId,
+            Dictionary<FirstRunMachineActionRequest, FirstRunMachineActionResult> performed,
+            HashSet<FirstRunMachineActionRequest> reported, CancellationToken ct) {
+        for (var retry = 0; retry < FlushRetries; retry++) {
+            var outstanding = performed.Where(p => !reported.Contains(p.Key)).ToList();
+
+            if (outstanding.Count == 0) return;
+
+            // Always gapped, including the first: this runs immediately after the tick's own attempt
+            // failed, and an instant re-POST at the same server answers the same way.
+            await Task.Delay(PollInterval, _clock, ct);
+
+            foreach (var (request, result) in outstanding)
+                await ReportAsync(serverUrl, flowId, request, result, reported, ct);
+        }
     }
 
     /// <summary>Dismisses when a key is down, draining it. Null when there is nothing to dismiss, so
