@@ -440,6 +440,15 @@ public sealed class SetupCommand(ConfigRoot config, ProfileContext profiles, IBr
 
         string defaultVisibility;
 
+        // The flow's answer, resolved once above the branches so the rule sits in one testable place.
+        // The profile is read only where the answer might defer to it — a run with no flow needs none.
+        var flowVisibility = noPrompt || browserAgents is null
+            ? new VisibilityDecision(null, Kept: false)
+            : DecideVisibility(
+                  browserAgents,
+                  (await AppConfig.LoadProfileConfig(config))
+                      .Profiles.GetValueOrDefault(activeProfile)?.DefaultVisibility ?? "org_public");
+
         if (noPrompt) {
             defaultVisibility = (GetArg(args, "--default-visibility") ?? "org_public").ToLowerInvariant();
 
@@ -450,17 +459,19 @@ public sealed class SetupCommand(ConfigRoot config, ProfileContext profiles, IBr
             }
 
             await Console.Out.WriteLineAsync($"  Default visibility: {defaultVisibility}");
+        } else if (flowVisibility.Apply is { } fromFlow) {
+            // Re-writing the profile's own value is the no-op that keeps the rest of the run — the
+            // import stamp, the summary — reading one field rather than two.
+            defaultVisibility = fromFlow;
+
+            AnsiConsole.MarkupLine(flowVisibility.Kept
+                ? $"  [dim]· Not chosen in the browser - keeping {Markup.Escape(VisibilityLabel(fromFlow))}[/]"
+                : $"  [dim]· Chosen in the browser: {Markup.Escape(VisibilityLabel(fromFlow))}[/]");
         } else {
             var visibilityPrompt = new SelectionPrompt<string>()
                 .Title("Which of your sessions should be readable by other users in the same Kurrent Capacitor account by default?")
                 .AddChoices(AppConfig.ValidVisibilities)
-                .UseConverter(v => v switch {
-                    "private"    => "All private — only you can see your sessions",
-                    "project"    => "Project repos public to fellow project members, others private",
-                    "org_public" => "Org repos public, others private (default)",
-                    "public"     => "All public — others can see all your sessions",
-                    _            => v
-                });
+                .UseConverter(VisibilityLabel);
 
             // Start the cursor on the option we label "(default)" rather than the first choice.
             visibilityPrompt.DefaultValue = "org_public";
@@ -1215,6 +1226,41 @@ public sealed class SetupCommand(ConfigRoot config, ProfileContext profiles, IBr
 
         return 0;
     }
+
+    /// <summary>
+    /// What step 3 does about the default visibility: apply a value, or prompt.
+    /// </summary>
+    /// <param name="Apply">The value to apply, or null to prompt.</param>
+    /// <param name="Kept">The value is the profile's own, carried because the screen was answered and
+    /// left unset. Distinguished from a browser choice only so the line can say which happened.</param>
+    internal readonly record struct VisibilityDecision(string? Apply, bool Kept);
+
+    /// <summary>
+    /// Which default visibility step 3 applies.
+    ///
+    /// <para><b>An answered screen that set nothing leaves the profile alone</b>, which is the lane's
+    /// contract for a null answer — and the reason this cannot simply fall through to the prompt: the
+    /// prompt's cursor starts on <c>org_public</c>, so one Return would widen an existing
+    /// <c>private</c>. A screen that was never answered has told us nothing and still needs asking.</para>
+    /// </summary>
+    /// <param name="browser">The Agents answer, or null where that step never settled.</param>
+    /// <param name="current">What the profile holds now.</param>
+    internal static VisibilityDecision DecideVisibility(FirstRunAgentsAnswer? browser, string current) =>
+        browser switch {
+            { DefaultVisibility: { } chosen } => new(chosen, Kept: false),
+            not null                          => new(current, Kept: true),
+            _                                 => new(null, Kept: false)
+        };
+
+    /// <summary>What each <c>default_visibility</c> stop is called. Shared by the prompt and by the line
+    /// that reports the browser's answer, because two lists that have to correspond are one list.</summary>
+    internal static string VisibilityLabel(string visibility) => visibility switch {
+        "private"    => "All private — only you can see your sessions",
+        "project"    => "Project repos public to fellow project members, others private",
+        "org_public" => "Org repos public, others private (default)",
+        "public"     => "All public — others can see all your sessions",
+        _            => visibility
+    };
 
     /// <summary>Per request, not per leg: the poll below runs for as long as a human takes.</summary>
     static readonly TimeSpan BrowserFlowHttpTimeout = TimeSpan.FromSeconds(15);

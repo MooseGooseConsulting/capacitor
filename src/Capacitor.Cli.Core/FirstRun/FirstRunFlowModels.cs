@@ -210,6 +210,21 @@ public sealed record FirstRunFlowResponse {
     [JsonPropertyName("agents_decided_at")] public DateTimeOffset? AgentsDecidedAt { get; init; }
 
     /// <summary>
+    /// The default session visibility the same decision chose, as a canonical
+    /// <c>default_visibility</c> value.
+    ///
+    /// <para><b>Null is not a value</b>, and it is null in two situations that are not the same: the step
+    /// was answered and no audience set, and the step was never answered at all. Only the first says
+    /// anything about the profile — see <c>SetupCommand.DecideVisibility</c>, which separates them by
+    /// whether the step settled, because the second has told the machine nothing.</para>
+    ///
+    /// <para><b>A stop this build cannot name is dropped, not written.</b> The value persists in profile
+    /// config and is stamped on every session afterwards, so it is mapped through
+    /// <c>AppConfig.ValidVisibilities</c> and degrades to null, which leaves the profile as it was.</para>
+    /// </summary>
+    [JsonPropertyName("default_visibility")] public string? DefaultVisibility { get; init; }
+
+    /// <summary>
     /// What the browser is asking this machine to do, and the one field on this response the CLI acts on
     /// rather than records. Absent or empty means nothing is outstanding.
     ///

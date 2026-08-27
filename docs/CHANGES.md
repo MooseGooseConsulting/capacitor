@@ -7,6 +7,30 @@ Not release notes. Each entry is written as of the change that produced it and i
 code moves on; where an entry disagrees with the code, the code wins.
 
 
+## The Agents screen's visibility answer reaches the profile
+
+The flow asked who may read future sessions, recorded it on `FirstRunAgentsDecidedEvent`, served it on
+the poll as `default_visibility` — and no CLI read it. The field was absent from the wire models
+entirely, so it was dropped at deserialisation and `kcap setup`'s step 3 prompted unconditionally and
+wrote its own answer over it. The one place in the flow that asked a question and discarded the answer.
+
+It rides the Agents decision, so it is read off the same answer and gated the same way, and it is
+validated against `AppConfig.ValidVisibilities` rather than forwarded: the value lands in profile
+config and is stamped on every session afterwards, so a stop a newer server invented would be written
+to a file this build owns and read back by something that may not mean the same by it. A dropped value
+degrades to null, which leaves the profile as it was — the same outcome as never having asked.
+
+**The two nulls are not the same.** The field is null both when the step is unanswered and when it was
+answered and left unset, and only the first should reach the prompt: the prompt's cursor starts on
+`org_public`, so a Return on a re-run would widen an existing `private` on a question the user had
+already answered. An answered-but-unset screen therefore re-writes what the profile already holds,
+which is the lane's contract for a null answer and a no-op for everything downstream. Whether the step
+settled is what separates them, and `SetupCommand.DecideVisibility` is the one place that decides.
+
+Declining every harness while still choosing an audience is coherent, so `IsDecline` says nothing about
+the visibility. No precedence question against `--default-visibility` arises: that flag is read only
+under `--no-prompt`, where the browser leg never runs.
+
 ## `--private` stamps a value
 
 An omitted `default_visibility` is not "no default": the server's generated column reads

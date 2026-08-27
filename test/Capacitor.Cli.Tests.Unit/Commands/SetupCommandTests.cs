@@ -163,6 +163,68 @@ public class SetupCommandTests {
         await Assert.That(SetupCommand.BrowserImportSummary(ImportAnswer(repos: "kcap")).Count).IsEqualTo(1);
     }
 
+    static FirstRunAgentsAnswer VisibilityAnswer(string? visibility) =>
+        new([new FirstRunAgentsChoice("claude", true, true)],
+            new DateTimeOffset(2026, 8, 26, 9, 0, 0, TimeSpan.Zero),
+            0,
+            visibility);
+
+    [Test]
+    public async Task DecideVisibility_applies_what_the_browser_chose() {
+        var decided = SetupCommand.DecideVisibility(VisibilityAnswer("public"), current: "private");
+
+        await Assert.That(decided.Apply).IsEqualTo("public");
+        await Assert.That(decided.Kept).IsFalse();
+    }
+
+    // Falling through to the prompt would not leave the profile alone: its cursor starts on org_public,
+    // so one Return widens an existing private on a screen the user already answered.
+    [Test]
+    public async Task DecideVisibility_keeps_the_profile_when_the_screen_was_answered_and_left_unset() {
+        var decided = SetupCommand.DecideVisibility(VisibilityAnswer(null), current: "private");
+
+        await Assert.That(decided.Apply).IsEqualTo("private");
+        await Assert.That(decided.Kept).IsTrue();
+    }
+
+    [Test]
+    public async Task DecideVisibility_prompts_when_that_screen_never_settled() {
+        // Never asked is not the same as asked and declined: the terminal still has to put the
+        // question, which is what a null Apply means.
+        var decided = SetupCommand.DecideVisibility(null, current: "private");
+
+        await Assert.That(decided.Apply).IsNull();
+        await Assert.That(decided.Kept).IsFalse();
+    }
+
+    [Test]
+    public async Task DecideVisibility_never_narrows_or_widens_a_kept_profile() {
+        // Whatever the profile holds is what comes back, for every stop - the branch must not have a
+        // fallback of its own.
+        foreach (var stop in AppConfig.ValidVisibilities) {
+            await Assert.That(SetupCommand.DecideVisibility(VisibilityAnswer(null), stop).Apply)
+                        .IsEqualTo(stop);
+        }
+    }
+
+    [Test]
+    public async Task VisibilityLabel_names_every_stop_the_wire_can_carry() {
+        // One list behind the prompt and behind the browser-answer line, so the two cannot describe the
+        // same stop differently.
+        foreach (var stop in AppConfig.ValidVisibilities) {
+            await Assert.That(SetupCommand.VisibilityLabel(stop))
+                        .IsNotEqualTo(stop)
+                        .Because($"'{stop}' has no human label");
+        }
+    }
+
+    [Test]
+    public async Task VisibilityLabel_falls_back_to_the_value_for_a_stop_it_does_not_know() {
+        // Reachable only if the closed set grows without this switch; showing the raw value beats
+        // showing nothing.
+        await Assert.That(SetupCommand.VisibilityLabel("telepathy")).IsEqualTo("telepathy");
+    }
+
     // --- Step 6 import auth-eligibility probe (IsAuthSatisfiedAsync) ---
 
     [Test]
