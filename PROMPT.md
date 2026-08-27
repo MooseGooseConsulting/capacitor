@@ -5,7 +5,16 @@ client for a system whose server half is closed. Your job is to build that serve
 cut the client loose from its vendor, and finish with a self-contained stack we own top
 to bottom.
 
-**Read these two documents before doing anything else:**
+**The objective, stated plainly:** every place an agent runs across the operator's fleet
+records into one corpus. This laptop is node 1 of N, not the system. Read
+`reference/FLEET.md` first — it reframes the other two documents and wins where they
+disagree.
+
+**Read these three documents before doing anything else:**
+
+- `reference/FLEET.md` — the fleet objective and what it changes: a networked server,
+  headless machine credentials, a machine dimension the upstream model does not have,
+  and cross-node identity problems that do not exist on one machine.
 
 - `reference/SURFACE.md` — everything observable about the system, and which half we
   already have. Includes the full wire contract, the canonical model as observed on a
@@ -156,8 +165,11 @@ placeholders to be replaced before anything leaves the org.
 - **Three vendors normalized end to end**, each verified against the live instance's own
   output for the same sessions.
 - A console that renders a captured session — Transcript and Trace at minimum.
-- **A fourth vendor the upstream product does not support, added end to end.** This is
-  the acceptance test for the entire premise.
+- **A fourth vendor the upstream product does not support, added end to end.** The
+  acceptance test for the normalizer premise.
+- **A second machine enrolled headlessly and recording into the same corpus**, its
+  sessions distinguishable from this laptop's. The acceptance test for the fleet
+  objective. A stack that records one machine perfectly has not met the goal.
 - A written record in `reference/` of the feature cut, the decisions taken, and every
   assumption still unverified.
 

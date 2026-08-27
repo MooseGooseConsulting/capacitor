@@ -103,6 +103,11 @@ token flow · **tool count**. Turns interleave at the top level with non-turn en
 `SessionStarted`, user messages, and background-command completions each sit between
 turns as first-class rows.
 
+**No machine dimension.** `v_an_sessions` has no machine or host column; sessions
+attribute to a *user*. Sufficient for a product sold to teams, insufficient here — see
+`FLEET.md` §3. This is the one place where matching upstream exactly is the wrong
+instruction.
+
 **Identifiers.** Session ids are stored **dashless**: the session UUID
 `70dc37b2-b3b1-4f13-9c15-3858abbe88a8` appears as
 `/sessions/70dc37b2b3b14f139c153858abbe88a8`.
@@ -158,7 +163,14 @@ copilot, or cursor"* while the client ships ten. Don't assume the docs are curre
 Fully determined by the client, which is in this repo. Extracted by enumerating every
 `{baseUrl}/…` literal and every hub invocation.
 
-### Minimum viable sink — eight routes
+### Minimum viable sink — eight routes for one machine, **nine for a fleet**
+
+> Under the fleet objective (`FLEET.md`) add a ninth: a **client-credentials token
+> exchange**, replacing the severed `signin.kcap.ai/oauth2/token`. Headless nodes carry
+> `KCAP_CLIENT_ID` / `KCAP_CLIENT_SECRET` and have no profile or token store, so this is
+> their only way in. `/api/admin/machines` and `/api/daemons` are core, not product
+> surface.
+
 
 ```
 POST /hooks/session-start/{vendor}
@@ -194,7 +206,7 @@ Ingestion: `/hooks/session-title`, `/hooks/set-title`, `/hooks/whats-done`,
 Read: `/api/sessions/{id}/turns[/{i}]`, `/recap`, `/errors`, `/visibility` (PUT),
 `/api/sessions/search`, `/api/projects`, `/api/repositories/`, `/api/memories[/index]`,
 `/api/attachments/{id}`, `/api/work-items/declare`, `/api/analytics/{schema,query}`,
-`/api/daemons`, `/api/admin/machines`, `/api/flows/*`, `/api/eval/*`,
+`/api/daemons`, `/api/admin/machines` (**both core under FLEET.md**), `/api/flows/*`, `/api/eval/*`,
 `/api/sessions/{id}/{eval-context,evals/v2,evals/v3,judge-facts}`,
 `/api/me/notification-prefs`, `/api/feedback`, `/api/signup/provision`.
 
