@@ -285,6 +285,38 @@ and observed rather than refused, so a workspace a coordinator builds between th
 still cannot hold a socket open past the drain. The companion guard lives in `NavigationGate`: its
 first shutdown pass latches (which also bumps the generation), so `OpenSession` — card click or launch
 auto-open alike — rejects from then on in every window, current or later-built.
+The feed into the embedded emulator is rewritten first (`TerminalFeedSanitizer`): XTerm.NET
+dispatches a CSI on its final byte alone, so xterm's modifyOtherKeys set — `CSI > 4 ; 2 m`, which
+Claude Code sends on every return to raw mode — reaches the SGR handler as "underline on, dim on",
+and agent renderers close styles one at a time and never send the full reset that would clear it;
+every private-parameter sequence ending in `m` is dropped. The same handler has no arm for the
+underline-colour selectors 58/59, whose arguments are read as attribute codes, and drops any
+parameter with colon sub-parameters, losing `4:0` and the colon truecolour form.
+`KCAP_APP_PTY_DUMP=<file>` appends every fed frame as received, the only record of what the
+emulator was given.
+
+## Session chat
+
+**AI-2196** (spec: `docs/superpowers/specs/2026-08-26-ai2196-chat-for-pty-harnesses-design.md`)
+renders a Claude or interactive Codex session's own transcript as the workspace's Chat tab and sends
+composer text to the PTY. **The daemon, not the app, knows where the transcript is**: every PTY launch
+runs the same transcript discovery the server-driven path used, and the link-resolved path rides
+`AgentStatusDto.transcript_path` — link-resolved because the per-worktree Claude project dir is a
+symlink the launcher deletes at cleanup. Discovery runs until the *path* is known and pulses the
+status notifier before any server report. Every transcript open shares read/write/delete; the tail
+promises only length-regression reset. **Composer sends are accepted, never acknowledged**, and one
+at a time: bracketed paste, a 150 ms wait past Codex's post-paste Enter suppression, then one CR —
+only if the terminal's opening token is unchanged. The token advances only through `BeginAttempt`
+(after the attach lane is won) and `Invalidate` (detach, teardown, removal, every terminal outcome);
+an attempt's own `Connecting`/`Attached` publishes never advance it, and a stale token discards a
+late `Attached`, so a queued attach callback cannot reopen a terminal the daemon already dropped.
+`TerminalHost` stays laid out under the Chat tab (faded, disabled, reported offscreen) so the PTY
+clamp sees the real pane size; everything else collapses with `IsVisible`. Links open only through
+`LinkPolicy` (absolute http/https) via one tab-level command. **Markdown never emits a `LineBreak`
+inline or a newline inside a `Run`**: Avalonia 12's line breaker never finishes laying one out under a
+height-unconstrained parent (any `StackPanel` or `ScrollViewer`), so a soft break is a space and a
+hard break splits the paragraph into stacked text blocks; the pipeline carries precise source
+locations only so an unmapped inline can degrade to its own source text rather than a type name.
 
 ## Launch and stop command routing
 
