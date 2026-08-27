@@ -1,16 +1,43 @@
 # The wave workflow
 
-How to run this job. Six waves. Each ends at a **gate** — something demonstrable, not a
-document — and you do not enter the next wave until the gate is met.
+## Status of this document: a hypothesis, not an instruction
 
-Within a wave, plan and reason before you build. Between waves, re-plan: what you learn
-in wave *n* should change wave *n+1*, and a wave plan written before wave 1 will be
-wrong.
+This decomposition was written by an agent that had read parts of the client, driven the
+live console for twenty minutes, and never run a single import. **Treat it as a
+well-informed starting proposal, not as your plan.**
 
-**Two agents.** The seam is **Client** against **Server**. They meet at the eight routes
-and the wire types in `src/Capacitor.Cli.Core/Models.cs` — both fully known before either
-starts, which is why the middle needs almost no negotiation. Agree the contract in
-Wave 1 and then work independently against it.
+Your first task is to interrogate it and produce your own. Then say where yours differs
+and why. If you agree with it entirely, say that too — but only after actually
+challenging it, because agreement arrived at cheaply is the failure mode this document
+exists to avoid.
+
+Three different kinds of claim are mixed in here, and they deserve very different levels
+of deference:
+
+| | status |
+|---|---|
+| **Constraints** — the invariants in §Wave 3 and in `SURFACE.md` | **Hard.** Evidence-backed, read from the client's own source and comments. Don't relitigate; verify cheaply if you like. |
+| **Gates** — what counts as progress | **Strong.** Each is demonstrable and hard to fake, which is their whole point. Propose better ones if you have them. |
+| **Sequence** — six waves in this order, split this way | **Weak. This is a guess.** Yours will likely be better after Wave 1. |
+
+Honest confidence, wave by wave:
+
+- **Wave 1 (ground truth first)** — high. Nothing sensible happens before the analytics
+  schema is read and probe sessions are captured.
+- **Wave 2 (connect the halves before anything clever)** — high. Integration is the risk,
+  and here it's mostly plumbing that already exists.
+- **Waves 3–5 (model → breadth → console)** — **low.** Whether the model precedes
+  breadth, whether the console waits for the third vendor, whether live capture belongs
+  where I put it: these are guesses made before anyone ran anything.
+- **Wave 6 (fourth vendor)** — high, because it tests the premise of the whole job rather
+  than the quality of the work.
+
+**The two-agent seam is also a guess.** I've proposed Client against Server because they
+meet at eight routes and one file of wire types, both fully known before either starts.
+Ingest-vs-model, or a split by vendor, might serve better. Decide for yourselves.
+
+Each wave below ends at a **gate** — something demonstrable, not a document. Whatever
+sequence you land on, keep that property.
 
 ---
 
