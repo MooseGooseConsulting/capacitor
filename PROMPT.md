@@ -25,7 +25,7 @@ disagree.
   And read its opening honestly: the constraints in it are hard, the gates are strong,
   **the sequence is a guess** made by someone who had never run an import.
 
-Those two files are the brief. Everything below is orientation.
+Those three files are the brief. Everything below is orientation.
 
 ## Your first task is to disagree with the plan
 
@@ -79,7 +79,7 @@ unusually well commented — and the comments explain *why*.
 
 It also collapses the hardest unknown. You are not inferring a wire contract. You **have**
 it, exactly, because the client is the thing making the calls. The two halves meet at
-eight routes and one file of wire types. There is very little to negotiate in the middle.
+nine routes and one file of wire types. There is very little to negotiate in the middle.
 
 ## The method — read this twice
 
@@ -112,8 +112,8 @@ yourself speculating about server behaviour, stop — you have a way to measure 
   system's own words. Read all of it before designing any schema.
 - **The installed binary** — `kcap.exe` on PATH, runnable. It is hand-patched; don't
   reinstall it from npm.
-- **Raw agent data on disk**, plus a second machine (`hephastus`) holding data this one
-  lacks. Details in SURFACE.md §6.
+- **Raw agent data on disk** — on this node and on every other fleet node. `hephastus`
+  holds vendor data this laptop does not. Details in SURFACE.md §6, FLEET.md.
 - **`reference/ui-assets/`** — the console's fonts, favicons and stylesheets, already
   downloaded.
 
