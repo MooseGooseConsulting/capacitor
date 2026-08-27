@@ -1,0 +1,99 @@
+/* AI-1944 Task 3 — product tour theming.
+ *
+ * This file is the ONE stylesheet a page links for the tour: it pulls in the vendored Driver.js
+ * stylesheet and then repaints it from the MudBlazor palette variables. Those variables are
+ * rewritten by MudThemeProvider when the kcap-theme toggle flips, so the popover tracks light/dark
+ * with no JS and no second stylesheet to swap.
+ *
+ * The vendored driver.css is deliberately left unmodified (a version bump is a straight recopy) —
+ * every override lives here, scoped to the .kcap-tour popover class product-tour.js sets. */
+@import url("../js/vendor/driver/driver.css");
+
+:root {
+    /* Read by product-tour.js — Driver applies the overlay opacity as an inline style on the SVG,
+       which CSS cannot override without !important, so the value is declared here and passed in.
+       ONE value for both themes as of the live-e2e pass: at 0.6 (and at Driver's own 0.7 default)
+       the dark canvas went black behind the popover, and a tour whose whole job is to point at the
+       page must leave that page readable. */
+    --kcap-tour-overlay-opacity: 0.45;
+}
+
+.driver-popover.kcap-tour {
+    /* Driver's popover starts from `all: unset`, so the app font has to be re-applied. */
+    font-family: var(--mud-typography-body1-family, inherit);
+    background-color: var(--mud-palette-surface);
+    color: var(--mud-palette-text-primary);
+    border: 1px solid var(--mud-palette-lines-default);
+    border-radius: var(--mud-default-borderradius, 4px);
+    box-shadow: var(--mud-elevation-8, 0 1px 10px rgb(0 0 0 / 40%));
+    max-width: 340px;
+}
+
+.driver-popover.kcap-tour .driver-popover-title {
+    color: var(--mud-palette-text-primary);
+    font-size: 1rem;
+    font-weight: 600;
+}
+
+.driver-popover.kcap-tour .driver-popover-description {
+    color: var(--mud-palette-text-primary);
+    font-size: 0.875rem;
+}
+
+.driver-popover.kcap-tour .driver-popover-progress-text {
+    color: var(--mud-palette-text-secondary);
+}
+
+.driver-popover.kcap-tour .driver-popover-close-btn {
+    color: var(--mud-palette-text-secondary);
+}
+
+.driver-popover.kcap-tour .driver-popover-close-btn:hover,
+.driver-popover.kcap-tour .driver-popover-close-btn:focus {
+    color: var(--mud-palette-text-primary);
+}
+
+.driver-popover.kcap-tour .driver-popover-footer-btn {
+    background-color: var(--mud-palette-surface);
+    color: var(--mud-palette-text-primary);
+    border: 1px solid var(--mud-palette-lines-default);
+    border-radius: var(--mud-default-borderradius, 4px);
+    padding: 4px 10px;
+    font-size: 0.8125rem;
+}
+
+.driver-popover.kcap-tour .driver-popover-footer-btn:hover,
+.driver-popover.kcap-tour .driver-popover-footer-btn:focus {
+    background-color: var(--mud-palette-action-default-hover);
+}
+
+/* The next/done button is the step's primary action. */
+.driver-popover.kcap-tour .driver-popover-next-btn {
+    background-color: var(--mud-palette-primary);
+    color: var(--mud-palette-primary-text);
+    border-color: var(--mud-palette-primary);
+}
+
+.driver-popover.kcap-tour .driver-popover-next-btn:hover,
+.driver-popover.kcap-tour .driver-popover-next-btn:focus {
+    background-color: var(--mud-palette-primary-darken);
+}
+
+/* The arrow is a bordered zero-size box: driver.css paints all four borders white and then makes
+   the three unused ones transparent per side, so each side needs its own recolour. The class names
+   read as the side of the POPOVER the arrow sits on. */
+.driver-popover.kcap-tour .driver-popover-arrow-side-left {
+    border-left-color: var(--mud-palette-surface);
+}
+
+.driver-popover.kcap-tour .driver-popover-arrow-side-right {
+    border-right-color: var(--mud-palette-surface);
+}
+
+.driver-popover.kcap-tour .driver-popover-arrow-side-top {
+    border-top-color: var(--mud-palette-surface);
+}
+
+.driver-popover.kcap-tour .driver-popover-arrow-side-bottom {
+    border-bottom-color: var(--mud-palette-surface);
+}

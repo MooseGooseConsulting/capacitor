@@ -1,0 +1,3716 @@
+/* AI-2097 — EVERY LIGHT ARM NEEDS AN AUTO TWIN, AND THEY MUST BE EDITED TOGETHER.
+   `data-kcap-theme` is present only when the user has actively chosen; its absence means "never chose",
+   which is resolved by the system preference. So a rule keyed on [data-kcap-theme="light"] alone would
+   miss every visitor who has not chosen and whose system is light. CSS offers no way to share one
+   selector across a media boundary, so each pair is written out and marked. Before AI-2097 absence meant
+   dark, which is why these twins did not exist. */
+
+/* Assistant chat bubble (and the expanded task HUD) fill. The bubble is dark in dark mode
+   (the fixed --mud-palette-dark swatch) but must be a light elevated surface in light mode —
+   a dark bubble with light text is a dark-mode idiom that looks wrong on a light canvas, and
+   forcing light text there is dark-on-light once the bubble goes light. So the fill flips with
+   the theme and the text simply follows the palette (dark on light, light on dark). */
+:root { --kcap-assistant-bubble-bg: var(--mud-palette-dark); }
+:root[data-kcap-theme="light"] { --kcap-assistant-bubble-bg: var(--mud-palette-surface); }
+
+/* Light mode: elevate list cards to white surface on the gray canvas so they read as separate
+   (Background == the gray page; Surface == white). Dark mode keeps its canvas-coloured cards. */
+:root[data-kcap-theme="light"] .list-card { background: var(--mud-palette-surface); }
+
+/* AUTO TWIN of the two rules above. */
+@media (prefers-color-scheme: light) {
+    :root:not([data-kcap-theme]) { --kcap-assistant-bubble-bg: var(--mud-palette-surface); }
+    :root:not([data-kcap-theme]) .list-card { background: var(--mud-palette-surface); }
+}
+
+/* Inter Variable — primary UI + heading typeface (self-hosted, OFL). One file
+   covers the full 100–900 weight axis; a companion file covers the italic style. */
+@font-face {
+    font-family: 'Inter';
+    src: url('../fonts/InterVariable.woff2') format('woff2');
+    font-weight: 100 900;
+    font-style: normal;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: 'Inter';
+    src: url('../fonts/InterVariable-Italic.woff2') format('woff2');
+    font-weight: 100 900;
+    font-style: italic;
+    font-display: swap;
+}
+
+/* Engage Inter's optical-size axis + sensible OpenType defaults (ligatures,
+   contextual alternates). */
+body {
+    font-optical-sizing: auto;
+    font-feature-settings: 'liga' 1, 'calt' 1;
+}
+
+/* Solina — Kurrent brand display font (retained for the wordmark only) */
+@font-face {
+    font-family: 'Solina';
+    src: url('../fonts/Solina-Regular.woff2') format('woff2');
+    font-weight: 400;
+    font-style: normal;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: 'Solina';
+    src: url('../fonts/Solina-Medium.woff2') format('woff2');
+    font-weight: 500;
+    font-style: normal;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: 'Solina';
+    src: url('../fonts/Solina-Bold.woff2') format('woff2');
+    font-weight: 700;
+    font-style: normal;
+    font-display: swap;
+}
+
+/* Trial banner offset: full-height panes subtract the banner's height so it never
+   pushes content past the viewport. The variable is 0 unless an admin-only trial
+   banner is actually in the DOM. */
+.kcap-main-content { --kcap-banner-h: 0px; }
+.kcap-main-content:has(.trial-banner-alert) { --kcap-banner-h: 48px; }
+
+/* Tabular figures for data-dense metrics */
+.compact-stats-row, .compact-stats-col, .ud-metadata-grid {
+    font-variant-numeric: tabular-nums;
+}
+
+/* AI-1172 — session-card eval decorations (CompactStatsRow), styled next to the
+   .eval-donut score donut (scoped in CompactStatsRow.razor's own <style>). */
+
+/* Fact-count chip beside an evaluated session's score pill — muted/tonal, a
+   supporting tag rather than a competing pill. */
+.hk-chip-facts {
+    background: var(--mud-palette-surface);
+    color:      var(--mud-palette-text-secondary);
+    border:     1px solid var(--mud-palette-lines-default);
+}
+
+/* CopyableMarkdown — copy button hover/focus visibility */
+.copyable-markdown {
+    position: relative;
+}
+
+.copyable-markdown .copyable-markdown-btn {
+    position: absolute;
+    top: 0;
+    right: 0;
+    z-index: 1;
+    padding: 2px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s ease-in-out;
+}
+
+.copyable-markdown:hover .copyable-markdown-btn,
+.copyable-markdown:focus-within .copyable-markdown-btn,
+.copyable-markdown .copyable-markdown-btn:focus-visible {
+    opacity: 0.7;
+    pointer-events: auto;
+}
+
+.copyable-markdown .copyable-markdown-btn:hover {
+    opacity: 1;
+}
+
+.copyable-markdown .copyable-markdown-btn.copied {
+    opacity: 0.8;
+    pointer-events: auto;
+}
+
+@media (hover: none) {
+    .copyable-markdown .copyable-markdown-btn {
+        opacity: 0.7;
+        pointer-events: auto;
+    }
+}
+
+/* Copy icon legibility on the info-coloured "Suggestion" recommendation callout (white text). */
+.eval-recommendation .copyable-markdown-btn,
+.eval-recommendation .copyable-markdown-btn .mud-icon-root {
+    color: var(--mud-palette-white);
+}
+
+/* Analytics chat — per-message copy button on user prompt bubbles (mirrors .copyable-markdown) */
+.an-msg {
+    position: relative;
+}
+
+.an-msg .an-copy-btn {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    z-index: 1;
+    padding: 2px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s ease-in-out;
+}
+
+.an-msg:hover .an-copy-btn,
+.an-msg:focus-within .an-copy-btn,
+.an-msg .an-copy-btn:focus-visible {
+    opacity: 0.7;
+    pointer-events: auto;
+}
+
+.an-msg .an-copy-btn:hover {
+    opacity: 1;
+}
+
+.an-msg .an-copy-btn.copied {
+    opacity: 0.8;
+    pointer-events: auto;
+}
+
+@media (hover: none) {
+    .an-msg .an-copy-btn {
+        opacity: 0.7;
+        pointer-events: auto;
+    }
+}
+
+/* Analytics chart — copy-as-image button (hover-revealed, overlays the chart corner) */
+.an-chart {
+    position: relative;
+}
+
+.an-chart .an-chart-copy-btn {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    z-index: 1;
+    padding: 2px;
+    opacity: 0;
+    pointer-events: none;
+    background: var(--mud-palette-surface);
+    border-radius: 4px;
+    transition: opacity 0.15s ease-in-out;
+}
+
+.an-chart:hover .an-chart-copy-btn,
+.an-chart:focus-within .an-chart-copy-btn,
+.an-chart .an-chart-copy-btn:focus-visible {
+    opacity: 0.85;
+    pointer-events: auto;
+}
+
+.an-chart .an-chart-copy-btn:hover,
+.an-chart .an-chart-copy-btn.copied {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+@media (hover: none) {
+    .an-chart .an-chart-copy-btn {
+        opacity: 0.85;
+        pointer-events: auto;
+    }
+}
+
+/* Analytics table — copy-as-TSV button, hover-revealed in a bar beside the table title so it never
+   overlaps header cells or pins to the wrong corner when the table scrolls horizontally. */
+.an-table-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.an-table .an-table-copy-btn {
+    flex: 0 0 auto;
+    padding: 2px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s ease-in-out;
+}
+
+.an-table:hover .an-table-copy-btn,
+.an-table:focus-within .an-table-copy-btn,
+.an-table .an-table-copy-btn:focus-visible {
+    opacity: 0.85;
+    pointer-events: auto;
+}
+
+.an-table .an-table-copy-btn:hover,
+.an-table .an-table-copy-btn.copied {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+@media (hover: none) {
+    .an-table .an-table-copy-btn {
+        opacity: 0.85;
+        pointer-events: auto;
+    }
+}
+
+/* AI-980 — analytics visual cards: a consistent surface frame around the existing
+   .an-chart / .an-table copy-reveal containers, with an aligned title header. */
+.an-card {
+    background: var(--mud-palette-surface);
+    border: 0.5px solid var(--mud-palette-lines-default);
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin: 6px 0;
+}
+
+.an-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.an-table-bar {
+    margin-bottom: 8px;
+}
+
+.an-card-title {
+    font-size: .9375rem;
+    font-weight: 600;
+    color: var(--mud-palette-text-primary);
+}
+
+.an-card-caption {
+    font-size: .75rem;
+    color: var(--mud-palette-text-secondary);
+    margin-top: 6px;
+}
+
+/* Soften axis / title text rendered inside the MudChart SVG. */
+.an-chart text {
+    fill: var(--mud-palette-text-secondary);
+}
+
+/* AI-1324: MudChart reserves bottom margin for one label line; when analytics-charts.js wraps a
+   long x-label to two <tspan> lines, let the labels overflow the fixed SVG viewBox and pad the card
+   so the 2nd line stays visible instead of being clipped. */
+.an-chart-wrapped svg { overflow: visible; }
+.an-chart-wrapped { padding-bottom: 1.25rem; }
+
+/* Center the chart card's title over the plot (AI-980 review). */
+.an-chart-card .an-card-header {
+    justify-content: center;
+}
+
+/* X-axis title rendered below the plot (MudChart pins its own XAxisTitle to the top). */
+.an-axis-x-title {
+    text-align: center;
+    font-size: 12px;
+    color: var(--mud-palette-text-secondary);
+    margin-top: 2px;
+}
+
+/* Scalar card — copy-value button, hover-revealed in the header bar (mirrors .an-table). */
+.an-scalar .an-scalar-copy-btn {
+    flex: 0 0 auto;
+    padding: 2px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s ease-in-out;
+}
+
+.an-scalar:hover .an-scalar-copy-btn,
+.an-scalar:focus-within .an-scalar-copy-btn,
+.an-scalar .an-scalar-copy-btn:focus-visible {
+    opacity: 0.85;
+    pointer-events: auto;
+}
+
+.an-scalar .an-scalar-copy-btn:hover,
+.an-scalar .an-scalar-copy-btn.copied {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+@media (hover: none) {
+    .an-scalar .an-scalar-copy-btn {
+        opacity: 0.85;
+        pointer-events: auto;
+    }
+}
+
+/* Readable data-point tooltip on the dark theme — MudChart's .svg-tooltip defaults to a light box,
+   and our `.an-chart text` rule muted its label; force a dark box with light text. */
+.an-chart .svg-tooltip rect {
+    fill: var(--mud-palette-background);
+    stroke: var(--mud-palette-lines-default);
+}
+.an-chart .svg-tooltip path,
+.an-chart .svg-tooltip polygon {
+    fill: var(--mud-palette-background);
+}
+.an-chart .svg-tooltip text {
+    fill: var(--mud-palette-text-primary);
+}
+
+/* Timeline — compact collapsible sections */
+.vt-timeline .mud-expand-panel .mud-expand-panel-header {
+    padding: 4px 8px;
+    min-height: 28px;
+    font-size: 0.75rem;
+}
+
+.vt-timeline .mud-expand-panel .mud-expand-panel-text {
+    font-size: 0.75rem;
+    opacity: 0.7;
+}
+
+/* Unified Dashboard — detail panel layout (shared by SessionDetailPanel + AgentDetailPanel) */
+.ud-detail-header {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--mud-palette-lines-default);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-shrink: 0;
+}
+
+.ud-header-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.ud-header-title-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    overflow: hidden;
+}
+
+.ud-copy-id-btn {
+    padding: 4px;
+    min-width: 0;
+    flex-shrink: 0;
+    border-radius: 4px;
+    border-color: var(--mud-palette-lines-default);
+}
+
+.ud-copy-id-btn:hover {
+    border-color: var(--mud-palette-action-default);
+}
+
+.ud-copy-id-btn .mud-icon-root {
+    font-size: 0.875rem;
+}
+
+/* AI-1790 — danger modifier for the delete button in the session detail header.
+
+   .ud-copy-id-btn is not purely geometry: it pins border-color to the neutral line colour, which
+   overrides MudBlazor's Color.Error border and would render a red trash icon inside a GREY box.
+   This modifier restores the danger border while keeping the shared padding/sizing above, so the
+   button still lines up with its siblings. Both values are theme variables, so light/dark track
+   automatically.
+
+   Written as a TWO-CLASS selector so it wins on specificity rather than on source order: a
+   single-class .ud-delete-btn ties with .ud-copy-id-btn (and .ud-delete-btn:hover ties with
+   .ud-copy-id-btn:hover), leaving the override dependent on these rules staying in this file, in
+   this order. Moving .ud-copy-id-btn to a later-loaded stylesheet would then silently restore the
+   grey border. */
+.ud-copy-id-btn.ud-delete-btn {
+    border-color: var(--mud-palette-error);
+}
+
+.ud-copy-id-btn.ud-delete-btn:hover {
+    border-color: var(--mud-palette-error-darken);
+}
+
+.ud-content-area {
+    flex: 1;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+}
+
+.ud-tab-bar {
+    display: flex;
+    gap: 0;
+    border-bottom: 1px solid var(--mud-palette-lines-default);
+    flex-shrink: 0;
+}
+
+.ud-compact-tab {
+    padding: 8px 16px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    border-bottom: 2px solid transparent;
+}
+
+.ud-tab-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 16px;
+}
+
+.ud-stats-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 10;
+    border-bottom: 1px solid var(--mud-palette-lines-default);
+    padding: 12px 16px;
+    max-height: 50%;
+    overflow-y: auto;
+    background: var(--mud-palette-surface);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.ud-metadata-grid {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 4px 16px;
+    font-size: 0.8rem;
+    margin-bottom: 12px;
+}
+
+/* Timeline message markdown — align with chat view */
+.timeline-message-markdown .mud-markdown-body p {
+    margin-bottom: 0 !important;
+}
+
+.timeline-message-markdown {
+    zoom: 0.85;
+}
+
+/* AI-1492 — visible keyboard-focus ring for clickable eval rows/cards
+   (EvalQuestionRow header, EvalCategoryCard header). */
+.eval-clickable:focus-visible {
+    outline: 2px solid var(--mud-palette-primary);
+    outline-offset: 2px;
+}
+
+/* Eval judge responses — tighten paragraph margins so short snippets
+   don't gain extra vertical space from the default <p> block. */
+.eval-summary-markdown .mud-markdown-body p,
+.eval-finding-markdown .mud-markdown-body p,
+.eval-evidence-markdown .mud-markdown-body p,
+.eval-recommendation-markdown .mud-markdown-body p {
+    margin-top: 0 !important;
+    margin-bottom: 4px !important;
+}
+
+.eval-summary-markdown .mud-markdown-body p:last-child,
+.eval-finding-markdown .mud-markdown-body p:last-child,
+.eval-evidence-markdown .mud-markdown-body p:last-child,
+.eval-recommendation-markdown .mud-markdown-body p:last-child {
+    margin-bottom: 0 !important;
+}
+
+/* Evidence label and retrospective bullet marker sit inline with the FIRST
+   paragraph only — later block children (additional paragraphs, lists, code
+   blocks) keep their default block layout. */
+.eval-evidence-markdown .mud-markdown-body,
+.retrospective-list .mud-markdown-body {
+    display: inline-block;
+    vertical-align: top;
+}
+.eval-evidence-markdown .mud-markdown-body > p:first-child,
+.retrospective-list .mud-markdown-body > p:first-child {
+    display: inline;
+    margin: 0 !important;
+}
+
+/* ============================================================
+   Search — nav-bar button + Ctrl/⌘+K command palette
+   ============================================================ */
+.nav-search-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    height: 32px;
+    padding: 0 6px 0 8px;
+    margin-right: 12px;
+    border: 1px solid var(--mud-palette-lines-default);
+    border-radius: 6px;
+    background: var(--mud-palette-background-gray);
+    color: var(--mud-palette-text-secondary);
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 0.8125rem;
+    line-height: 1;
+    transition: background-color 100ms ease, color 100ms ease, border-color 100ms ease;
+}
+
+.nav-search-button:hover {
+    background: var(--mud-palette-action-default-hover);
+    color: var(--mud-palette-text-primary);
+    border-color: var(--mud-palette-action-default);
+}
+
+.nav-search-button:focus-visible {
+    outline: 2px solid var(--mud-palette-primary);
+    outline-offset: 1px;
+}
+
+.nav-search-button-icon {
+    font-size: 1rem !important;
+    width: 16px !important;
+    height: 16px !important;
+    opacity: 0.85;
+}
+
+.nav-search-button-label {
+    flex: 1;
+    text-align: left;
+    padding-right: 12px;
+}
+
+.nav-search-button-shortcut {
+    font-family: 'Spline Sans Mono', monospace;
+    font-size: 0.7rem;
+    line-height: 1;
+    padding: 3px 5px;
+    border: 1px solid var(--mud-palette-lines-default);
+    border-radius: 3px;
+    background: var(--mud-palette-surface);
+    color: var(--mud-palette-text-secondary);
+    opacity: 0.85;
+}
+
+/* Strip MudDialog's default content padding and the empty title slot
+   (we don't render a DialogTitle) for our palette wrapper only. */
+.mud-dialog-content:has(> .palette-root) {
+    padding: 0 !important;
+}
+
+.mud-dialog:has(.palette-root) .mud-dialog-title {
+    display: none;
+}
+
+.palette-root {
+    background: var(--mud-palette-surface);
+    border-radius: inherit;
+}
+
+.palette-input-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    background: var(--mud-palette-background-gray);
+    border-bottom: 1px solid var(--mud-palette-lines-default);
+    border-top-left-radius: inherit;
+    border-top-right-radius: inherit;
+}
+
+.palette-input-icon {
+    flex: 0 0 auto;
+    width: 18px !important;
+    height: 18px !important;
+    font-size: 1.125rem !important;
+    color: var(--mud-palette-text-secondary);
+    opacity: 0.7;
+}
+
+/* MudTextField wraps its <input> in .mud-input-control / .mud-input. Inside the
+   palette we want the control to behave like a flush flex child — strip the
+   container's padding, background, and underline pseudo-elements so the inner
+   input slot defines the visible chrome. */
+.palette-input-field,
+.palette-input-field .mud-input-control,
+.palette-input-field .mud-input-control-input-container,
+.palette-input-field .mud-input {
+    flex: 1 1 auto;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: transparent !important;
+}
+
+.palette-input-field .mud-input::before,
+.palette-input-field .mud-input::after {
+    display: none !important;
+}
+
+.palette-input-field .mud-input-helper-text {
+    display: none;
+}
+
+.palette-input-field input.mud-input-slot {
+    width: 100%;
+    background: transparent;
+    border: none;
+    outline: none;
+    color: var(--mud-palette-text-primary);
+    font-size: 1rem;
+    line-height: 1.5;
+    padding: 4px 0;
+}
+
+.palette-input-field input.mud-input-slot::placeholder {
+    color: var(--mud-palette-text-secondary);
+    opacity: 0.7;
+}
+
+.palette-tabs {
+    display: flex;
+    border-bottom: 1px solid var(--mud-palette-lines-default);
+}
+
+.palette-tab {
+    background: transparent;
+    border: none;
+    padding: 8px 16px;
+    color: var(--mud-palette-text-primary);
+    cursor: pointer;
+    font-size: 0.8125rem;
+    border-bottom: 2px solid transparent;
+}
+
+.palette-tab.active {
+    border-bottom-color: var(--mud-palette-primary);
+    color: var(--mud-palette-primary);
+}
+
+.palette-results {
+    max-height: 480px;
+    overflow-y: auto;
+}
+
+.palette-section-header {
+    padding: 8px 12px;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    opacity: 0.6;
+}
+
+.palette-empty {
+    padding: 24px;
+    text-align: center;
+    opacity: 0.7;
+    font-size: 0.875rem;
+}
+
+.palette-hint {
+    padding: 24px;
+    text-align: center;
+    opacity: 0.55;
+    font-size: 0.8125rem;
+}
+
+.ud-search-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    min-height: 40px;
+    cursor: pointer;
+}
+
+.ud-search-row.highlighted {
+    background: var(--mud-palette-action-default-hover);
+}
+
+/* Assistant chat blurb meta footer: token chips on the left, timestamp on the right.
+   Layout lives in CSS (not inline) so the mobile media query below can override it. */
+.chat-turn-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.chat-turn-tokens {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+    flex-wrap: wrap;
+}
+
+.chat-turn-time {
+    margin-left: auto;
+    white-space: nowrap;
+}
+
+/* ============================================================
+   Mobile layout (≤768px)
+   ============================================================ */
+@media (max-width: 768px) {
+    /* Override MudBlazor drawer-based margin on main content */
+    .mud-main-content {
+        margin-left: 0 !important;
+        padding-left: 0 !important;
+    }
+
+    /* Hide desktop left-side drawer spacer in app bar */
+    .mud-appbar .mud-appbar-toolbar > div:first-child {
+        width: 48px !important;
+    }
+
+    /* Full-width list/detail panels — only one visible at a time */
+    .ud-list-panel {
+        width: 100% !important;
+        border-right: none !important;
+    }
+
+    .ud-detail-panel {
+        width: 100% !important;
+    }
+
+    /* Ensure the ud-layout fills the available height minus bottom nav + safe area */
+    .ud-layout {
+        height: calc(100vh - 64px - 56px - env(safe-area-inset-bottom, 0px) - var(--kcap-banner-h, 0px));
+    }
+
+    /* Compact detail header on mobile */
+    .ud-detail-header {
+        padding: 8px 12px;
+        gap: 8px;
+    }
+
+    /* Reduce content padding */
+    .ud-tab-content {
+        padding: 8px 12px;
+    }
+
+    /* Larger tap targets for list cards on mobile */
+    .ud-list-section .list-card {
+        min-height: 56px;
+    }
+
+    /* Mobile back bar */
+    .mobile-back-bar {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        padding: 4px 8px;
+        border-bottom: 1px solid var(--mud-palette-lines-default);
+    }
+
+    /* Ensure snackbar (toast alerts) appears above bottom nav */
+    .mud-snackbar-location-bottom-center,
+    .mud-snackbar-location-bottom-left,
+    .mud-snackbar-location-bottom-right {
+        bottom: 64px !important;
+    }
+
+    /* Hide per-turn token metrics in chat blurbs on mobile — too noisy for inspection.
+       Subagent run headers (CompactStatsRow) still show tokens. */
+    .chat-turn-tokens {
+        display: none;
+    }
+}
+
+/* Analytics chat "thinking" indicator — three bouncing dots shown in the active assistant
+   blurb while the agent works (before/between streamed content). Gives immediate visual
+   feedback that the request was accepted; removed when the turn completes and the prompt
+   re-enables. */
+.an-thinking {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 0;
+    margin-top: 2px;
+}
+
+.an-thinking span {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--mud-palette-text-secondary);
+    animation: an-thinking-bounce 1.2s infinite ease-in-out both;
+}
+
+.an-thinking span:nth-child(2) { animation-delay: .15s; }
+.an-thinking span:nth-child(3) { animation-delay: .3s; }
+
+@keyframes an-thinking-bounce {
+    0%, 80%, 100% { transform: translateY(0);    opacity: .3; }
+    40%           { transform: translateY(-4px); opacity: .9; }
+}
+
+/* Respect reduced-motion: hold a steady dimmed row instead of bouncing. */
+@media (prefers-reduced-motion: reduce) {
+    .an-thinking span { animation: none; opacity: .5; }
+}
+
+/* Favourite-questions pill. The panel root is an inline-size query container so the category
+   buttons can swap full/short labels on PANEL width — the repo sidebar makes viewport width the
+   wrong measure. inline-size containment is safe here: .an-chat is a flex:1 / min-width:0 column
+   child whose width is imposed by its parent. */
+.an-chat {
+    container-type: inline-size;
+    container-name: an-chat;
+}
+
+.an-fav-section {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap; /* extreme-narrow fallback only — one row at every designed width */
+    gap: 2px;
+    background: var(--mud-palette-background-gray);
+    border: 1px solid var(--mud-palette-lines-default);
+    border-radius: 8px;
+    padding: 2px 8px 2px 6px;
+}
+
+.an-fav-bulb {
+    color: var(--mud-palette-primary);
+    margin-right: 4px;
+}
+
+.an-fav-bulb-disabled {
+    color: var(--mud-palette-text-disabled);
+}
+
+.an-fav-cat-btn {
+    font-size: 13px;
+    text-transform: none;
+    min-width: 0;
+    padding: 2px 8px;
+    white-space: nowrap;
+}
+
+/* Responsive labels: full category names are the base state; below the threshold the single-word
+   names show instead. THRESHOLD 1180px — the normative rule is "the full-label row fits on one
+   line at every panel width >= threshold"; FavouriteQuestionsMenuTests.Threshold must match this
+   value (its boundary test is what keeps the number honest). */
+.an-fav-label-short {
+    display: none;
+}
+
+@container an-chat (max-width: 1179.98px) {
+    .an-fav-label-full {
+        display: none;
+    }
+
+    .an-fav-label-short {
+        display: inline;
+    }
+}
+
+/* Question lists: keep items on one line so each menu widens to its longest question instead of
+   wrapping; the caption keeps the full category name one click away in compact mode. */
+.an-fav-cat-list .mud-menu-item-text {
+    white-space: nowrap;
+}
+
+.an-fav-caption {
+    padding: 4px 12px 6px;
+    font-size: 11px;
+    color: var(--mud-palette-text-secondary);
+    white-space: nowrap;
+}
+
+/* Flow catalog — Monaco YAML editor needs an explicit height (its container has no
+   intrinsic height of its own). */
+.flow-yaml-editor-host { display: block; }
+.flow-yaml-editor { height: 420px; border: 1px solid var(--mud-palette-lines-default); }
+
+/* WorkTimeline (AI-1580 C1, reworked AI-1619 wave 2) — shared presentational timeline component.
+   Global (not a .razor.css scoped bundle: neither Capacitor.Server's App.razor nor
+   Capacitor.Desktop's index.html link a per-project Blazor CSS-isolation bundle, only this file)
+   so it works in both hosts and MAUI. The AI-1492 visual language: thin border-outlined surfaces,
+   rounded corners, no grey/surface background fills -- only semantic colour tints.
+   <p/>
+   AI-1619 wave 2 palette: dedicated --wt-* custom properties (defined here, both themes) replace
+   the previous raw --mud-palette-* references throughout this block -- Tony's "ugly palette"
+   defect. WorkTimelinePresentation.ResolveColorCssVar/ResolveLaneColorCssVar are the only C# call
+   sites that reference these by name; see their doc comments for the ColorKey->var mapping and
+   the one deliberate residual bucket-sharing trade-off. */
+
+:root {
+    /* Lanes -- by TimelineLane.Kind (WorkTimelinePresentation.ResolveLaneColorCssVar). */
+    --wt-lane-issue:  #8b7cf6; /* violet */
+    --wt-lane-pr:     #3f8cfd; /* blue */
+    --wt-lane-commit: #94a3b8; /* neutral slate -- also the fallback for any unrecognised kind */
+
+    /* Milestones -- by WorkTimelineMapping.TimelineMilestoneColorKey's dedicated milestone-*
+       ColorKeys (AI-1807 D16 removed the old bucket-sharing with session-dot phases). */
+    --wt-ms-merged:   #34d399; /* green */
+    --wt-ms-closed:   #34d399; /* green */
+    --wt-ms-reopened: #fbbf24; /* amber */
+    --wt-ms-idle:     var(--mud-palette-text-secondary);
+
+    /* AI-1807 D16 — THE phase palette (AI-1532 mockup legend), the single source both color
+       systems consume: WorkTimelinePresentation.ResolveColorCssVar (timeline dots) AND
+       HomeTabLogic.PhaseColorVar (phase chips + phase-mix bars). The same phase must render the
+       same hue on a dot and on the chip beside it — a source-of-truth test pins the two resolvers
+       to these names per phase. */
+    --phase-implementation: #a78bfa; /* purple -- implementation, refactor */
+    --phase-review:         #2dd4bf; /* teal -- code-review */
+    --phase-spec:           #f59e0b; /* orange -- design, plan, research */
+    --phase-debug:          #ec4899; /* pink -- bugfix, incident-analysis */
+    --phase-chore:          #94a3b8; /* slate -- chore */
+    --phase-neutral:        var(--mud-palette-text-secondary); /* other / unclassified */
+}
+
+:root[data-kcap-theme="light"] {
+    /* Same hues, darkened one step for contrast on a white surface (brief: "verify contrast
+       against both backgrounds"). */
+    --wt-lane-issue:  #7c5cf0;
+    --wt-lane-pr:     #2f6fe0;
+    --wt-lane-commit: #64748b;
+
+    --wt-ms-merged:   #059669;
+    --wt-ms-closed:   #059669;
+    --wt-ms-reopened: #d97706;
+
+    --phase-implementation: #7c5cf0;
+    --phase-review:         #0d9488;
+    --phase-spec:           #d97706;
+    --phase-debug:          #db2777;
+    --phase-chore:          #64748b;
+}
+
+/* AUTO TWIN of the work-timeline light block above — same values, for a visitor who has chosen
+   nothing and whose system is light. Edit both or neither. */
+@media (prefers-color-scheme: light) {
+    :root:not([data-kcap-theme]) {
+        /* Same hues, darkened one step for contrast on a white surface (brief: "verify contrast
+           against both backgrounds"). */
+        --wt-lane-issue:  #7c5cf0;
+        --wt-lane-pr:     #2f6fe0;
+        --wt-lane-commit: #64748b;
+
+        --wt-ms-merged:   #059669;
+        --wt-ms-closed:   #059669;
+        --wt-ms-reopened: #d97706;
+
+        --phase-implementation: #7c5cf0;
+        --phase-review:         #0d9488;
+        --phase-spec:           #d97706;
+        --phase-debug:          #db2777;
+        --phase-chore:          #64748b;
+    }
+}
+
+.wt-root {
+    position: relative;
+    border: 1px solid var(--mud-palette-lines-default);
+    border-radius: 10px;
+    padding: 12px 16px 16px;
+    background: transparent;
+}
+
+.wt-empty {
+    padding: 24px 8px;
+    text-align: center;
+    color: var(--mud-palette-text-secondary);
+}
+
+.wt-toolbar {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 4px;
+}
+
+.wt-more-btn {
+    border: 1px solid var(--mud-palette-lines-default);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--mud-palette-primary);
+    font-size: 0.75rem;
+    padding: 2px 10px;
+    cursor: pointer;
+}
+
+.wt-more-btn:hover,
+.wt-more-btn:focus-visible {
+    background: color-mix(in srgb, var(--mud-palette-primary) 12%, transparent);
+}
+
+/* AI-1619 wave 2: .wt-plot is now a flex ROW -- a fixed-width lane-label gutter (.wt-lane-gutter)
+   to the LEFT of the plot proper (.wt-plot-main), per the mockup's "label sitting OUTSIDE (left
+   of) the bar start". This replaces the old "label lifted -14px above its own bar" treatment
+   entirely, along with the whole first-row-headroom/toolbar-overlap workaround it needed -- a
+   gutter label is vertically centered on its row and can never reach the toolbar above it. */
+.wt-plot {
+    position: relative;
+    display: flex;
+    width: 100%;
+}
+
+.wt-lane-gutter {
+    position: relative;
+    /* AI-1619 wave 3 Fix A.1: widened modestly (104px -> 116px) now that lane labels are always
+       the SHORT key form ("AI-1442"/"PR#412"/a 7-char sha, never repo-qualified -- see
+       WorkItemDetailPanel.TimelineLanes) -- a short label no longer needs the old width to avoid
+       ellipsis-clipping, but a little headroom plus the added right padding below (breathing room
+       before the bar) keeps a slightly-longer real-world key from crowding the plot's edge. */
+    flex: 0 0 116px;
+    width: 116px;
+    height: 100%;
+}
+
+.wt-plot-main {
+    position: relative;
+    flex: 1 1 auto;
+    min-width: 0;
+    height: 100%;
+}
+
+.wt-svg {
+    position: absolute;
+    inset: 0;
+    /* AI-1619 visual pass: SVG clips at its viewport by default, so a marker sitting exactly at
+       the axis start/end (cx = 0% or 100%) loses half its circle/diamond. The plot's parent has
+       16px padding, so letting edge markers spill a few px is safe and matches the mockup, where
+       the first dot renders whole. */
+    overflow: visible;
+    width: 100%;
+    height: 100%;
+}
+
+.wt-lane-bar {
+    /* stroke colour is set inline per-lane (WorkTimelinePresentation.ResolveLaneColorCssVar) --
+       the "issue lane mis-rendering" fix: every lane used to render in this same static colour
+       regardless of Kind. Flat solid fill (no opacity dimming) per the "no halos" defect; ~10px
+       bar height per the mockup. */
+    stroke-width: 10;
+    stroke-linecap: round;
+}
+
+/* AI-1892 — PR lanes render thinner + dashed, visually distinct from the solid issue lanes. The
+   dash here overrides the inline unknown-start dash-array (a CSS rule beats an SVG presentation
+   attribute), which is fine: a PR lane's own dash is the intended treatment either way. */
+.wt-lane-bar-pr {
+    stroke-width: 4;
+    stroke-dasharray: 6 5;
+}
+
+.wt-axis-line {
+    stroke: var(--mud-palette-lines-default);
+    stroke-width: 1.5;
+}
+
+.wt-drop-line {
+    stroke: var(--mud-palette-lines-default);
+    stroke-width: 1;
+    stroke-dasharray: 2 3;
+}
+
+.wt-overlay {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+}
+
+.wt-overlay > * {
+    pointer-events: auto;
+}
+
+/* One per lane row, absolutely positioned inside .wt-lane-gutter at the SAME Y as that lane's bar
+   in .wt-plot-main (WorkTimeline.razor computes both from the identical zones.LanesTop + i *
+   LaneRowHeight value) -- right-aligned so the label sits flush against the plot's left edge,
+   immediately "outside" the bar it describes. */
+.wt-lane-hit {
+    position: absolute;
+    left: 0;
+    right: 0;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    /* AI-1619 wave 3 Fix A.1: a little breathing room between the label's right edge and the bar
+       it describes -- without this the label sat flush against the plot boundary. */
+    padding-right: 6px;
+}
+
+.wt-lane-control {
+    display: inline-flex;
+    align-items: center;
+    max-width: 100%;
+    background: transparent;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    text-decoration: none;
+    color: inherit;
+}
+
+.wt-lane-static {
+    cursor: default;
+}
+
+.wt-lane-label {
+    font-size: 0.7rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+    text-align: right;
+    color: var(--mud-palette-text-primary);
+}
+
+.wt-lane-control:focus-visible,
+.wt-more-btn:focus-visible,
+.wt-node-control:focus-visible,
+.wt-node-stack:focus-visible,
+.wt-popover-link:focus-visible,
+.wt-popover-close:focus-visible {
+    outline: 2px solid var(--mud-palette-primary);
+    outline-offset: 2px;
+    border-radius: 4px;
+}
+
+/* Milestone (above) / session (below) dot labels -- AI-1619 wave 2's "no visible labels on dots"
+   fix. Centered on the marker's X (translate -50%) and vertically centered on its own row's Y
+   (WorkTimeline.razor's AppendGroupVms already resolves that Y per WorkTimelineLayout.AssignLabelRows'
+   row assignment), never resized/repositioned by this rule itself -- the ROW placement is what
+   avoids collisions, not CSS. */
+.wt-node-label {
+    position: absolute;
+    transform: translate(-50%, -50%);
+    font-size: 13px;
+    line-height: 1.15;
+    color: var(--mud-palette-text-secondary);
+    white-space: nowrap;
+    text-align: center;
+    pointer-events: none;
+    /* AI-1619 visual pass: 128px, not 92px. The cap must tolerate every label the row-collision
+       estimator (WorkTimelineLayout.AssignLabelRows, 7px/char + 8px padding) considers placeable,
+       or labels that DON'T collide still ellipsize and the stagger system is defeated — the
+       longest routine milestone label, "PR#412 Merged" (13 chars ≈ 99px), was clipping under the
+       old cap with empty space on both sides. 128px covers a 17-char label; anything longer is a
+       genuine outlier and MAY ellipsize. The 48px truncated cap below stays deliberately tighter. */
+    max-width: 128px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* AI-1619 wave 3 Fix A.4: edge-aware anchoring (WorkTimelineLayout.ResolveLabelAnchor) -- a
+   label near the plot's left/right edge switches away from the default center anchor (translate
+   -50%,-50% + text-align:center, above) to keep its full text inside the container instead of
+   clipping off the edge. Start pins the label's LEFT edge to its marker X (grows rightward, away
+   from the left boundary); End pins its RIGHT edge (grows leftward, away from the right
+   boundary). Both keep the same vertical centering (-50% on Y) as the default. */
+.wt-node-label-start {
+    transform: translate(0, -50%);
+    text-align: left;
+}
+
+.wt-node-label-end {
+    transform: translate(-100%, -50%);
+    text-align: right;
+}
+
+.wt-bookend {
+    position: absolute;
+    font-size: 0.7rem;
+    color: var(--mud-palette-text-secondary);
+    white-space: nowrap;
+    transform: translateY(-100%);
+}
+
+/* AI-1960 — the vertical activity start/end rules: one line each, crossing every zone (milestone
+   row, lanes, axis, session dots) at the exact x its bookend caption names. Faint + dashed so
+   they read as reference lines, never as lane content. */
+.wt-activity-rule {
+    stroke: var(--mud-palette-text-secondary);
+    stroke-width: 1;
+    stroke-dasharray: 3 3;
+    opacity: 0.55;
+}
+
+/* AI-1960 — a compressed-gap break band: a subtle full-height tint distinguishing "time was
+   skipped here" from plain empty plot, carrying the double-slash glyph + a duration label. */
+.wt-break-band {
+    fill: var(--mud-palette-text-secondary);
+    opacity: 0.07;
+}
+
+.wt-break-glyph {
+    stroke: var(--mud-palette-text-secondary);
+    stroke-width: 1.5;
+    fill: none;
+    opacity: 0.8;
+}
+
+.wt-gap-label {
+    position: absolute;
+    transform: translate(-50%, -100%);
+    font-size: 0.65rem;
+    color: var(--mud-palette-text-secondary);
+    white-space: nowrap;
+    pointer-events: none;
+}
+
+/* AI-1960 — an EvidenceWindow lane end (an observation: "last visible session ended"/"linked at")
+   fades out instead of ending with the hard stop a real closure fact gets. */
+.wt-lane-tail-fade {
+    opacity: 0.3;
+}
+
+.wt-bookend-start {
+    text-align: left;
+}
+
+.wt-bookend-end {
+    text-align: right;
+    transform: translate(-100%, -100%);
+}
+
+.wt-node-hit {
+    position: absolute;
+    transform: translate(-50%, -50%);
+}
+
+.wt-node-control {
+    display: block;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: transparent;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+}
+
+.wt-node-static {
+    cursor: default;
+}
+
+/* AI-1619 wave 2: flat solid fill using the group's OWN resolved colour (set inline via
+   style="background:..." in WorkTimeline.razor), no border -- the "inconsistent halos" fix. This
+   used to be a translucent color-mix background + a var(--mud-palette-primary) ring regardless of
+   the group's actual semantic colour, so a stacked node's ring never matched the colour a single
+   node of the same phase/kind would have shown. */
+.wt-node-stack {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    border: none;
+    color: #fff;
+    cursor: pointer;
+}
+
+.wt-stack-badge {
+    font-size: 0.65rem;
+    font-weight: 600;
+    line-height: 1;
+}
+
+/* AI-1835 — the node tooltip is STACKED lines (title, then short metadata lines) rendered via
+   MudTooltip's TooltipContent, replacing the single " · "-joined Text line ("horizontal wall of
+   text"). Long session/subject titles wrap inside the max-width instead of stretching the
+   tooltip across the screen. */
+.wt-tooltip {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    max-width: 320px;
+    text-align: left;
+}
+
+.wt-tooltip-title {
+    font-weight: 600;
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+
+.wt-tooltip-line {
+    font-size: 0.75rem;
+    opacity: 0.85;
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+
+.wt-popover {
+    max-width: 320px;
+}
+
+.wt-popover-content {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    /* Extra top padding clears the absolutely-positioned close corner below -- AI-1619 wave 2's
+       "wasted popover header" fix: the close control no longer occupies its own flex row (it used
+       to be the column's first child with align-self:flex-end, i.e. an entire row spent on
+       nothing but one icon), it's a small corner overlay now and rows start right at the top. */
+    padding: 22px 8px 8px;
+    max-height: 260px;
+    overflow-y: auto;
+}
+
+.wt-popover-content:focus-visible,
+.wt-popover-content:focus {
+    outline: none;
+}
+
+/* AI-1580 Task 10 — review round 1, MINOR 8 (repositioned AI-1619 wave 2, see .wt-popover-content
+   above): an explicit close affordance alongside Escape/re-click-trigger, kept for pointer users.
+   Still a real, focusable, aria-labelled button -- only its VISUAL placement changed. */
+.wt-popover-close {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    display: inline-flex;
+    background: transparent;
+    border: none;
+    padding: 2px;
+    cursor: pointer;
+    color: var(--mud-palette-text-secondary);
+}
+
+.wt-popover-close:hover {
+    color: var(--mud-palette-text-primary);
+}
+
+.wt-popover-row {
+    display: flex;
+}
+
+.wt-popover-link {
+    display: flex;
+    flex: 1;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    padding: 6px 8px;
+    border-radius: 8px;
+    border: none;
+    background: transparent;
+    text-decoration: none;
+    color: inherit;
+    cursor: pointer;
+    text-align: left;
+}
+
+.wt-popover-link:hover {
+    background: color-mix(in srgb, var(--mud-palette-primary) 10%, transparent);
+}
+
+.wt-popover-static {
+    cursor: default;
+}
+
+.wt-popover-row-label {
+    font-size: 0.8rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.wt-popover-row-time {
+    font-size: 0.7rem;
+    color: var(--mud-palette-text-secondary);
+    white-space: nowrap;
+}
+
+/* WorkItemDetailPanel summary header (AI-1580 Task 8) — the panel's first AI-1492-restyled
+   surface: thin border-outlined, rounded, no grey/surface-fill card (mirrors .wt-root's own
+   border/radius/transparent-background treatment above). Later tasks (9: eval card, 10:
+   timeline/feed cards) follow the same border/radius/no-fill recipe for their own sections. */
+.wdp-summary-card {
+    flex-shrink: 0;
+    /* AI-1619 Fix 2: was `margin: 12px 16px 0` when this card was a direct child of
+       .ud-detail-panel (no padding of its own). Now that it lives inside .ud-tab-content (which
+       already applies 8px/16px top/horizontal padding to every section here), the horizontal
+       margin is dropped entirely -- keeping it would have doubled this card's own gutter to 32px
+       against every other section's 16px. The top margin drops too (the container's own 8px
+       padding is enough now that this card is the tab's first child); the bottom margin separates
+       it from the eval card right below. */
+    margin: 0 0 12px;
+    padding: 16px;
+    border: 1px solid var(--mud-palette-lines-default);
+    border-radius: 12px;
+    background: transparent;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.wdp-summary-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.wdp-summary-title {
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+}
+
+/* The secondary-key line (ChipLabel'd first Linked-bucket link) — monospace like the retired
+   .wi-key-chip, but no background fill (AI-1492: only semantic colour tints carry a fill). */
+.wdp-summary-key {
+    font-family: monospace;
+    opacity: 0.8;
+}
+
+/* AI-1599 Task 6 — the overview row: the summarizer's LLM overview, or (when
+   .wdp-summary-overview-derived is present) the query-computed mechanical fallback. No
+   background fill, matching the card's own no-grey-surface rule; the derived caption is
+   distinguished by italics + letter-spacing + reduced opacity alone (no colour), so it never
+   reads as a status/semantic tint. */
+.wdp-summary-overview {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.wdp-summary-overview-derived {
+    font-style: italic;
+    letter-spacing: 0.02em;
+    opacity: 0.6;
+    white-space: nowrap;
+}
+
+.wdp-contributors {
+    display: flex;
+    align-items: center;
+    margin-top: 4px;
+}
+
+/* Overlapping avatar stack — same circular, primary-tinted treatment as .wt-node-stack so the
+   contributor strip reads as part of the same AI-1492 family rather than a one-off. */
+.wdp-contributor-avatar {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: color-mix(in srgb, var(--mud-palette-primary) 16%, transparent);
+    border: 1px solid var(--mud-palette-primary);
+    color: var(--mud-palette-primary);
+    font-size: 0.65rem;
+    font-weight: 600;
+    margin-left: -6px;
+}
+
+.wdp-contributor-avatar:first-child {
+    margin-left: 0;
+}
+
+.wdp-contributor-count {
+    font-size: 0.72rem;
+    opacity: 0.7;
+    margin-left: 8px;
+}
+
+/* WorkItemEvalCard (AI-1580 Task 9) — the aggregated Evaluation card + its per-category findings
+   drawer, rendered directly below .wdp-summary-card. Same AI-1492 recipe: thin border-outlined,
+   rounded, no grey/surface-fill card; only semantic colour tints (success/warning/error) carry a
+   fill or border tint, driven per-tile via the --wec-tile-color custom property set inline (each
+   category's own band colour, computed in code so this stylesheet never encodes score thresholds). */
+.wec-card {
+    /* AI-1619 Fix 2: horizontal margin dropped for the same reason as .wdp-summary-card above --
+       both cards now live inside .ud-tab-content, which already supplies 16px of horizontal
+       padding. The 8px top margin is kept as-is; it separates this card from .wdp-summary-card
+       right above it, unchanged by the move. */
+    margin: 8px 0 0;
+    padding: 16px;
+    border: 1px solid var(--mud-palette-lines-default);
+    border-radius: 12px;
+    background: transparent;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.wec-header-row {
+    display: flex;
+    /* AI-1619 Fix 1: was `baseline` -- fine for two plain text runs, but the header now also
+       carries an inline SVG donut (EvalScoreDonut), whose "baseline" is its own bottom edge, not
+       a text baseline; `center` keeps the title/donut/findings-total vertically aligned. */
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+/* Review round 1, MINOR 8a: renamed from .wec-overall-label -- this is the card's own title
+   ("Evaluation"), not the Overall score itself (that's .wec-overall-chip below, which now also
+   carries its own "Overall: ..." aria-label so it isn't confused with a fifth, unlabelled category
+   tile). */
+.wec-card-title {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    opacity: 0.7;
+}
+
+/* AI-1619 Fix 1 — the header's score + band, now donut-based like the tiles below. The donut
+   carries its own accessible name (no aria-label duplicated onto this wrapper); the tooltip
+   (unrounded average) lives here since it applies to the whole group, not just the donut. */
+.wec-overall-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.wec-overall-donut {
+    display: inline-flex;
+    align-items: center;
+}
+
+.wec-overall-chip {
+    font-weight: 600;
+    font-size: 0.9rem;
+}
+
+.wec-findings-total {
+    font-size: 0.8rem;
+    opacity: 0.7;
+    margin-left: auto;
+}
+
+.wec-coverage {
+    font-size: 0.75rem;
+    opacity: 0.7;
+}
+
+.wec-tiles {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-top: 4px;
+}
+
+/* Bare <button> reset -- these are real focusable controls (CONVENTIONS.md accessibility rule),
+   not decorative divs with a synthetic click handler. */
+.wec-tile {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    width: 116px;
+    padding: 10px 8px;
+    border: 1px solid var(--wec-tile-color, var(--mud-palette-lines-default));
+    border-radius: 10px;
+    background: transparent;
+    font: inherit;
+    color: inherit;
+    cursor: pointer;
+}
+
+.wec-tile:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--wec-tile-color, var(--mud-palette-lines-default)) 8%, transparent);
+}
+
+.wec-tile:focus-visible {
+    outline: 2px solid var(--mud-palette-primary);
+    outline-offset: 2px;
+}
+
+.wec-tile-open {
+    background: color-mix(in srgb, var(--wec-tile-color) 14%, transparent);
+}
+
+/* Review round 1, MINOR 8b: .wec-tile:hover:not(:disabled) above has specificity (0,3,0) --
+   .wec-tile-open alone is only (0,1,0), so without this rule hovering an OPEN tile was silently
+   overridden by the plain hover's lighter 8% tint (the inverse of intent: the open/selected tile
+   should look at least as pronounced on hover, not lighter). This selector is (0,4,0) --
+   unambiguously higher regardless of source order, not relying on a specificity tie-break. */
+.wec-tile.wec-tile-open:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--wec-tile-color) 14%, transparent);
+}
+
+.wec-tile-nodata {
+    border-style: dashed;
+    opacity: 0.55;
+    cursor: default;
+}
+
+/* AI-1619 Fix 1 — wraps the tile's EvalScoreDonut (replaced the hand-rolled .wec-donut/-track/-fill
+   trio entirely). aria-hidden lives on this span at the call site: the .wec-tile button already
+   carries its own full aria-label, so the donut's own accessible name would just be redundant
+   chatter for assistive tech. */
+.wec-tile-donut {
+    display: inline-flex;
+    align-items: center;
+}
+
+.wec-tile-name {
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-align: center;
+}
+
+.wec-tile-band {
+    font-size: 0.68rem;
+    font-weight: 600;
+}
+
+.wec-tile-findings {
+    font-size: 0.68rem;
+    opacity: 0.7;
+}
+
+.wec-tile-nodata-label {
+    font-size: 0.7rem;
+    opacity: 0.8;
+    font-style: italic;
+}
+
+.wec-drawer {
+    margin-top: 4px;
+    border: 1px solid var(--mud-palette-lines-default);
+    border-radius: 10px;
+    padding: 10px 12px;
+    background: transparent;
+}
+
+.wec-drawer-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    font-weight: 600;
+    font-size: 0.8rem;
+}
+
+.wec-drawer-close {
+    border: none;
+    background: transparent;
+    font: inherit;
+    font-size: 1.1rem;
+    line-height: 1;
+    color: inherit;
+    cursor: pointer;
+    padding: 2px 6px;
+}
+
+.wec-drawer-close:hover {
+    opacity: 0.7;
+}
+
+.wec-drawer-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 8px;
+}
+
+.wec-finding-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 8px;
+    border: 1px solid var(--mud-palette-lines-default);
+    border-radius: 6px;
+    text-decoration: none;
+    color: inherit;
+}
+
+.wec-finding-row:hover {
+    background: color-mix(in srgb, var(--mud-palette-primary) 6%, transparent);
+}
+
+.wec-finding-icon {
+    flex-shrink: 0;
+    margin-top: 1px;
+}
+
+.wec-finding-body {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.wec-finding-text {
+    font-size: 0.82rem;
+}
+
+.wec-finding-source {
+    font-size: 0.7rem;
+    opacity: 0.65;
+}
+
+/* AI-1684 — the judge's optional per-question "Suggestion" tip. Same visual weight as
+   .wec-finding-blank-caption (a secondary line under the finding text, not a competing headline),
+   but not italic — this is real judge-authored guidance, not a fallback disclaimer. */
+.wec-finding-recommendation {
+    font-size: 0.78rem;
+    opacity: 0.8;
+}
+
+.wec-drawer-empty {
+    font-size: 0.8rem;
+    opacity: 0.6;
+    margin-top: 8px;
+}
+
+.wec-drawer-showall {
+    /* AI-1532 T10 fix: no margin-top here -- this button is now ALWAYS a flex item inside
+       .wec-drawer-footer (added by T9), which already supplies its own margin-top: 8px above
+       the whole footer row. Flex items don't collapse margins with anything, so keeping this
+       button's own margin-top too doubled the gap (~16px) whenever it rendered alone. */
+    border: none;
+    background: transparent;
+    color: var(--mud-palette-primary);
+    font: inherit;
+    font-size: 0.78rem;
+    cursor: pointer;
+    padding: 0;
+}
+
+.wec-drawer-showall:hover {
+    text-decoration: underline;
+}
+
+/* AI-1532 T9 — additive-only rules for the three WorkItemEvalCard changes (callback has no markup
+   of its own): the drawer's truncation-disclosure footer, and the blank-finding fallback row.
+   Same AI-1492 language as the rest of this block: thin border-outlined, no grey/surface fill. */
+
+.wec-drawer-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-top: 8px;
+}
+
+.wec-drawer-truncated {
+    font-size: 0.7rem;
+    opacity: 0.6;
+    margin-left: auto;
+}
+
+.wec-finding-blank {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.wec-finding-question {
+    font-size: 0.82rem;
+}
+
+.wec-finding-verdict-chip {
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: capitalize;
+    padding: 1px 6px;
+    border-radius: 8px;
+    border: 1px solid currentColor;
+}
+
+.wec-finding-blank-caption {
+    font-size: 0.75rem;
+    opacity: 0.6;
+    font-style: italic;
+}
+
+/* AI-1580 Task 10 — WorkItemDetailPanel's interleaved feed + Also-referenced rows + the
+   timeline's "N older sessions not plotted" note. New rules only, per CONVENTIONS.md's CSS-
+   placement rule (this repo links no Blazor CSS-isolation bundle -- see the .wt-/.wec- blocks
+   above for the same discipline). AI-1492 visual language: border-outlined, rounded, no grey/
+   surface fill -- chips are outlined (no fill at all), never the grey-background pill the
+   pre-Task-10 .wdp-link-chip used. */
+
+.wdp-timeline-not-plotted {
+    display: block;
+    margin-top: 6px;
+    opacity: 0.6;
+}
+
+.wdp-feed {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+/* AI-1619 Fix 3: this row used to BE the single flex-wrap line every item type rendered directly
+   into. It's now a column of one or two lines -- .wdp-feed-line1 below carries the exact same
+   flex-row/wrap/align-items treatment this rule used to have, so a link/milestone row (never a
+   line 2) renders identically to before; a session row gets a second .wdp-feed-line2 line below
+   it. */
+.wdp-feed-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 8px;
+    border: 1px solid var(--mud-palette-lines-default);
+    border-radius: 6px;
+}
+
+.wdp-feed-line1 {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+/* AI-1619 Fix 3/4: contributor · harness · model, indented to align under the title rather than
+   the primary/visibility icon column (.wdp-feed-primary's 20px + .wdp-feed-line1's 10px gap). */
+.wdp-feed-line2 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-left: 30px;
+}
+
+/* Struck-through, not just faded -- §3C-1 requires suppressed Linked/AlsoReferenced rows to
+   render struck-through. Targeted at the row's own key/title text (rather than relying on
+   flex-container decoration propagation into nested MudChip markup, which isn't guaranteed to
+   draw through a chip's own internal box) so the strike is reliably visible regardless of what
+   else the row renders. */
+.wdp-feed-row.suppressed {
+    opacity: 0.55;
+}
+
+.wdp-feed-row.suppressed .wdp-feed-key,
+.wdp-feed-row.suppressed .wdp-feed-title {
+    text-decoration: line-through;
+}
+
+.wdp-feed-key {
+    font-weight: 600;
+    font-size: 0.85rem;
+    font-family: monospace;
+}
+
+.wdp-feed-title {
+    font-size: 0.85rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+    min-width: 0;
+}
+
+a.wdp-feed-title {
+    color: inherit;
+    text-decoration: none;
+}
+
+a.wdp-feed-title:hover {
+    text-decoration: underline;
+}
+
+.wdp-feed-meta {
+    font-size: 0.72rem;
+    opacity: 0.65;
+    white-space: nowrap;
+}
+
+.wdp-feed-chip {
+    font-size: 0.72rem;
+    opacity: 0.75;
+    font-family: monospace;
+    padding: 1px 6px;
+    border-radius: 8px;
+    border: 1px solid var(--mud-palette-lines-default);
+}
+
+.wdp-feed-chip-seed {
+    border-color: var(--mud-palette-primary);
+    color: var(--mud-palette-primary);
+    opacity: 1;
+}
+
+/* AI-1600 Task 4 — the References section (spec §3C item 4: "distinct icon + dashed treatment +
+   'Reference' chip"). .wdp-feed-row-reference overrides the row's border STYLE only (dashed
+   instead of solid) — width/color are inherited from .wdp-feed-row's own shorthand declaration
+   above, this rule only needs to win the style sub-property. .wdp-feed-chip-reference echoes the
+   same dashed treatment on the chip itself, distinguishing it from the solid-bordered
+   .wdp-feed-chip-seed. */
+.wdp-feed-row-reference {
+    border-style: dashed;
+}
+
+.wdp-feed-chip-reference {
+    border-style: dashed;
+    opacity: 1;
+}
+
+/* AI-1660 PR 2 — the Unresolved chip: a verified-missing SEED now surfaces (spec §3) instead of
+   vanishing with the ordinary missing-row exclusion. Warning-toned counterpart of the
+   primary-toned .wdp-feed-chip-seed above. */
+.wdp-feed-chip-unresolved {
+    border-color: var(--mud-palette-warning);
+    color: var(--mud-palette-warning);
+    opacity: 1;
+}
+
+.wdp-feed-primary {
+    display: inline-flex;
+    width: 20px;
+    flex-shrink: 0;
+}
+
+.wdp-feed-time {
+    font-size: 0.72rem;
+    opacity: 0.6;
+    white-space: nowrap;
+    margin-left: auto;
+}
+
+/* Home tab strip (AI-1532) — Build / Verify / Manage / Review, deep-linked via ?view=. AI-1492
+   visual language: thin border-outlined, no grey/surface background fills — an underline
+   indicator on the active tab rather than a filled pill. */
+/* AI-1723 §3 S2 — the wrap div is the container-query container (the .an-chat precedent): the
+   per-tab descriptions hide below 720px of STRIP width, and unconditionally on mobile. */
+.home-tabstrip-wrap {
+    container-type: inline-size;
+}
+
+/* AI-1807 D1 (§2) — the four tabs span the full content width, one 25% track each (the mockup's
+   even distribution). Content inside each tab stays left-aligned per the mockup. Mobile restores
+   the wrapping flex row below. */
+.home-tabstrip {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 4px;
+    border-bottom: 1px solid var(--mud-palette-lines-default);
+}
+
+.home-tabstrip-mobile .home-tabstrip {
+    display: flex;
+    flex-wrap: wrap;
+}
+
+.home-tab-btn {
+    appearance: none;
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--mud-palette-text-secondary);
+    font: inherit;
+    font-weight: 500;
+    font-size: 0.9rem;
+    padding: 8px 14px;
+    margin-bottom: -1px;
+    cursor: pointer;
+    transition: color 0.15s ease, border-color 0.15s ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.home-tab-btn-icon {
+    flex-shrink: 0;
+}
+
+.home-tab-name {
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-size: 0.82rem;
+}
+
+.home-tab-desc {
+    font-size: 0.78rem;
+    font-weight: 400;
+    opacity: 0.65;
+    white-space: nowrap;
+}
+
+@container (max-width: 719px) {
+    .home-tab-desc {
+        display: none;
+    }
+}
+
+.home-tabstrip-mobile .home-tab-desc {
+    display: none;
+}
+
+.home-tab-btn:hover {
+    color: var(--mud-palette-text-primary);
+}
+
+.home-tab-btn:focus-visible {
+    outline: 2px solid var(--mud-palette-primary);
+    outline-offset: 2px;
+}
+
+.home-tab-btn-active {
+    color: var(--mud-palette-primary);
+    border-bottom-color: var(--mud-palette-primary);
+}
+
+/* One panel per tab. Only the active one is visible — toggled via the native `hidden` attribute
+   rather than a CSS class, so the [hidden] override below is load-bearing: without it the plain
+   `display: flex` here (an AUTHOR-origin rule) would beat the user-agent stylesheet's
+   `[hidden] { display: none }` regardless of selector order, since author styles always win over
+   UA styles at equal specificity. */
+.home-panel {
+    display: flex;
+    flex-direction: column;
+}
+
+.home-panel[hidden] {
+    display: none;
+}
+
+/* AI-1807 D11 (§5) — the independent-column scroll chain, active only under .home-tab--panel
+   (Verify/Manage/Review on desktop; see HomeTab.razor for the class toggle and the .home-tab--panel
+   overflow rule beside .home-tab). Every min-height: 0 link is load-bearing: flex/grid items
+   default to min-height auto, which refuses to shrink below content and silently defeats a
+   descendant's overflow — turning the chain back into one page scroll. align-items: stretch (the
+   grid default .hv-panel's own `start` overrode) is what gives both columns the full row height
+   to scroll within. Mobile (.hv-panel-mobile) opts out: stacked columns keep the page scroll. */
+.home-tab--panel .home-panel {
+    flex: 1;
+    min-height: 0;
+}
+
+.home-tab--panel .hv-panel:not(.hv-panel-mobile) {
+    flex: 1;
+    min-height: 0;
+    align-items: stretch;
+}
+
+.home-tab--panel .hv-panel:not(.hv-panel-mobile) > .hv-tree,
+.home-tab--panel .hv-panel:not(.hv-panel-mobile) > .hv-aggregate {
+    overflow-y: auto;
+    min-height: 0;
+}
+
+/* Build panel's section stack — same rhythm `.home-tab` used to apply directly to its children
+   before AI-1532 nested them one level deeper under the tab strip + panel structure. */
+.home-build-sections {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+}
+
+/* Verify/Manage/Review placeholder panels: EmptyState already supplies its own padding (16px) and
+   min-height (300px), so drop .home-card's padding here rather than stack both. */
+.home-placeholder-card {
+    padding: 0;
+}
+
+/* ── AI-1532 T6 — "Your week" recommendations + accordion lists ─────────────────────────────── */
+
+/* AI-1532 T7b — the optional LLM prose block, above the recommendation card list. Sparkle icon +
+   text + copy button; no border/fill of its own (it's a lead-in to the card list below, not
+   another card), muted tint on the icon so it reads as "assisted," not a status/alert. */
+.home-week-summary {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
+.home-week-summary-icon {
+    flex-shrink: 0;
+    margin-top: 2px;
+    color: var(--mud-palette-primary);
+    opacity: 0.8;
+}
+
+.home-week-summary-text {
+    flex: 1;
+    min-width: 0;
+    font-size: 0.9rem;
+    line-height: 1.4;
+}
+
+.home-week-summary-copy {
+    flex-shrink: 0;
+}
+
+/* One recommendation card — icon+phrase left, action control right (AI-1723 §4.1 B1). The
+   two-class selector is LOAD-BEARING: .home-card's own `flex-direction: column` lives in
+   HomeTab.razor's component <style> block, which the browser receives AFTER this stylesheet — at
+   equal single-class specificity that later `column` silently beat this rule's `row`, which is
+   exactly the "button renders underneath the phrase" bug the fidelity pass fixes. Two classes
+   (0-2-0) win regardless of stylesheet order. */
+.home-card.home-rec-card {
+    flex-direction: row;
+    align-items: center;
+    gap: 12px;
+}
+
+.home-rec-body {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1;
+    min-width: 0;
+}
+
+/* AI-1723 §4.1 B2 — kind-colored recommendation icons in a soft tinted circle (mockup: blue/indigo
+   lightbulb for tips, amber warning for the evaluate nudge). Both themes via palette variables. */
+.home-rec-icon {
+    border-radius: 50%;
+    padding: 5px;
+    flex-shrink: 0;
+    box-sizing: content-box;
+}
+
+.home-rec-icon-tip {
+    color: var(--mud-palette-info);
+    background: color-mix(in srgb, var(--mud-palette-info) 14%, transparent);
+}
+
+.home-rec-icon-warn {
+    color: var(--mud-palette-warning);
+    background: color-mix(in srgb, var(--mud-palette-warning) 14%, transparent);
+}
+
+/* Plain text node (see HomeTab.razor's binding — a plain @@expression, never a MarkupString) —
+   this rule is presentation only and cannot itself make markdown/HTML render; the safety property
+   comes from the binding, not this class. */
+.home-rec-phrase {
+    font-size: 0.9rem;
+    line-height: 1.4;
+}
+
+.home-rec-actions {
+    flex-shrink: 0;
+}
+
+/* The enqueue-result banner that replaces a recommendation's action button after a click.
+   AI-1723 §4.2 — full-width, bordered, and emphasized: the old small-caption treatment read as
+   nothing happening ("the button doesn't work"). */
+.home-rec-enqueue-result {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 8px 12px;
+    font-size: 0.85rem;
+    font-weight: 500;
+    border: 1px solid color-mix(in srgb, var(--mud-palette-info) 35%, transparent);
+    background: color-mix(in srgb, var(--mud-palette-info) 8%, transparent);
+    border-radius: 6px;
+}
+
+.home-rec-enqueue-caption {
+    font-size: 0.72rem;
+    opacity: 0.6;
+}
+
+/* Section header + "All X" escape-hatch link, side by side. */
+.home-section-header-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.home-section-header-row .home-section-header {
+    margin-bottom: 0;
+}
+
+/* AI-1894 §0.2 — collapsible Build section header: a full-width toggle button (chevron + title +
+   count badge) with an optional "All X" action as a sibling to its right. Mirrors the
+   Pending-approvals home-queue-header language. */
+.home-section-collapse-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.home-section-collapse-toggle {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    /* MudBlazor ships a global bare-`button` rule with justify-content: center — without this
+       override the chevron + title + count group floats to the middle of the full-width toggle
+       instead of hugging the left edge like every other section header. */
+    justify-content: flex-start;
+    gap: 6px;
+    padding: 2px 0;
+    background: transparent;
+    border: none;
+    text-align: left;
+    font: inherit;
+    color: inherit;
+    cursor: pointer;
+}
+
+.home-section-collapse-toggle:hover .home-section-collapse-title {
+    text-decoration: underline;
+}
+
+.home-section-collapse-toggle:focus-visible {
+    outline: 2px solid var(--mud-palette-primary);
+    outline-offset: 2px;
+    border-radius: 4px;
+}
+
+.home-section-collapse-title {
+    font-size: 1rem;
+    font-weight: 600;
+}
+
+.home-section-collapse-count {
+    font-size: 0.75rem;
+    opacity: 0.6;
+    font-weight: 500;
+}
+
+/* Non-collapsible list-section header ("My work items" / "My sessions"): plain title + count group
+   on the left of the existing .home-section-header-row (whose space-between pushes the "All X"
+   action right). These two sections are always open — the collapse toggle read as clutter and the
+   lists are the tab's core content. */
+.home-section-header-static {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    min-width: 0;
+}
+
+/* AI-1894 §1.6 — compact outcome card. Line 1: title (ellipsis) + meta (time · model) right; line 2
+   (home-outcome-compact): the outcome body clamped to two rendered lines. The per-card Show more
+   below always expands to the full CopyableMarkdown — reachability is guaranteed, not char-gated. */
+.home-outcome-line1 {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    min-width: 0;
+}
+
+.home-outcome-line1 .home-outcome-title {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.home-outcome-meta {
+    flex-shrink: 0;
+    font-size: 0.72rem;
+    opacity: 0.6;
+    white-space: nowrap;
+}
+
+.home-outcome-compact {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    font-size: 0.85rem;
+}
+
+/* Trim MudMarkdown's own block margins inside the two-line teaser so the clamp reads as body text. */
+.home-outcome-compact :first-child { margin-top: 0; }
+.home-outcome-compact :last-child { margin-bottom: 0; }
+
+/* AI-1894 §0.3 — the session accordion row's line-2 relative time, pushed to the right of the
+   vendor/model chips. */
+.home-session-time {
+    margin-left: auto;
+    font-size: 0.72rem;
+    opacity: 0.6;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+/* AI-1894 §1.8 — the Knowledge section renders human-audience Suggestions as the shared
+   EvalRetrospectiveRowView rows inside a bordered card, matching the Evaluation tab's section chrome
+   (each row carries its own inter-row top border via IsFirst). */
+.home-knowledge-rows {
+    border: 1px solid var(--mud-palette-lines-default);
+    border-radius: 10px;
+    padding: 4px 12px 8px;
+}
+
+.home-knowledge-cap-caption {
+    margin-top: 6px;
+    font-size: 0.72rem;
+    opacity: 0.6;
+}
+
+/* "My work items" / "My sessions" side by side on wide viewports, stacked on mobile — mirrors the
+   IsMobile-gated class-toggle convention .home-tab-mobile already uses on this same component.
+   minmax(0, 1fr), never bare 1fr: a bare 1fr track's min is `auto`, so the columns' nowrap rows
+   (title + chips, .home-wi-line2) set a min-content floor that let "My work items" grow past half
+   and pushed the whole grid wider than the page — the Build tab's horizontal scrollbar. A 0-floor
+   track is exactly half; the content shrinks (title ellipsis) instead of widening the page. */
+.home-build-two-col {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 24px;
+    align-items: start;
+}
+
+.home-build-two-col-mobile {
+    grid-template-columns: 1fr;
+    gap: 16px;
+}
+
+/* AI-1894 §0.1 — the shared HomeShowMore affordance's wrapper. Sessions tab's own
+   .ud-show-more-wrapper is a page-local style; Home needs it global for the shared component. */
+.ud-show-more-wrapper {
+    padding: 0 8px 4px 8px;
+}
+
+.home-accordion-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+/* One accordion row — border-outlined rounded card (AI-1492/1520 language), no grey/surface fill. */
+.home-accordion-row {
+    border: 1px solid var(--mud-palette-lines-default);
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.home-accordion-header {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 10px 12px;
+}
+
+/* A real <button>, separate from the row's title/key-chip links (which are valid interactive
+   content and cannot legally nest inside a <button> element) — see HomeTab.razor's doc comment. */
+.home-accordion-toggle {
+    appearance: none;
+    background: transparent;
+    border: none;
+    padding: 0;
+    margin-top: 2px;
+    cursor: pointer;
+    color: inherit;
+    flex-shrink: 0;
+}
+
+.home-accordion-main {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+    flex: 1;
+}
+
+.home-accordion-title-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+/* AI-1894 §0.3 — two-line row header. Both lines clip; the title carries the ellipsis, the trailing
+   time never shrinks. Applied to the Build accordion rows (My work items / My sessions) so a row's
+   summary fits exactly two lines. The default title row wraps (above) — this call site must not. */
+.home-accordion-header.home-row-2line {
+    align-items: center;
+}
+
+.home-row-2line .home-accordion-title-row {
+    flex-wrap: nowrap;
+    overflow: hidden;
+}
+
+.home-row-2line .home-accordion-title-row > a {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.home-row-2line .home-accordion-chip-row {
+    flex-wrap: nowrap;
+    overflow: hidden;
+}
+
+/* With the two-col grid now hard-halved (minmax(0, 1fr) above), the title row is what absorbs the
+   squeeze — the title link ellipsizes (the > a rule above); the key/repo chips must NOT shrink
+   with it, or their text wraps inside the pill ("AI-" / "1662" on two lines). Qodo review: a
+   non-shrinking chip in this nowrap + overflow:hidden row must also be BOUNDED, or one extreme
+   value (a long repo name) crowds the title/eval indicator out entirely — so the chip caps at
+   max-width and ellipsizes its own text instead. (The HomeKeyChip span is a flex item here, so
+   its inner anchor text ellipsizes through the span's own overflow.) */
+.home-row-2line .home-accordion-title-row .wdp-feed-chip {
+    flex-shrink: 0;
+    max-width: 200px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* The session row's eval slot (live pill / donut / "no eval") sits pinned right per the AI-1894
+   §0.3 row contract, and never shrinks — the title yields first. */
+.home-row-2line .home-accordion-title-row .home-eval-indicator {
+    margin-left: auto;
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+/* Work-item line 2: a fixed phase-chip column so every mini-timeline bar aligns to a common left
+   edge across rows (not the variable end of the phase name); the bar fills the flexible middle; the
+   parts caption + time sit right. Replaces the old fixed 120px bar width. */
+.home-wi-line2 {
+    display: grid;
+    grid-template-columns: 132px minmax(0, 1fr) auto;
+    gap: 10px;
+    align-items: center;
+    overflow: hidden;
+    font-size: 0.72rem;
+    opacity: 0.85;
+}
+
+.home-wi-line2 .home-phase-chip {
+    justify-self: start;
+}
+
+.home-wi-line2 .home-parts-bar,
+.home-wi-line2 .home-phase-mix-bar {
+    width: 100%;
+    max-width: none;
+}
+
+.home-wi-line2 .home-wi-meta {
+    justify-self: end;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+}
+
+.home-accordion-detail {
+    border-top: 1px solid var(--mud-palette-lines-default);
+    padding: 8px 12px 10px 34px; /* aligns under .home-accordion-main, past the toggle button */
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.home-accordion-empty-detail {
+    font-size: 0.8rem;
+    opacity: 0.6;
+}
+
+.home-accordion-outcome {
+    font-size: 0.82rem;
+    line-height: 1.4;
+    opacity: 0.9;
+}
+
+/* AI-1532 review fix (finding D) — the AI-1580 chronological strip inside a Build work-item row's
+   expanded detail. Visually mirrors WorkItemsTab.razor's own .work-item-card-strip (a page-local
+   <style> block HomeTab cannot depend on) so the two surfaces read as the same design language;
+   the individual chips reuse the SHARED .wdp-feed-chip class rather than a duplicate definition. */
+.home-wi-strip {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+}
+
+.home-wi-strip-more {
+    font-size: 0.68rem;
+    opacity: 0.6;
+    white-space: nowrap;
+}
+
+/* Phase chip — the AI-1532 phase palette (HomeTabLogic.PhaseColorVar), muted tonal treatment
+   keyed off `currentColor` so the inline `color: var(--mud-palette-*)` style also drives the
+   border. */
+/* AI-1723 §6.6 — the mockup's dot+label phase chip (see HomePhaseChip.razor): a small filled dot
+   in the phase color + secondary-text label, transparent background — replacing the old
+   outlined-pill-with-colored-text treatment at every Home phase-chip site at once. */
+.home-phase-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 0.72rem;
+    font-weight: 500;
+    color: var(--mud-palette-text-secondary);
+    white-space: nowrap;
+}
+
+.home-phase-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+/* AI-1723 §4.5 B8/§6.3 — the declared-parts progress bar: done (success) + in-progress (accent)
+   segments; there is deliberately no third segment (spec §6.3 — the endpoint rule makes
+   not-started impossible). */
+.home-parts-bar {
+    display: flex;
+    height: 5px;
+    border-radius: 2.5px;
+    overflow: hidden;
+    background: var(--mud-palette-lines-default);
+    width: 100%;
+    max-width: 320px;
+}
+
+.home-parts-bar-done {
+    height: 100%;
+    background: var(--mud-palette-success);
+}
+
+.home-parts-bar-progress {
+    height: 100%;
+    background: var(--mud-palette-primary);
+    opacity: 0.75;
+}
+
+/* AI-1723 §4.5 B9 — a live session's eval-slot pill (the mockup's green "live" chip). */
+.home-live-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 8px;
+    border-radius: 9px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--mud-palette-success);
+    border: 1px solid color-mix(in srgb, var(--mud-palette-success) 55%, transparent);
+    background: color-mix(in srgb, var(--mud-palette-success) 10%, transparent);
+}
+
+/* AI-1723 §4.5 B8/B9 — the second row of an accordion entry (phase chip / vendor+model chips),
+   under the title per the mockup. */
+.home-accordion-chip-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 2px;
+    min-width: 0;
+}
+
+/* Phase-mix bar — proportional segments (HomeTabLogic.ComputePhaseMixSegments), same palette. */
+.home-phase-mix-bar {
+    display: flex;
+    height: 4px;
+    border-radius: 2px;
+    overflow: hidden;
+    background: var(--mud-palette-lines-default);
+    width: 100%;
+    max-width: 160px;
+}
+
+.home-phase-mix-segment {
+    height: 100%;
+}
+
+/* Session accordion row's live/ended status dot. */
+.home-status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--mud-palette-text-secondary);
+    opacity: 0.5;
+    flex-shrink: 0;
+    margin-top: 6px;
+}
+
+.home-status-dot-live {
+    background: var(--mud-palette-success);
+    opacity: 1;
+}
+
+/* Eval indicator (donut + trailing fact-count/"no eval" label) — mirrors CompactStatsRow's own
+   .eval-group/.eval-noeval treatment (that class lives in CompactStatsRow's own local <style>, not
+   components.css, so it isn't guaranteed present on this page — this is Home's own copy). */
+.home-eval-indicator {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+}
+
+.home-eval-noeval {
+    font-size: 0.72rem;
+    color: var(--mud-palette-text-secondary);
+    opacity: 0.85;
+}
+
+/* AI-1532 T10 — the Verify tab's level tree + aggregate panel + learnings list. AI-1492 language:
+   thin border-outlined, rounded, no grey/surface fill; chips outlined only. New rules only. */
+
+.hv-panel {
+    display: grid;
+    /* AI-1723 §5.1 V2 — wider tree column (mockup proportion). */
+    grid-template-columns: minmax(260px, 420px) 1fr;
+    gap: 16px;
+    align-items: start;
+}
+
+.hv-panel-mobile {
+    grid-template-columns: 1fr;
+}
+
+/* AI-1723 §5.1 V1 — the tree grows to its expanded content; under AI-1807 D11's .home-tab--panel
+   chain (see .home-panel above) the COLUMN scrolls it, elsewhere the page does. The old
+   .hv-tree-bounded 70vh modifier is deleted — it was dead CSS (nothing applied it after
+   AI-1726/27 moved Manage/Review to infinite scroll). */
+.hv-tree {
+    border: 1px solid var(--mud-palette-lines-default);
+    border-radius: 6px;
+    padding: 8px;
+}
+
+/* AI-1747 fix 9 — the Start-plan checkout picker (renders in the recommendation row's action slot
+   when an ambiguous_daemon_match refusal carries candidates). A compact right-aligned stack: caption,
+   one bordered choice per checkout, and a low-emphasis dismiss. */
+.home-plan-picker {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 4px;
+    max-width: 340px;
+}
+
+.home-plan-picker-caption {
+    font-size: 0.72rem;
+    opacity: 0.7;
+}
+
+.home-plan-picker-choice {
+    border: 1px solid var(--mud-palette-lines-default);
+    border-radius: 4px;
+    background: transparent;
+    color: var(--mud-palette-primary);
+    font: inherit;
+    font-size: 0.78rem;
+    cursor: pointer;
+    padding: 2px 8px;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.home-plan-picker-choice:hover {
+    background: color-mix(in srgb, var(--mud-palette-primary) 8%, transparent);
+}
+
+.home-plan-picker-dismiss {
+    border: none;
+    background: transparent;
+    color: inherit;
+    opacity: 0.6;
+    font: inherit;
+    font-size: 0.72rem;
+    cursor: pointer;
+    padding: 0;
+}
+
+/* AI-1747 fix 1 — CONSTANT per-level indent. Child .hv-node divs are NESTED inside their parent's
+   .hv-node (see HomeVerifyPanel.NodeFragment), so this single descendant rule indents each level by
+   the same fixed amount — the old depth-scaled inline padding compounded through the ancestor chain
+   (0/16/48/96/160px cumulative by session depth). */
+.hv-node .hv-node {
+    padding-left: 14px;
+}
+
+/* AI-1747 fix 1 — a node's OWN sub-items (child-page spinner, "Load more") sit inside the parent's
+   already-indented div; a small constant offset aligns them under the child labels. */
+.hv-node-sub {
+    margin-left: 14px;
+}
+
+/* AI-1747 fix 3 — the leaf (session) row's toggle placeholder: same footprint as the 20px MudIcon
+   the .hv-node-toggle button wraps, so leaf badges/labels column-align with expandable siblings. */
+.hv-node-leaf-spacer {
+    width: 20px;
+    flex-shrink: 0;
+}
+
+/* AI-1723 §5.1 V4 — the per-node type badge (ALL/PROJ/REPO/WI/SESS). */
+.hv-node-badge {
+    flex-shrink: 0;
+    font-size: 0.6rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    padding: 0 5px;
+    border-radius: 4px;
+    border: 1px solid var(--mud-palette-lines-default);
+    color: var(--mud-palette-text-secondary);
+    line-height: 1.5;
+}
+
+/* AI-1723 §5.2 — the horizontal aggregate summary (overall row + category tiles). */
+.hv-summary {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-top: 8px;
+}
+
+.hv-summary-overall {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.hv-summary-overall-main {
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+    border: none;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    padding: 0;
+}
+
+.hv-summary-overall-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.hv-summary-overall-line {
+    font-size: 1rem;
+    font-weight: 600;
+}
+
+.hv-summary-overall-caption {
+    font-size: 0.75rem;
+    opacity: 0.7;
+}
+
+.hv-summary-chips {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.hv-coverage-chip {
+    color: var(--mud-palette-success);
+    border-color: color-mix(in srgb, var(--mud-palette-success) 45%, transparent);
+}
+
+.hv-summary-tiles {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.hv-summary-tile {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    border: 1px solid var(--mud-palette-lines-default);
+    border-radius: 6px;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    padding: 8px 12px;
+    flex: 1 1 160px;
+    min-width: 150px;
+}
+
+.hv-summary-tile:hover {
+    background: color-mix(in srgb, var(--mud-palette-primary) 6%, transparent);
+}
+
+.hv-summary-tile-active {
+    border-color: var(--mud-palette-primary);
+    background: color-mix(in srgb, var(--mud-palette-primary) 10%, transparent);
+}
+
+.hv-summary-tile-body {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+}
+
+.hv-summary-tile-name {
+    font-size: 0.8rem;
+    font-weight: 600;
+}
+
+.hv-summary-tile-meta {
+    font-size: 0.72rem;
+    opacity: 0.7;
+}
+
+.hv-node-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    border-radius: 4px;
+    padding: 2px 4px;
+}
+
+.hv-node-row-selected {
+    background: color-mix(in srgb, var(--mud-palette-primary) 10%, transparent);
+}
+
+.hv-node-toggle {
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    padding: 0;
+    color: inherit;
+}
+
+.hv-node-label {
+    border: none;
+    background: transparent;
+    font: inherit;
+    /* AI-1723 §5.1 V2 — left-aligned, with justify-content pinned too: a bare text-align can be
+       beaten by a flex/inline-flex display sneaking in from framework button styling. */
+    display: block;
+    text-align: left !important;
+    justify-content: flex-start;
+    cursor: pointer;
+    color: inherit;
+    flex: 1;
+    min-width: 0;
+    padding: 2px 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.hv-node-pinned {
+    border-left: 2px solid var(--mud-palette-primary);
+    margin: 2px 0;
+}
+
+.hv-load-more {
+    border: none;
+    background: transparent;
+    color: var(--mud-palette-primary);
+    font: inherit;
+    font-size: 0.78rem;
+    cursor: pointer;
+    padding: 4px 0;
+}
+
+.hv-load-more:hover {
+    text-decoration: underline;
+}
+
+.hv-aggregate {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-width: 0;
+}
+
+.hv-aggregate-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.hv-level-chip {
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    padding: 2px 8px;
+    border-radius: 8px;
+    border: 1px solid var(--mud-palette-lines-default);
+    opacity: 0.8;
+}
+
+.hv-selected-name {
+    font-size: 1.1rem;
+    font-weight: 500;
+}
+
+/* AI-1532 Task 13 (review fix, Minor) — .wdp-section-title's ONLY prior rule lived inside
+   WorkItemDetailPanel.razor's own inline <style> block. That block never reaches the Home page
+   (this repo links no CSS-isolation bundle, and WorkItemDetailPanel never renders on `/`), so every
+   Home section-title heading using this class (Manage's "Timeline"/"Who's working on what", Review's
+   "Timeline"/"Cost & token breakdown"/"Evaluation") rendered with NO uppercase/letter-spacing/margin
+   treatment at all — an actual defect on this page, not merely cosmetic pre-existing debt. Moved
+   here (the global stylesheet every Home panel already loads) rather than duplicated; the
+   WorkItemDetailPanel-local copy is left in place (harmless — identical rule, applies twice). */
+.wdp-section-title {
+    margin: 16px 0 8px 0;
+    opacity: 0.7;
+    text-transform: uppercase;
+    font-size: 0.75rem;
+    letter-spacing: 0.04em;
+}
+
+.wdp-section-title:first-child {
+    margin-top: 0;
+}
+
+/* AI-1810 D8/D9/D10 — the aggregate eval category card stack (AggregateEvalCategoryCard): the
+   AI-1492 card chrome over cross-session aggregate data. Mounted on Verify (aggregate tree levels)
+   and Review (workItem). AI-1858 T6 restyled the card header + row chrome to match
+   EvalCategoryCard/EvalQuestionRow's own convention of near-total INLINE styling (only a thin
+   border/radius on the card itself, everything else `style=` on the element) — .agg-eval-card,
+   .agg-eval-card-header/-name/-meta/-chevron/-body are now pure class markers with no rule of
+   their own here, mirroring .eval-category-card/.eval-category-header having none either. Only
+   the group/row box-model rules below (not part of the base EvalCategoryCard chrome — they're
+   this component's own D9/D10 aggregation layer) keep a CSS-backed shape. AI-1858 T8 retired the
+   panels' own `.agg-eval-stack` wrapper div (ScopeEvalView's `eval-card-stack` inline style is its
+   replacement) along with the `.agg-eval-stack` rule that used to sit here. */
+
+.agg-eval-question-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+}
+
+.agg-eval-question-label {
+    font-weight: 600;
+    font-size: 0.8rem;
+}
+
+.agg-eval-question-meta {
+    font-size: 0.72rem;
+    opacity: 0.65;
+}
+
+.agg-eval-question-partial {
+    font-size: 0.7rem;
+    color: var(--mud-palette-warning);
+    border: 1px solid color-mix(in srgb, var(--mud-palette-warning) 45%, transparent);
+    border-radius: 8px;
+    padding: 1px 6px;
+    white-space: nowrap;
+}
+
+.agg-eval-dup-badge {
+    font-size: 0.7rem;
+    font-weight: 600;
+    border: 1px solid var(--mud-palette-lines-default);
+    border-radius: 8px;
+    padding: 0 6px;
+    opacity: 0.8;
+    cursor: default;
+}
+
+/* AI-1810 — the flat learnings panel became the AggregateEvalCategoryCard stack; only the
+   row/leaf classes below survive (reused inside .agg-eval-card-body), plus this title, which
+   Manage/Review still use as their list-pane header. AI-1858 T6 — the row is now a clickable
+   EvalQuestionRow-style disclosure (verdict marker + label + score + chevron, expanding to the
+   finding/recommendation/provenance); .hv-learning-icon (the old always-visible warning glyph) is
+   gone, replaced by the inline-styled ".hv-learning-marker" verdict marker in the row itself. */
+.hv-learnings-title {
+    font-weight: 600;
+    font-size: 0.85rem;
+}
+
+.hv-learnings-empty {
+    font-size: 0.8rem;
+    opacity: 0.6;
+}
+
+.hv-learnings-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.hv-learning-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 8px;
+    border: 1px solid var(--mud-palette-lines-default);
+    border-radius: 6px;
+}
+
+.hv-learning-body {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    min-width: 0;
+}
+
+.hv-learning-source {
+    font-size: 0.7rem;
+    opacity: 0.65;
+    color: inherit;
+    text-decoration: none;
+}
+
+.hv-learning-source:hover {
+    text-decoration: underline;
+}
+
+/* AI-1532 Task 12 — Manage tab. Reuses .hv-panel/.hv-tree/.hv-aggregate/.hv-load-more (above) for
+   the two-column layout and the shared .home-phase-chip/.home-phase-mix-bar/.wdp-contributor-avatar/
+   .wdp-feed-chip/.wdp-summary-* chrome for row content — only the pieces unique to Manage (the
+   day-window box, the selectable row button, the who's-working-on-what rows) get new classes here. */
+.hm-list-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 2px 4px 8px;
+    font-weight: 600;
+    font-size: 0.85rem;
+}
+
+.hm-window-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.75rem;
+    font-weight: 400;
+    opacity: 0.75;
+}
+
+.hm-window-input {
+    width: 48px;
+    padding: 2px 4px;
+    border-radius: 4px;
+    border: 1px solid var(--mud-palette-lines-default);
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: center;
+}
+
+/* AI-1532 H3 P1 review fix — the row is a real <button> again (native Tab/Enter/Space semantics,
+   no hand-rolled preventDefault); .hm-row-shell wraps it alongside HomeKeyChip, which now renders
+   as a SIBLING rather than a descendant (see HomeManagePanel/HomeReviewPanel's ManageRow/ReviewRow
+   doc comments). The button's own reset properties were already button-shaped from before that row
+   was briefly a <div role="button"> — `appearance`/`margin` are the two additions a native <button>
+   element needs that a div never did, to strip default browser button chrome. */
+/* AI-1723 M2/M5 — the mockup's three-line card: the SHELL carries the card chrome, the whole-card
+   hover, and the selected left-accent (the H3 button/anchor separation stays — the key chip is a
+   shell child, never a button descendant). AI-1747 fix 6 — the shell is now also the whole-card
+   CLICK target (its @onclick in ManageRow/ReviewRow), matching the hover affordance, so it carries
+   the pointer cursor; a stretched `.hm-row::after { inset: 0 }` overlay was tried first and cannot
+   work — a <button> is itself the containing block for its own absolutely-positioned descendants
+   (form-element quirk), so the overlay covered only the title line (probed via elementFromPoint,
+   not assumed). `min-width: 0` lets the card shrink to its grid column so the title's ellipsis
+   (fix 5) has a real bound to truncate against. */
+.hm-row-shell {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+    cursor: pointer;
+    border: 1px solid var(--mud-palette-lines-default);
+    border-left: 3px solid transparent;
+    border-radius: 6px;
+    padding: 8px 10px;
+    margin-bottom: 6px;
+    transition: background-color 0.15s ease;
+}
+
+.hm-row-shell:hover {
+    background: color-mix(in srgb, var(--mud-palette-primary) 6%, transparent);
+}
+
+.hm-row-shell-selected {
+    background: color-mix(in srgb, var(--mud-palette-primary) 10%, transparent);
+    border-left-color: var(--mud-palette-primary);
+}
+
+.hm-row {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    text-align: left;
+    border: none;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+    padding: 0;
+    appearance: none;
+    margin: 0;
+}
+
+/* AI-1747 fix 5 — `display: block`: overflow/text-overflow/white-space do NOTHING on an inline
+   box, so this span never truncated at all — a long title painted straight across the section
+   divider into the detail pane (and its overflowing box intercepted clicks meant for it). As a
+   block it clips at the row button's width and ellipsizes for real. */
+.hm-row-title {
+    display: block;
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.hm-row-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.72rem;
+    opacity: 0.65;
+    margin-top: 4px;
+}
+
+.hm-row-avatars {
+    display: flex;
+    gap: 2px;
+}
+
+/* AI-1961 — the Build tab's two-line row shape (AI-1894 §0.3 / .home-wi-line2), applied to the
+   Manage/Review list rows. Line 1: the title button ellipsizes and yields first; the key chip and
+   avatar cluster never shrink (the chip is bounded + self-ellipsizing, the .home-row-2line
+   .wdp-feed-chip precedent). The title button's own .hm-row block/width:100% rules (above) are
+   for the old stacked layout — as a line-1 flex item it must share the line instead. */
+.hm-row-line1 {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    overflow: hidden;
+}
+
+.hm-row-line1 .hm-row {
+    width: auto;
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.hm-row-line1 .wdp-feed-chip {
+    flex-shrink: 0;
+    max-width: 160px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.hm-row-line1 .hm-row-avatars {
+    flex-shrink: 0;
+    align-items: center;
+    margin-left: auto;
+}
+
+.hm-row-avatars-more {
+    font-size: 0.68rem;
+    opacity: 0.65;
+    white-space: nowrap;
+    margin-left: 2px;
+}
+
+/* Line 2: the .home-wi-line2 fixed-lead-column formula sized for the narrower .hv-tree list column
+   (112px lead vs Build's 132px — same common-left-edge guarantee): col 1 the phase/status chip,
+   col 2 the parts/phase-mix bar spanning the flexible middle, col 3 the caption + time right. The
+   lead cell clips rather than pushing the bar off its shared edge; the meta's stacked-layout
+   margin-top is neutralized (the grid centers vertically). */
+.hm-row-line2 {
+    display: grid;
+    grid-template-columns: 112px minmax(0, 1fr) auto;
+    gap: 10px;
+    align-items: center;
+    overflow: hidden;
+    font-size: 0.72rem;
+}
+
+.hm-row-line2 > :first-child {
+    justify-self: start;
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+}
+
+.hm-row-line2 .home-parts-bar,
+.hm-row-line2 .home-phase-mix-bar {
+    width: 100%;
+    max-width: none;
+}
+
+.hm-row-line2 .hm-row-meta {
+    justify-self: end;
+    margin-top: 0;
+    white-space: nowrap;
+}
+
+/* AI-1723 M6 — the detail header's chip row (issue / PR / repo / phase / status). */
+.hm-detail-chips {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-top: 4px;
+}
+
+/* AI-1723 §6.4 — the shared status chip (HomeStatusChip): one vocabulary, three tints. */
+.home-status-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 8px;
+    border-radius: 9px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    border: 1px solid;
+    white-space: nowrap;
+}
+
+.home-status-chip-in_flight {
+    color: var(--mud-palette-info);
+    border-color: color-mix(in srgb, var(--mud-palette-info) 45%, transparent);
+    background: color-mix(in srgb, var(--mud-palette-info) 9%, transparent);
+}
+
+.home-status-chip-shipped {
+    color: var(--mud-palette-success);
+    border-color: color-mix(in srgb, var(--mud-palette-success) 45%, transparent);
+    background: color-mix(in srgb, var(--mud-palette-success) 9%, transparent);
+}
+
+.home-status-chip-closed {
+    color: var(--mud-palette-text-secondary);
+    border-color: var(--mud-palette-lines-default);
+    background: color-mix(in srgb, var(--mud-palette-text-secondary) 7%, transparent);
+}
+
+/* AI-1723 §6.1 — the picture variant of the shared contributor avatar (ContributorAvatar). */
+.contrib-avatar-img {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    object-fit: cover;
+    display: inline-block;
+}
+
+/* AI-1723 M7 — Blockers & dependencies rows. */
+.hm-blockers {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.hm-blocker-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.85rem;
+}
+
+.hm-blocker-kind {
+    flex-shrink: 0;
+    font-size: 0.68rem;
+    font-weight: 600;
+    padding: 1px 7px;
+    border-radius: 8px;
+    border: 1px solid var(--mud-palette-lines-default);
+    color: var(--mud-palette-text-secondary);
+}
+
+.hm-blocker-kind-blockedby {
+    color: var(--mud-palette-warning);
+    border-color: color-mix(in srgb, var(--mud-palette-warning) 45%, transparent);
+}
+
+.hm-blocker-kind-blocks {
+    color: var(--mud-palette-info);
+    border-color: color-mix(in srgb, var(--mud-palette-info) 45%, transparent);
+}
+
+/* AI-1813 D13/D14 — always-present blockers chrome + the Work breakdown section. */
+.hm-blockers-empty, .hm-breakdown-empty {
+    font-size: 0.8rem;
+    opacity: 0.65;
+}
+
+.hm-blocker-chip {
+    font-size: 0.68rem;
+    padding: 1px 7px;
+    border-radius: 999px;
+    border: 1px solid var(--mud-palette-lines-default);
+    opacity: 0.85;
+    white-space: nowrap;
+}
+
+.hm-blocker-chip-risk {
+    color: var(--mud-palette-warning);
+    border-color: var(--mud-palette-warning);
+}
+
+.hm-breakdown {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.hm-breakdown-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.hm-breakdown-icon {
+    flex: none;
+}
+
+.hm-breakdown-meta {
+    font-size: 0.75rem;
+    opacity: 0.7;
+    white-space: nowrap;
+}
+
+.hm-breakdown-avatars {
+    display: inline-flex;
+    gap: 2px;
+    margin-left: auto;
+}
+
+.hm-contributor-row-outwindow {
+    opacity: 0.75;
+}
+
+.hm-blocker-advisory {
+    font-size: 0.75rem;
+    opacity: 0.7;
+    font-style: italic;
+}
+
+/* AI-1723 M8 — a contributor's "what they're working on" secondary line(s). */
+.hm-contributor-work {
+    display: block;
+    font-size: 0.78rem;
+    opacity: 0.8;
+}
+
+/* AI-1723 §6.5 — the infinite-scroll sentinel (wraps the Load-more button). */
+.hm-scroll-sentinel {
+    display: block;
+}
+
+.hm-overview {
+    opacity: 0.85;
+}
+
+.hm-contributor-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.hm-contributor-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 8px;
+    border: 1px solid var(--mud-palette-lines-default);
+    border-radius: 6px;
+}
+
+.hm-contributor-body {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+    flex: 1;
+}
+
+.hm-contributor-name {
+    font-weight: 500;
+    font-size: 0.85rem;
+}
+
+.hm-contributor-meta {
+    font-size: 0.72rem;
+    opacity: 0.65;
+}
+
+/* AI-1961 — "Who's working on what": the contributor's phase-mix bar and meta share one grid line
+   (bar flexible + meta right), so every contributor's bar starts on the body's common left edge
+   and spans the available width — replacing the old 160px left-hugging stub. The bar's own
+   max-width is lifted the same way .hm-row-line2 does it. */
+.hm-contributor-line2 {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 10px;
+    align-items: center;
+}
+
+.hm-contributor-line2 .home-phase-mix-bar {
+    width: 100%;
+    max-width: none;
+}
+
+.hm-contributor-line2 .hm-contributor-meta {
+    white-space: nowrap;
+}
+
+/* AI-1532 Task 13 (spec §3.4) — the Review tab's own additions. Reuses .hv-panel/.hv-tree/
+   .hv-aggregate/.hv-load-more, .hm-list-header/.hm-window-*/.hm-row-*/.hm-overview, and every
+   .wdp-*/.wec-*/.home-phase-*/.hv-learning-* class verbatim (same chrome as Manage/Verify) — only
+   the cost card (hero, per-model bars, day chart) and the row status/cost chips are new here. */
+.hrv-status-chip {
+    opacity: 0.75;
+}
+
+.hrv-cost-chip {
+    font-size: 0.72rem;
+    opacity: 0.75;
+    white-space: nowrap;
+}
+
+.hrv-copy-button {
+    margin-left: auto;
+}
+
+/* AI-1723 R4 — the mockup's two-column composition: hero + per-model rows left, the cumulative
+   line chart right (wrapping to a stack on narrow panes). */
+/* AI-1811 D15 — the cost section rebuilt to the mockup: left column (hero + model bars) fixed at
+   25% of the card, the cumulative chart taking the rest ("the star of the show"), stacked on
+   narrow panels. */
+.hrv-cost-card {
+    display: grid;
+    grid-template-columns: minmax(220px, 25%) 1fr;
+    gap: 20px;
+    align-items: start;
+    padding: 16px;
+    border: 1px solid var(--mud-palette-lines-default);
+    border-radius: 6px;
+}
+
+@media (max-width: 900px) {
+    .hrv-cost-card {
+        grid-template-columns: 1fr;
+    }
+}
+
+.hrv-cost-main {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-width: 0;
+}
+
+.hrv-cost-hero {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.hrv-cost-hero-value {
+    font-size: 1.4rem;
+    font-weight: 600;
+}
+
+.hrv-cost-unpriced {
+    font-size: 0.78rem;
+    color: var(--mud-palette-warning);
+}
+
+.hrv-cost-tokens {
+    font-size: 0.78rem;
+    opacity: 0.7;
+    margin-left: auto;
+}
+
+/* D15 — ONE grid shared by every model-bar row: the container owns the three columns and each row
+   is display:contents, so name/track/value tracks align across all rows (per-row grids sized their
+   `auto` columns independently — the audit's unequal-track-width defect). */
+.hrv-model-bars {
+    display: grid;
+    grid-template-columns: minmax(72px, max-content) minmax(0, 1fr) max-content;
+    align-items: center;
+    gap: 6px 8px;
+}
+
+.hrv-model-bar-row {
+    display: contents;
+}
+
+.hrv-model-bar-name {
+    font-size: 0.78rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 160px;
+}
+
+/* D15 — the mockup's pill-shaped track; the fill color is set inline per model from the shared
+   chart palette (HomeReviewPanelLogic.ModelBarColorVar). */
+.hrv-model-bar-track {
+    height: 10px;
+    border-radius: 999px;
+    background: var(--mud-palette-lines-default);
+    overflow: hidden;
+}
+
+.hrv-model-bar-fill {
+    display: block;
+    height: 100%;
+    border-radius: 999px;
+}
+
+.hrv-model-bar-value {
+    font-size: 0.78rem;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    text-align: right;
+}
+
+/* AI-1811 D15 — the cumulative cost chart, full-bleed at 160px: geometry stretches in a
+   percent-space SVG (preserveAspectRatio="none"; vector-effect keeps strokes crisp), every label
+   is HTML positioned over the plot so text never distorts. */
+/* AI-1894 codex round-3 — the cumulative-line label thinning is proven non-overlapping in a 320px
+   coordinate system (HomeReviewPanelLogic.HomeReviewPlotFloorPx), so the plot must never render
+   NARROWER than that, or the fixed-px labels compress into overlap. The chart is pinned to a 320px
+   floor inside .hrv-cum-scroll (overflow-x: auto), so a viewport too narrow to hold it scrolls the
+   chart rather than compressing it — the page body never scrolls horizontally. Keep this 320px in
+   sync with HomeReviewPlotFloorPx. */
+.hrv-cum-scroll {
+    overflow-x: auto;
+}
+
+.hrv-cum-chart {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 320px;
+}
+
+.hrv-cum-plot {
+    position: relative;
+    height: 160px;
+}
+
+.hrv-cum-svg {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+    overflow: visible;
+}
+
+.hrv-cum-grid {
+    stroke: var(--mud-palette-lines-default);
+    stroke-width: 1;
+    vector-effect: non-scaling-stroke;
+}
+
+.hrv-cum-line {
+    stroke: var(--wt-lane-issue);
+    stroke-width: 2;
+    stroke-linejoin: round;
+    stroke-linecap: round;
+    vector-effect: non-scaling-stroke;
+}
+
+.hrv-cum-area {
+    stroke: none;
+}
+
+.hrv-cum-area-stop-top {
+    stop-color: var(--wt-lane-issue);
+    stop-opacity: 0.28;
+}
+
+.hrv-cum-area-stop-bottom {
+    stop-color: var(--wt-lane-issue);
+    stop-opacity: 0.02;
+}
+
+/* D15 — the x-axis strip: a positioning context one line tall; per-bucket labels are absolutely
+   placed at their bucket's x percent (endpoints pinned to the edges). */
+.hrv-cum-labels {
+    position: relative;
+    height: 1.1em;
+    font-size: 0.7rem;
+    opacity: 0.7;
+}
+
+.hrv-cum-date-label {
+    position: absolute;
+    top: 0;
+    white-space: nowrap;
+}
+
+.hrv-cum-grid-label {
+    position: absolute;
+    left: 4px;
+    transform: translateY(-100%);
+    font-size: 10px;
+    color: var(--mud-palette-text-secondary);
+    opacity: 0.85;
+    pointer-events: none;
+}
+
+.hrv-cum-terminal-dot {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--wt-lane-issue);
+    transform: translate(50%, -50%);
+}
+
+.hrv-cum-terminal-label {
+    position: absolute;
+    top: 2px;
+    right: 8px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--mud-palette-text-primary);
+}
+
+.hrv-day-chart-label {
+    font-size: 0.75rem;
+    opacity: 0.7;
+}
+
+
+/* ── Notification bell badge (AI-1728) ─────────────────────────────────────────
+   The unread badge was clipped: only its lower part rendered.
+
+   MEASURED, not guessed (headless chromium against MudBlazor 9.7's own CSS):
+     .mud-icon-button is padding:12px + a 1.5rem icon = 51px tall,
+     but MudAppBar Dense="true" is a 48px toolbar — so the button already
+     overflows its bar by ~1.5px top and bottom.
+     MudBadge top/right/overlap resolves to `bottom: calc(100% - 12px)`, putting
+     the 20px badge's top at button-top minus 8px => -9.5px in viewport terms.
+     MudAppBar is fixed at top:0, so those pixels are ABOVE the viewport and the
+     browser clips them. Nothing downstream can recover them.
+
+   The fix nudges the badge down so it sits wholly inside the 48px bar while
+   keeping the default icon size (the bell must match the hamburger and theme
+   toggle beside it — Size.Small also fixes the clip but shrinks the icon).
+   Verified for 1 digit, 2 digits and the "99+" overflow form: badge box
+   4.5px..24.5px inside a 0..48px bar.
+
+   NOTE the font is a red herring: Roboto's glyph box is 14px and Inter's 15px at
+   this size, both well inside the 20px badge. Line-height changes fix nothing. */
+.nb-badge .mud-badge.mud-badge-top.right.mud-badge-overlap {
+    bottom: calc(100% - 26px);
+
+    /* Horizontal (the second symptom: the badge sat ON TOP of the avatar next to it).
+       MEASURED the same way, at a 1280px bar:
+         MudBlazor's overlap rule is the `inset` shorthand
+         `auto auto calc(100% - 12px) calc(100% - 12px)`, so the badge is anchored by its
+         LEFT edge 12px in from the button's right edge and then grows RIGHTWARD, out of
+         the 48px button box: +8px for one digit, +15.1px for two, +22.8px for "99+".
+         The only separation from the avatar is the bell's own mr-2 (8px), so the badge
+         reached the avatar's left edge at ONE digit and covered 7.1px / 14.8px of the
+         picture at two digits / "99+".
+       Anchoring the RIGHT edge instead keeps the badge inside the button's own box at
+       every width — it grows leftward over the bell glyph's corner, which is what an
+       overlap badge is supposed to do — so the 8px gap to the avatar always survives.
+       `left` must be reset explicitly: the shorthand above sets it, and dropping only
+       `right` in would leave both edges pinned and stretch the badge. */
+    left: auto;
+    right: 0;
+}
