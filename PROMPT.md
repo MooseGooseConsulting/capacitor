@@ -11,10 +11,30 @@ to bottom.
   already have. Includes the full wire contract, the canonical model as observed on a
   live instance, the 32 analytics views, the console's stack, and the list of upstream
   couplings to cut.
-- `reference/WAVES.md` — how to run the job. Six waves, each ending at a demonstrable
-  gate. Read the "method" section carefully; it is not what you'd assume.
+- `reference/WAVES.md` — a **proposed** decomposition into six waves, each ending at a
+  demonstrable gate. Read its "method" section carefully; it is not what you'd assume.
+  And read its opening honestly: the constraints in it are hard, the gates are strong,
+  **the sequence is a guess** made by someone who had never run an import.
 
 Those two files are the brief. Everything below is orientation.
+
+## Your first task is to disagree with the plan
+
+Before building anything: reason over the goal yourself. Work out what this job actually
+decomposes into, in what order, split how — from the evidence, not from `WAVES.md`.
+
+Then compare. State where your decomposition differs from the proposal and why. Adopt
+yours where you can defend it. Adopting the proposal wholesale is a legitimate outcome —
+but only after you've genuinely tried to break it, because cheap agreement is the exact
+failure this brief exists to prevent.
+
+Three things are not yours to re-decide: the **invariants** (evidence-backed, read from
+the client's own source), the **licensing constraints**, and the rule that **upstream is
+the oracle**. Everything else — sequence, split, milestones, the two-agent seam — is
+yours.
+
+Re-plan between waves too. What you learn in one should change the next, and any plan
+written before the first import will be partly wrong.
 
 ---
 
