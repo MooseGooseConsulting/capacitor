@@ -28,7 +28,7 @@ public static class MachineAuth {
     /// <para>Measured, not assumed: this host answers <c>grant_type=client_credentials</c> with an
     /// OAuth2 credential rejection for bad credentials. <c>api.workos.com/oauth2/token</c> 404s.</para>
     /// </summary>
-    public const string DefaultTokenUrl = "https://signin.kcap.ai/oauth2/token";
+    public const string DefaultTokenUrl = ""; // severed at the fork: vendor endpoint removed
 
     /// <summary>KCAP_WORKOS_TOKEN_URL is an internal dev/test override; not documented for end users.</summary>
     public static string TokenUrl =>

@@ -382,25 +382,19 @@ public static class CodexConfigToml {
     /// then hosts sorted) so repeated writes are idempotent.
     /// </summary>
     public static IReadOnlyList<string> BuildAllowDomains(IEnumerable<string?> serverUrls) {
-        var hosts              = new List<string>();
-        var seen               = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var includeKcapWildcard = false;
+        // Severed at the fork: upstream collapsed any *.kcap.ai server into a single
+        // `**.kcap.ai` wildcard entry in Codex's allowed-hosts list. We have no SaaS domain,
+        // so every host is now listed literally and uniformly.
+        var hosts = new List<string>();
+        var seen  = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var url in serverUrls) {
             var host = TryGetHost(url);
             if (host is null) continue;
-
-            if (host.Equals("kcap.ai", StringComparison.OrdinalIgnoreCase) ||
-                host.EndsWith(".kcap.ai", StringComparison.OrdinalIgnoreCase)) {
-                includeKcapWildcard = true;
-            } else if (seen.Add(host)) {
-                hosts.Add(host);
-            }
+            if (seen.Add(host)) hosts.Add(host);
         }
 
         hosts.Sort(StringComparer.Ordinal);
-
-        if (includeKcapWildcard) hosts.Insert(0, "**.kcap.ai");
 
         return hosts;
     }

@@ -38,5 +38,7 @@ public static class ServerInput {
         arg.Contains("://") || arg.Contains('.') || arg.Contains(':')
         || arg.Equals("localhost", StringComparison.OrdinalIgnoreCase) // bare loopback host, not a kcap.ai slug
             ? arg
-            : $"https://{arg}.kcap.ai";
+            // Severed at the fork: a bare label no longer expands to the vendor's SaaS domain.
+            // Give a full URL.
+            : arg;
 }

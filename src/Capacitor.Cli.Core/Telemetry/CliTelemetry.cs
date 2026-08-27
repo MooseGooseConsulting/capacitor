@@ -10,8 +10,10 @@ namespace Capacitor.Cli.Core.Telemetry;
 /// telemetry bug must never become a crash-on-every-command regression.
 /// </summary>
 public static class CliTelemetry {
-    const string Endpoint = "https://phog.kurrent.io";
-    const string Token    = "phc_DeHBgHGersY4LmDlADnPrsCPOAmMO7QFOH8f4DVEVmD";
+    // Severed at the fork: the vendor's PostHog collector and project write key are gone.
+    // Restoring telemetry means pointing these at infrastructure we own.
+    const string Endpoint = "";
+    const string Token    = "";
 
     static readonly TimeSpan FlushBudget = TimeSpan.FromSeconds(1.5);
 
@@ -68,8 +70,12 @@ public static class CliTelemetry {
                 _suppressedSticky = true;
             }
             if (_suppressedSticky) return; // app-spawned child: no notice, no device id, no events, _client stays null
-            Enabled = TelemetrySettings.Resolve(TelemetryState.PersistedEnabled(config)).Enabled
-                   && CommandEvents.IsReportable(command);
+            // Severed at the fork. There is no collector to report to, so telemetry is off
+            // unconditionally — not merely defaulted off. The config key and DO_NOT_TRACK still
+            // resolve below for `kcap config show`, but cannot turn collection back on.
+            _ = TelemetrySettings.Resolve(TelemetryState.PersistedEnabled(config)).Enabled
+             && CommandEvents.IsReportable(command);
+            Enabled = false;
             if (!Enabled) return;
 
             _debug = Environment.GetEnvironmentVariable("KCAP_TELEMETRY_DEBUG") == "1";
@@ -263,7 +269,6 @@ public static class CliTelemetry {
             "file paths, or transcript content. It can be associated with your workspace and its creator.");
         Console.Error.WriteLine(
             "Opt out: kcap config set telemetry off (or DO_NOT_TRACK=1).");
-        Console.Error.WriteLine("https://capacitor.kurrent.io/privacy");
 
         TelemetryState.MarkNoticeShown(config);
         Capture("cli_first_run", new JsonObject());

@@ -1,7 +1,7 @@
 namespace Capacitor.Cli.Core.Auth;
 
 public static class AuthProxyEndpoint {
-    public const string DefaultUrl = "https://auth.kcap.ai";
+    public const string DefaultUrl = ""; // severed at the fork: vendor endpoint removed
 
     // KCAP_AUTH_PROXY_URL is an internal dev/test override; not documented for end users.
     public static string Url =>
