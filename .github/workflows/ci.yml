@@ -43,6 +43,10 @@ jobs:
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v6
+        env:
+          # The self-hosted runner is not root and cannot write the action's default
+          # /usr/share/dotnet.
+          DOTNET_INSTALL_DIR: ${{ runner.temp }}/dotnet
         with:
           cache: true
           # No lock file to key on; CPM makes this the one file that pins every version.
@@ -100,6 +104,10 @@ jobs:
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v6
+        env:
+          # The self-hosted runner is not root and cannot write the action's default
+          # /usr/share/dotnet.
+          DOTNET_INSTALL_DIR: ${{ runner.temp }}/dotnet
         with:
           cache: true
           # No lock file to key on; CPM makes this the one file that pins every version.
