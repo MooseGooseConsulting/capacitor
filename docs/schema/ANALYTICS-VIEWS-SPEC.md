@@ -1,6 +1,6 @@
 # Analytics Views Specification
 
-Live `get_analytics_schema` inventories **32 view names**. This wave records that inventory and defines SQL only for the cores the session list and MCP tour actually query. Remaining names are placeholders — do not invent 28 more view bodies to match the count.
+Live `get_analytics_schema` inventories **32 view names**. This wave records that inventory and defines SQL for the 9 views the session list, the MCP tour's Q-MENU query, and the query governor's own tests ground against real tables. Remaining names are placeholders — do not invent 23 more view bodies to match the count; each of the rest needs base tables (users, teams, deployments, code changes, ...) no wave has created yet.
 
 MCP wire: `GET /api/analytics/schema` and `POST /api/analytics/query` with body `{sql, repos, max_rows}`.
 
@@ -45,7 +45,7 @@ MCP wire: `GET /api/analytics/schema` and `POST /api/analytics/query` with body 
 
 ---
 
-SQL below is the subset this wave can ground. `v_an_cost`, `v_an_session_steps`, `v_an_users`, and `v_an_repositories` are used by the guided-tour queries and are **not** defined here yet. `machine_id` on `v_an_sessions` is an additive fork column (`FLEET.md`).
+SQL below is the subset this wave can ground. `v_an_users` is used by the guided-tour queries and is **not** defined here yet — it needs a users/teams table no wave has created. `machine_id` on `v_an_sessions` is an additive fork column (`FLEET.md`).
 
 ## 2. Core SQL View Definitions
 
@@ -133,4 +133,73 @@ SELECT
 FROM eval_runs r
 JOIN sessions s ON r.session_id = s.session_id
 JOIN eval_verdicts v ON r.eval_run_id = v.eval_run_id;
+```
+
+### `v_an_cost`
+One row per session per model — the Q-MENU query in `kcap/skills/guided-tour/SKILL.md` collapses it to one row per session before joining.
+
+```sql
+CREATE VIEW v_an_cost AS
+SELECT
+    s.repo_hash,
+    e.session_id,
+    e.model,
+    SUM(e.cost_usd) AS cost_usd,
+    SUM(e.input_tokens) AS input_tokens,
+    SUM(e.output_tokens) AS output_tokens,
+    SUM(e.cache_read_tokens) AS cache_read_tokens,
+    SUM(e.cache_write_tokens) AS cache_write_tokens
+FROM session_events e
+JOIN sessions s ON e.session_id = s.session_id
+GROUP BY s.repo_hash, e.session_id, e.model;
+```
+
+### `v_an_session_steps`
+Per-event grain. No `latency_ms` column: nothing in the schema records per-step latency yet, so the guided-tour's `v_an_session_steps.latency_ms` claim stays unmet until a wave adds that column to `session_events`.
+
+```sql
+CREATE VIEW v_an_session_steps AS
+SELECT
+    s.repo_hash,
+    e.session_id,
+    e.line_number,
+    e.event_type,
+    e.vendor,
+    e.tool_name,
+    e.is_error,
+    e.timestamp
+FROM session_events e
+JOIN sessions s ON e.session_id = s.session_id;
+```
+
+### `v_an_prs`
+`sessions` carries PR fields directly — there is no separate `prs` table.
+
+```sql
+CREATE VIEW v_an_prs AS
+SELECT
+    s.repo_hash,
+    s.pr_number,
+    s.pr_title,
+    s.pr_url,
+    s.pr_head_ref,
+    COUNT(DISTINCT s.session_id) AS session_count,
+    MAX(s.last_event_at) AS last_session_at
+FROM sessions s
+WHERE s.pr_number IS NOT NULL
+GROUP BY s.repo_hash, s.pr_number, s.pr_title, s.pr_url, s.pr_head_ref;
+```
+
+### `v_an_repositories`
+```sql
+CREATE VIEW v_an_repositories AS
+SELECT
+    s.repo_hash,
+    s.repo_owner AS owner,
+    s.repo_name,
+    COUNT(DISTINCT s.session_id) AS session_count,
+    MAX(s.last_event_at) AS last_activity_at
+FROM sessions s
+WHERE s.repo_hash IS NOT NULL
+GROUP BY s.repo_hash, s.repo_owner, s.repo_name;
 ```
