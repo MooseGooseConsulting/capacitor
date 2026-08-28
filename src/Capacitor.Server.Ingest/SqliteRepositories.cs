@@ -11,14 +11,14 @@ public class SqliteWatermarkRepository : ISessionWatermarkRepository {
         _connection = connection;
     }
 
-    public async Task<int> GetLastLineNumberAsync(string sessionId, string agentId = "", CancellationToken ct = default) {
+    public async Task<int?> GetLastLineNumberAsync(string sessionId, string agentId = "", CancellationToken ct = default) {
         using var cmd = _connection.CreateCommand();
         cmd.CommandText = "SELECT last_line_number FROM session_watermarks WHERE session_id = $session_id AND agent_id = $agent_id;";
         cmd.Parameters.AddWithValue("$session_id", sessionId);
         cmd.Parameters.AddWithValue("$agent_id", agentId ?? string.Empty);
 
         var result = await cmd.ExecuteScalarAsync(ct);
-        if (result == null || result is DBNull) return 0;
+        if (result == null || result is DBNull) return null;
         return Convert.ToInt32(result, CultureInfo.InvariantCulture);
     }
 
@@ -61,7 +61,7 @@ public class SqliteSessionRepository : ISessionRepository {
             OwnerUserId = ownerUserId ?? "anonymous",
             StartedAt = now,
             Status = "active",
-            Visibility = "project"
+            Visibility = "private"
         };
 
         using var cmd = _connection.CreateCommand();
@@ -140,9 +140,11 @@ public class SqliteSessionRepository : ISessionRepository {
         cmd.CommandText = @"
             UPDATE sessions SET
                 title = COALESCE($title, title),
+                slug = COALESCE($slug, slug),
                 model = COALESCE($model, model),
                 status = $status,
                 visibility = $visibility,
+                owner_user_id = $owner_user_id,
                 machine_id = COALESCE($machine_id, machine_id),
                 daemon_id = COALESCE($daemon_id, daemon_id),
                 repo_hash = COALESCE($repo_hash, repo_hash),
@@ -153,21 +155,30 @@ public class SqliteSessionRepository : ISessionRepository {
                 pr_title = COALESCE($pr_title, pr_title),
                 pr_url = COALESCE($pr_url, pr_url),
                 pr_head_ref = COALESCE($pr_head_ref, pr_head_ref),
+                started_at = $started_at,
                 ended_at = COALESCE($ended_at, ended_at),
                 last_event_at = COALESCE($last_event_at, last_event_at),
                 duration_min = $duration_min,
                 event_count = $event_count,
                 tool_count = $tool_count,
                 total_tokens = $total_tokens,
-                total_cost_usd = $total_cost_usd
+                total_cost_usd = $total_cost_usd,
+                previous_session_id = $previous_session_id,
+                next_session_id = $next_session_id,
+                primary_phase = $primary_phase,
+                secondary_phase = $secondary_phase,
+                classification_confidence = $classification_confidence,
+                classification_source = $classification_source
             WHERE session_id = $session_id;
         ";
 
         cmd.Parameters.AddWithValue("$session_id", session.SessionId);
         cmd.Parameters.AddWithValue("$title", (object?)session.Title ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$slug", (object?)session.Slug ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$model", (object?)session.Model ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$status", session.Status);
         cmd.Parameters.AddWithValue("$visibility", session.Visibility);
+        cmd.Parameters.AddWithValue("$owner_user_id", session.OwnerUserId);
         cmd.Parameters.AddWithValue("$machine_id", (object?)session.MachineId ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$daemon_id", (object?)session.DaemonId ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$repo_hash", (object?)session.RepoHash ?? DBNull.Value);
@@ -178,6 +189,7 @@ public class SqliteSessionRepository : ISessionRepository {
         cmd.Parameters.AddWithValue("$pr_title", (object?)session.PrTitle ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$pr_url", (object?)session.PrUrl ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$pr_head_ref", (object?)session.PrHeadRef ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$started_at", session.StartedAt.ToString("o", CultureInfo.InvariantCulture));
         cmd.Parameters.AddWithValue("$ended_at", session.EndedAt.HasValue ? session.EndedAt.Value.ToString("o", CultureInfo.InvariantCulture) : (object)DBNull.Value);
         cmd.Parameters.AddWithValue("$last_event_at", session.LastEventAt.HasValue ? session.LastEventAt.Value.ToString("o", CultureInfo.InvariantCulture) : (object)DBNull.Value);
         cmd.Parameters.AddWithValue("$duration_min", session.DurationMin);
@@ -185,6 +197,12 @@ public class SqliteSessionRepository : ISessionRepository {
         cmd.Parameters.AddWithValue("$tool_count", session.ToolCount);
         cmd.Parameters.AddWithValue("$total_tokens", session.TotalTokens);
         cmd.Parameters.AddWithValue("$total_cost_usd", session.TotalCostUsd);
+        cmd.Parameters.AddWithValue("$previous_session_id", (object?)session.PreviousSessionId ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$next_session_id", (object?)session.NextSessionId ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$primary_phase", (object?)session.PrimaryPhase ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$secondary_phase", (object?)session.SecondaryPhase ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$classification_confidence", (object?)session.ClassificationConfidence ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$classification_source", (object?)session.ClassificationSource ?? DBNull.Value);
 
         await cmd.ExecuteNonQueryAsync(ct);
     }

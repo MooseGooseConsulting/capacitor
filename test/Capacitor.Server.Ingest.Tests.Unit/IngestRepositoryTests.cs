@@ -106,6 +106,20 @@ public sealed class IngestRepositoryTests : IDisposable {
     }
 
     [Test]
+    public async Task GetLastLineNumber_returns_null_when_no_watermark_row_exists() {
+        var mark = await _watermarks.GetLastLineNumberAsync("sess-never-ingested");
+        await Assert.That(mark).IsNull();
+    }
+
+    [Test]
+    public async Task GetLastLineNumber_distinguishes_line_zero_from_no_row() {
+        var sessionId = "sess-line-zero";
+        await _watermarks.UpdateWatermarkAsync(sessionId, "", 0, 0);
+        var mark = await _watermarks.GetLastLineNumberAsync(sessionId);
+        await Assert.That(mark).IsEqualTo(0);
+    }
+
+    [Test]
     public async Task Placeholder_session_is_created_on_demand() {
         var sessionId = "sess-orphan";
         var placeholder = await _sessions.GetOrCreatePlaceholderAsync(sessionId, "codex", "user-1");
@@ -113,9 +127,42 @@ public sealed class IngestRepositoryTests : IDisposable {
         await Assert.That(placeholder.SessionId).IsEqualTo(sessionId);
         await Assert.That(placeholder.Vendor).IsEqualTo("codex");
         await Assert.That(placeholder.Status).IsEqualTo("active");
+        await Assert.That(placeholder.Visibility).IsEqualTo("private");
 
         var retrieved = await _sessions.GetSessionAsync(sessionId);
         await Assert.That(retrieved).IsNotNull();
         await Assert.That(retrieved!.SessionId).IsEqualTo(sessionId);
+        await Assert.That(retrieved.Visibility).IsEqualTo("private");
+    }
+
+    [Test]
+    public async Task UpdateSession_reconciles_placeholder_owner_and_start_time() {
+        var sessionId = "sess-transcript-first";
+        await _sessions.GetOrCreatePlaceholderAsync(sessionId, "claude");
+
+        var placeholder = await _sessions.GetSessionAsync(sessionId);
+        var realStartedAt = DateTimeOffset.UtcNow.AddMinutes(-5);
+        var reconciled = placeholder! with {
+            OwnerUserId = "real-user",
+            StartedAt = realStartedAt
+        };
+        await _sessions.UpdateSessionAsync(reconciled);
+
+        var retrieved = await _sessions.GetSessionAsync(sessionId);
+        await Assert.That(retrieved!.OwnerUserId).IsEqualTo("real-user");
+        await Assert.That(retrieved.StartedAt).IsEqualTo(realStartedAt);
+    }
+
+    [Test]
+    public async Task GetEvents_default_fromLine_includes_line_zero() {
+        var sessionId = "sess-line-zero-events";
+        var events = new List<SessionEventRecord> {
+            new() { SessionId = sessionId, LineNumber = 0, EventType = "SessionStarted", Vendor = "claude", Timestamp = DateTimeOffset.UtcNow }
+        };
+        await _eventStore.AppendEventsAsync(events);
+
+        var retrieved = await _eventStore.GetEventsAsync(sessionId);
+        await Assert.That(retrieved.Count).IsEqualTo(1);
+        await Assert.That(retrieved[0].LineNumber).IsEqualTo(0);
     }
 }

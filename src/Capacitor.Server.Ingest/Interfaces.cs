@@ -4,12 +4,13 @@ namespace Capacitor.Server.Ingest;
 
 public interface IEventStoreRepository {
     Task<int> AppendEventsAsync(IReadOnlyList<SessionEventRecord> events, CancellationToken ct = default);
-    Task<IReadOnlyList<SessionEventRecord>> GetEventsAsync(string sessionId, string? agentId = null, int fromLine = 1, CancellationToken ct = default);
+    Task<IReadOnlyList<SessionEventRecord>> GetEventsAsync(string sessionId, string? agentId = null, int fromLine = 0, CancellationToken ct = default);
     Task<long> GetEventCountAsync(string sessionId, CancellationToken ct = default);
 }
 
 public interface ISessionWatermarkRepository {
-    Task<int> GetLastLineNumberAsync(string sessionId, string agentId = "", CancellationToken ct = default);
+    /// <summary>Null means no watermark row exists yet; 0 is a genuinely ingested line 0.</summary>
+    Task<int?> GetLastLineNumberAsync(string sessionId, string agentId = "", CancellationToken ct = default);
     Task UpdateWatermarkAsync(string sessionId, string agentId, int lastLineNumber, long byteOffset = 0, CancellationToken ct = default);
 }
 
