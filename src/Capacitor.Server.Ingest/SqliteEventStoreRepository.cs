@@ -69,7 +69,7 @@ public class SqliteEventStoreRepository : IEventStoreRepository {
         return inserted;
     }
 
-    public async Task<IReadOnlyList<SessionEventRecord>> GetEventsAsync(string sessionId, string? agentId = null, int fromLine = 1, CancellationToken ct = default) {
+    public async Task<IReadOnlyList<SessionEventRecord>> GetEventsAsync(string sessionId, string? agentId = null, int fromLine = 0, CancellationToken ct = default) {
         var list = new List<SessionEventRecord>();
         using var cmd = _connection.CreateCommand();
 
@@ -80,7 +80,7 @@ public class SqliteEventStoreRepository : IEventStoreRepository {
                        tool_server, tool_name, tool_input, tool_output, tool_exit_code, is_error, content, raw_payload
                 FROM session_events
                 WHERE session_id = $session_id AND line_number >= $from_line
-                ORDER BY line_number ASC;";
+                ORDER BY line_number ASC, agent_id ASC;";
             cmd.Parameters.AddWithValue("$session_id", sessionId);
             cmd.Parameters.AddWithValue("$from_line", fromLine);
         } else {
