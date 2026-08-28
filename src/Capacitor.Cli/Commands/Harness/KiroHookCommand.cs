@@ -62,6 +62,13 @@ sealed class KiroHookCommand(ConfigRoot config, ProfileContext profiles, HookClo
         writer.Write(payload);
     }
 
+    /// <summary>The lifecycle this adapter reports, single-sourced so the memory lease and the nudge
+    /// gate can never disagree about which session they are fencing.</summary>
+    internal static SessionMemoryLifecycle LifecycleFor(string sessionId) =>
+        new(SessionStartHarness.Kiro, sessionId, LifecycleInstanceId: null,
+            IsTopLevel: true, ClassificationAuthoritative: true,
+            SessionLifecycleReason.RepeatedTurnCallback, CallbackMayRepeat: true);
+
     /// <summary>
     /// Starts the shared memory fetch so it overlaps the lifecycle POST. Returns a task that never
     /// faults — every failure resolves to null, which the writer renders as zero bytes.
@@ -101,9 +108,7 @@ sealed class KiroHookCommand(ConfigRoot config, ProfileContext profiles, HookClo
                 disposeClients: true);
 
             return new SessionStartMemoryOrchestrator(store, provider).GetFragmentAsync(
-                new SessionMemoryLifecycle(SessionStartHarness.Kiro, sessionId, LifecycleInstanceId: null,
-                    IsTopLevel: true, ClassificationAuthoritative: true,
-                    SessionLifecycleReason.RepeatedTurnCallback, CallbackMayRepeat: true),
+                LifecycleFor(sessionId),
                 new SessionStartMemoryContextRequest(Url, scopeRoot, disabled, budget, CancellationToken.None,
                     GuidelinesDisabled: guidelinesDisabled));
         } catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) {
@@ -254,9 +259,13 @@ sealed class KiroHookCommand(ConfigRoot config, ProfileContext profiles, HookClo
         // a fragment sitting in a buffer when Kiro's hook timeout kills the process is a fragment
         // whose lease was spent for nothing.
         var fragment = await SessionStartMemoryHookSupport.AwaitBounded(memoryTask, budget);
-        var workItemsNudge = HarnessNudgeEmitter.Combine(
-            WorkItemsNudgeEmitter.Resolve(SessionStartHarness.Kiro, sessionId, activeProfile?.DisableWorkItemsNudge is true),
-            HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config));
+        // agentSpawn fires on every prompt, so the nudges need the same once-per-session fencing the
+        // index gets — through their own gate, which holds no lease state and so cannot disturb the
+        // disposition decided above.
+        var workItemsNudge = SessionStartNudgeGate.Once(config, LifecycleFor(sessionId), () =>
+            HarnessNudgeEmitter.Combine(
+                WorkItemsNudgeEmitter.Resolve(SessionStartHarness.Kiro, sessionId, activeProfile?.DisableWorkItemsNudge is true),
+                HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config)));
         WriteAgentSpawnOutput(Console.Out, fragment, workItemsNudge);
         await Console.Out.FlushAsync();
 

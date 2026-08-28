@@ -983,7 +983,7 @@ public sealed class SetupCommand(ConfigRoot config, ProfileContext profiles, IBr
     internal const string ServerSetupAction = "Complete server setup with instructions here:";
 
     internal const string ServerSetupDocsUrl =
-        "https://capacitor.kurrent.io/docs/getting-started/setup-server/";
+        "see README.md — self-hosted server setup";
 
     /// <summary>
     /// Whether Step 6's import eligibility auth requirement is met: provider <c>None</c> needs no

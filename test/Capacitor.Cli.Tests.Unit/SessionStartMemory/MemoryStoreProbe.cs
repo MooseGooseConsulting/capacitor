@@ -23,4 +23,20 @@ static class MemoryStoreProbe {
 
     /// <summary>True once a store has been constructed against this root.</summary>
     public static bool WasBuilt(ConfigRoot config) => Directory.Exists(RootOf(config));
+
+    static string NudgeRootOf(ConfigRoot config) => SessionStartMemoryStorePaths.NudgeGateRoot(config);
+
+    /// <summary>Makes the next nudge claim fail, the same way <see cref="Poison"/> does.</summary>
+    public static void PoisonNudgeGate(ConfigRoot config) {
+        var root = NudgeRootOf(config);
+        Directory.CreateDirectory(Path.GetDirectoryName(root)!);
+        File.WriteAllText(root, "");
+    }
+
+    /// <summary>The claim filenames the nudge gate has written, so a test can assert what the key is
+    /// made of rather than only that gating happened.</summary>
+    public static List<string> NudgeClaims(ConfigRoot config) =>
+        Directory.Exists(NudgeRootOf(config))
+            ? Directory.EnumerateFiles(NudgeRootOf(config)).Select(Path.GetFileName).OfType<string>().Order().ToList()
+            : [];
 }

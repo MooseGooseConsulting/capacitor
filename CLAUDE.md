@@ -1,4 +1,9 @@
-# Kurrent Capacitor CLI
+# Capacitor — working notes for agents
+
+**This repo is a private derivative** of `kurrent-io/kcap-cli`, detached at its fork
+point. See `NOTICE.md` for provenance, `PROMPT.md` for what we are building, and
+`reference/FLEET.md` for the objective. The technical conventions below are inherited and
+still correct — Kurrent's *process* is not ours and has been removed.
 
 **File paths:** CLI source at `src/Capacitor.Cli/`, shared core at `src/Capacitor.Cli.Core/`, daemon at `src/Capacitor.Cli.Daemon/`, desktop app at `src/Capacitor.App/`, npm packages at `npm/`, Claude Code plugin at `kcap/`.
 
@@ -13,14 +18,18 @@ Namespaces follow the directory (`Capacitor.Cli.Core.Harness.Codex`, `Capacitor.
 
 ## What this project does
 
-The `kcap` CLI records coding-agent sessions by forwarding hook payloads and transcript data to a
-Kurrent Capacitor server. It also hosts an agent daemon for remote agent management and provides PR
+The CLI records coding-agent sessions by forwarding hook payloads and transcript data to a
+Capacitor server. It also hosts an agent daemon for remote agent management and provides PR
 review context via MCP tools.
+
+**The server half does not exist yet — building it is the job.** The client in this repo
+is complete and battle-tested; treat it as the specification for what the server must
+answer. See `reference/SURFACE.md` §4 for the wire contract.
 
 ## Invariants
 
 Deliberate choices a change can silently undo — each looks like a bug until you know why.
-`docs/CHANGES.md` carries the reasoning per feature; `docs/superpowers/specs/` holds the designs.
+Inherited `docs/` is Kurrent's and is reference material, not our process.
 
 - **A vendor either contains borrowed review or does not offer it.** Cursor and Copilot read a
   daemon-owned snapshot, Codex its own tool clamp; Claude declares no containment, so a borrowed
@@ -164,14 +173,14 @@ Squash-merge concatenates the branch's messages verbatim, and the merge is usual
 
 ## Issues and pull requests
 
-This is a public repository — we develop in the open.
+**This is a private repository.** Kurrent's process — public-issue etiquette, Linear ids,
+their PR template — does not apply and has been removed. Do not open issues or PRs against
+`kurrent-io`; the only remote is our own org repo and we are not contributing back.
 
-- **Open issues in GitHub Issues**, not Linear. Linear auto-imports GitHub issues, so there is no need to create the issue in Linear by hand.
-- **PRs must reference both the Linear issue and the GitHub issue.** Both go on the reference line in the PR *description*: the GitHub issue with a closing keyword (e.g. `Closes #123`) and the Linear issue (e.g. `AI-774`), so Linear links the PR back to the imported issue. The title carries no reference of its own: squash-merge appends the PR number to it, so an issue reference there lands beside that one and reads as a second PR.
+Title: commit-subject rules minus the reference.
 
-Title: commit-subject rules minus the reference — `Show "Copied" tooltip on clipboard copy`.
-
-Description: **before writing it, open [.github/PULL_REQUEST_TEMPLATE.md](.github/PULL_REQUEST_TEMPLATE.md) and follow its comment block** — it owns length, headings and the Never list. `gh pr create --body` not rendering the template is not an exemption from it.
+Description: say what forced the shape and what a reader would otherwise miss. No inventory
+of the diff.
 
 ## Dos and donts
 
@@ -185,4 +194,5 @@ Description: **before writing it, open [.github/PULL_REQUEST_TEMPLATE.md](.githu
 - **TUnit test filtering** — Use `--treenode-filter` with glob syntax, NOT `--filter`.
 - **macOS AOT binary code signing** — After copying an AOT binary, run `codesign --force --sign -` to re-sign.
 - **Never read an agent-owned file with a write-denying open** — `File.ReadAllText`/`ReadAllTextAsync` open `FileShare.Read`, which *denies Write to every other handle* for the duration. On Windows that sharing is mandatory, so it stops the agent writing to its own transcript/sidecar — worst on the shutdown final drain, when it is flushing its last records. Read via `WatchCommand.ReadAllTextShared`/`ReadAllTextSharedAsync` (or your own `FileStream(..., FileShare.ReadWrite)`) for anything the agent writes: transcripts and their `{id}.json` sidecars. Config/settings files we own are fine. **This is invisible on macOS/Linux** — Unix has no mandatory sharing, so a violation passes locally and only reddens the Windows CI leg (AI-1629 was exactly this, on the one read that missed the rule while seven siblings had it).
-- **README sync on CLI changes** — Any change to user-facing CLI surface (new command, new/renamed/removed flag, changed default behavior, new prerequisite) must update `README.md` in the *same* PR. Check both the quick-start (`## Getting started`) and the per-command section under `## CLI commands`. Updating only `src/Capacitor.Cli.Core/Resources/help-*.txt` is not enough — the README is the public-facing docs. This has been missed repeatedly and has required follow-up doc-only PRs (#60, #61).
+- **Do not re-introduce a vendor endpoint.** Six hardcoded phone-homes were severed at the fork (telemetry collector and its write key, provisioning, auth proxy, machine token exchange, npm update channel, `{slug}.kcap.ai` expansion). Each is marked `// severed at the fork`. The machine token exchange is a route we must **build**, not restore — see `reference/FLEET.md` §2.
+- **`README.md` is ours**, not Kurrent's; the inherited one is kept at `reference/VENDOR-README.md`. A change to user-facing CLI surface still updates our README in the same change — `src/Capacitor.Cli.Core/Resources/help-*.txt` alone is not enough.

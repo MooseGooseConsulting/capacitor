@@ -481,7 +481,7 @@ public class SetupCommandTests {
             "Complete server setup with instructions here:");
 
         await Assert.That(SetupCommand.ServerSetupDocsUrl).IsEqualTo(
-            "https://capacitor.kurrent.io/docs/getting-started/setup-server/");
+            "see README.md — self-hosted server setup");
     }
 
     [Test]
@@ -1204,7 +1204,7 @@ public class SetupCommandTests {
         await Assert.That(error).IsNull();
         await Assert.That(workspace!.OrgName).IsEqualTo("Acme");
         await Assert.That(workspace.Slug).IsEqualTo("acme");
-        await Assert.That(workspace.Origin).IsEqualTo("https://acme.kcap.ai");
+        await Assert.That(workspace.Origin).IsEqualTo("acme");
     }
 
     [Test]

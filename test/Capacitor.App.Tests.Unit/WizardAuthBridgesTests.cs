@@ -164,7 +164,7 @@ public class WizardAuthBridgesTests {
     // ── intent → façade call mapping ─────────────────────────────────────────
 
     [Test]
-    [Arguments("acme", "https://acme.kcap.ai")]
+    [Arguments("acme", "https://acme")]
     [Arguments("https://acme.kcap.ai/sessions/9", "https://acme.kcap.ai")]
     [Arguments(" http://localhost:5108/ ", "http://localhost:5108")]
     // Core's own scheme rule for scheme-less input: loopback is http, everything else https.

@@ -8,6 +8,14 @@ namespace Capacitor.Tests.Helpers;
 // Shared by the Core façade tests and the CLI login/setup parity tests, which sit in different
 // assemblies and so cannot reach a fixture declared in either one.
 public static class AuthFixtures {
+    /// <summary>
+    /// Dummy origin for tests that drive discovery. Production has no vendor proxy, so
+    /// <see cref="AuthProxyEndpoint.Url"/> is empty until this is set.
+    /// </summary>
+    public const string TestProxyUrl = "https://auth-proxy.test";
+
+    public static EnvScope TestAuthProxy() => new("KCAP_AUTH_PROXY_URL", TestProxyUrl);
+
     public static OnboardingFacade NewFacade(
             ConfigRoot                                                  root,
             IAuthProgress                                               progress,

@@ -97,6 +97,12 @@ public sealed class MachineCommand(ConfigRoot config, ProfileContext profiles) {
             return 1;
         }
 
+        if (!AuthProxyEndpoint.IsConfigured) {
+            await Console.Error.WriteLineAsync(AuthProxyEndpoint.UnavailableHint);
+
+            return 1;
+        }
+
         using var http = new HttpClient();
 
         CreateMachineApplicationResponse? provisioned;
@@ -135,7 +141,7 @@ public sealed class MachineCommand(ConfigRoot config, ProfileContext profiles) {
             provisioned = await response.Content.ReadFromJsonAsync(
                 CapacitorJsonContext.Default.CreateMachineApplicationResponse);
         }
-        catch (Exception e) when (e is HttpRequestException or TaskCanceledException) {
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException or InvalidOperationException) {
             await Console.Error.WriteLineAsync($"The Kurrent auth service is unreachable: {e.Message}");
 
             return 1;

@@ -9,7 +9,7 @@ public sealed class UpdateCommand(ConfigRoot root, ProfileContext profiles) {
     /// npm registry base URL. Overridable seam so integration tests can point
     /// the CLI at a fake registry (e.g. WireMock) instead of the real npm registry.
     /// </summary>
-    internal static string RegistryBaseUrl = "https://registry.npmjs.org";
+    internal static string RegistryBaseUrl = "";  // severed at the fork: no vendor update channel
 
     /// <summary>Valid npm dist-tags for the update channel (Phase 1).</summary>
     static readonly string[] KnownChannels = ["latest", "beta"];
@@ -301,6 +301,10 @@ public sealed class UpdateCommand(ConfigRoot root, ProfileContext profiles) {
             // null only if no check has ever succeeded) without touching the
             // network.
             return new UpdateCheckResult(current, cached.LatestVersion, IsNewer(cached.LatestVersion, current), FromCache: true);
+        }
+
+        if (!HttpClientExtensions.IsAcceptableUrl(RegistryBaseUrl)) {
+            return new UpdateCheckResult(current, cached?.LatestVersion, Newer: false, FromCache: true);
         }
 
         // Query npm registry.

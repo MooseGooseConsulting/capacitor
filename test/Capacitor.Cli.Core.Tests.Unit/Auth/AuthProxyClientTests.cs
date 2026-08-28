@@ -83,6 +83,15 @@ public class AuthProxyClientTests {
     }
 
     [Test]
+    public async Task GetConfigAsync_returns_null_when_proxy_url_is_not_absolute() {
+        using var http = new HttpClient();
+        var client = new AuthProxyClient(http);
+
+        await Assert.That(await client.GetConfigAsync("")).IsNull();
+        await Assert.That(await client.GetConfigAsync("/config")).IsNull();
+    }
+
+    [Test]
     public async Task DiscoverTenantsAsync_returns_tenants_on_200() {
         using var server = WireMockServer.Start();
 

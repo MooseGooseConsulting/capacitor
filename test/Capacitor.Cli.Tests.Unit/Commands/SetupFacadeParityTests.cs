@@ -27,6 +27,8 @@ namespace Capacitor.Cli.Tests.Unit.Commands;
 public class SetupFacadeParityTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
+    EnvScope? _authProxy;
+
     string TokensDir  => Config.PathTo("tokens");
     string ConfigPath => AppConfig.GetConfigPath(Config.Root);
 
@@ -34,10 +36,14 @@ public class SetupFacadeParityTests {
     public void Cleanup() {
         CliTelemetry.Reset();
         SetupCommand.FacadeOverride = null;
+        _authProxy = TestAuthProxy();
     }
 
     [After(Test)]
-    public void ResetFacadeOverride() => SetupCommand.FacadeOverride = null;
+    public void ResetFacadeOverride() {
+        _authProxy?.Dispose();
+        SetupCommand.FacadeOverride = null;
+    }
 
     ProfileConfig ReadConfig() => ConfigMutator.LoadPure(ConfigPath);
 

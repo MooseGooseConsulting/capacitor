@@ -170,9 +170,13 @@ sealed class PiHookCommand(ConfigRoot config, ProfileContext profiles, HookClock
         // an injection whose once-per-session lease is already spent. pi.exec hands the extension
         // stdout regardless of exit code, so no commit gate is needed (unlike Copilot).
         var fragment = await SessionStartMemoryHookSupport.AwaitBounded(memoryTask, budget);
-        var workItemsNudge = HarnessNudgeEmitter.Combine(
-            WorkItemsNudgeEmitter.Resolve(SessionStartHarness.Pi, sessionId, activeProfile?.DisableWorkItemsNudge is true),
-            HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config));
+        // Restarts and resumes re-fire session_start for the same file, so the nudges need their own
+        // once-per-session fence — keyed off the same lifecycle the lease uses (the session FILE, not
+        // the dashless id the nudge text carries) and holding no lease state of its own.
+        var workItemsNudge = SessionStartNudgeGate.Once(config, LifecycleFor(file, reason), () =>
+            HarnessNudgeEmitter.Combine(
+                WorkItemsNudgeEmitter.Resolve(SessionStartHarness.Pi, sessionId, activeProfile?.DisableWorkItemsNudge is true),
+                HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config)));
         await WriteMemoryFragment(stdout, fragment, workItemsNudge);
 
         if (!AgentHookPoster.ShouldSpawnAfter(outcome, Url)) return outcome == HookPostOutcome.Failed ? 1 : 0;

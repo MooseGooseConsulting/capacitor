@@ -25,8 +25,16 @@ public class LoginFacadeParityTests {
     string TokensDir  => Config.PathTo("tokens");
     string ConfigPath => AppConfig.GetConfigPath(Config.Root);
 
+    EnvScope? _authProxy;
+
     [Before(Test)]
-    public void Cleanup() => CliTelemetry.Reset();
+    public void Cleanup() {
+        CliTelemetry.Reset();
+        _authProxy = TestAuthProxy();
+    }
+
+    [After(Test)]
+    public void UnpinAuthProxy() => _authProxy?.Dispose();
 
     ProfileConfig ReadConfig() => ConfigMutator.LoadPure(ConfigPath);
 
