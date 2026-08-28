@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.Data.Sqlite;
 using Npgsql;
 using Capacitor.Cli.Core;
@@ -49,15 +50,19 @@ if (isPostgres) {
 
 builder.Services.AddSingleton<NormalizerRouter>();
 builder.Services.AddSingleton<SessionRollupProjector>();
+builder.Services.AddSignalR();
 
 var app = builder.Build();
+
+// Real-Time SignalR Hub
+app.MapHub<CapacitorHub>("/hub/capacitor");
 
 // Health Check
 app.MapGet("/health", () => Results.Ok(new { status = "healthy", provider = dbProvider, time = DateTimeOffset.UtcNow }));
 
 // Ingestion Hooks
 
-async Task<IResult> HandleSessionStart(string vendor, ApiSessionStartPayload payload, ISessionRepository sessions) {
+async Task<IResult> HandleSessionStart(string vendor, ApiSessionStartPayload payload, ISessionRepository sessions, IHubContext<CapacitorHub, ICapacitorHubClient> hub) {
     var sessionId = payload.SessionId.Replace("-", "");
     var existed = await sessions.GetSessionAsync(sessionId) != null;
     var session = await sessions.GetOrCreatePlaceholderAsync(sessionId, vendor, payload.UserId, payload.DefaultVisibility);
@@ -69,10 +74,11 @@ async Task<IResult> HandleSessionStart(string vendor, ApiSessionStartPayload pay
         await sessions.UpdateSessionAsync(session with { OwnerUserId = ownerUserId });
     }
 
+    await hub.Clients.Group($"session_{sessionId}").OnSessionStarted(sessionId, vendor);
     return Results.Ok(new { status = "started", session_id = sessionId });
 }
 
-async Task<IResult> HandleSessionEnd(string vendor, ApiSessionEndPayload payload, ISessionRepository sessions, SessionRollupProjector projector) {
+async Task<IResult> HandleSessionEnd(string vendor, ApiSessionEndPayload payload, ISessionRepository sessions, SessionRollupProjector projector, IHubContext<CapacitorHub, ICapacitorHubClient> hub) {
     var sessionId = payload.SessionId.Replace("-", "");
     var session = await sessions.GetSessionAsync(sessionId);
     // A missing session must not read as delivered — the client's spool retries a non-2xx but
@@ -85,19 +91,20 @@ async Task<IResult> HandleSessionEnd(string vendor, ApiSessionEndPayload payload
     };
     await sessions.UpdateSessionAsync(updated);
     await projector.ProjectSessionRollupAsync(sessionId);
+    await hub.Clients.Group($"session_{sessionId}").OnSessionEnded(sessionId);
 
     return Results.Ok(new { status = "ended", session_id = sessionId });
 }
 
-app.MapPost("/hooks/session-start/{vendor}", (string vendor, [FromBody] ApiSessionStartPayload payload, ISessionRepository sessions)
-    => HandleSessionStart(vendor, payload, sessions));
-app.MapPost("/hooks/session-start", ([FromBody] ApiSessionStartPayload payload, ISessionRepository sessions)
-    => HandleSessionStart("claude", payload, sessions));
+app.MapPost("/hooks/session-start/{vendor}", (string vendor, [FromBody] ApiSessionStartPayload payload, ISessionRepository sessions, IHubContext<CapacitorHub, ICapacitorHubClient> hub)
+    => HandleSessionStart(vendor, payload, sessions, hub));
+app.MapPost("/hooks/session-start", ([FromBody] ApiSessionStartPayload payload, ISessionRepository sessions, IHubContext<CapacitorHub, ICapacitorHubClient> hub)
+    => HandleSessionStart("claude", payload, sessions, hub));
 
-app.MapPost("/hooks/session-end/{vendor}", (string vendor, [FromBody] ApiSessionEndPayload payload, ISessionRepository sessions, SessionRollupProjector projector)
-    => HandleSessionEnd(vendor, payload, sessions, projector));
-app.MapPost("/hooks/session-end", ([FromBody] ApiSessionEndPayload payload, ISessionRepository sessions, SessionRollupProjector projector)
-    => HandleSessionEnd("claude", payload, sessions, projector));
+app.MapPost("/hooks/session-end/{vendor}", (string vendor, [FromBody] ApiSessionEndPayload payload, ISessionRepository sessions, SessionRollupProjector projector, IHubContext<CapacitorHub, ICapacitorHubClient> hub)
+    => HandleSessionEnd(vendor, payload, sessions, projector, hub));
+app.MapPost("/hooks/session-end", ([FromBody] ApiSessionEndPayload payload, ISessionRepository sessions, SessionRollupProjector projector, IHubContext<CapacitorHub, ICapacitorHubClient> hub)
+    => HandleSessionEnd("claude", payload, sessions, projector, hub));
 
 // Fail-closed clients (SessionImporter, WatchCommand) must see a 2xx before streaming a
 // subagent's content — this endpoint's whole job is to be that ACK. Unqualified, matching what
@@ -116,7 +123,8 @@ app.MapPost("/hooks/transcript", async (
     ISessionWatermarkRepository watermarks,
     IEventStoreRepository eventStore,
     NormalizerRouter router,
-    SessionRollupProjector projector) => {
+    SessionRollupProjector projector,
+    IHubContext<CapacitorHub, ICapacitorHubClient> hub) => {
     var sessionId = batch.SessionId.Replace("-", "");
     var vendor = batch.Vendor ?? "claude";
 
@@ -158,6 +166,11 @@ app.MapPost("/hooks/transcript", async (
         await eventStore.AppendEventsAsync(events);
         await watermarks.UpdateWatermarkAsync(sessionId, agentId, highestLine);
         await projector.ProjectSessionRollupAsync(sessionId);
+
+        // Real-time broadcast to connected SignalR subscribers
+        foreach (var ev in events) {
+            await hub.Clients.Group($"session_{sessionId}").OnEventAppended(ev);
+        }
     }
 
     // Strict callers want a non-2xx signal when any line silently fell back to a bare content
