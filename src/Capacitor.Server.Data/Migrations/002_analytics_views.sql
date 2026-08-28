@@ -92,3 +92,55 @@ SELECT
 FROM work_items w
 LEFT JOIN work_item_sessions ws ON w.work_item_id = ws.work_item_id
 GROUP BY w.repo_hash, w.work_item_id, w.title, w.issue_key, w.pr_number, w.status, w.created_at, w.updated_at;
+
+-- One row per session per model; kcap/skills/guided-tour depends on this exact grain.
+CREATE VIEW IF NOT EXISTS v_an_cost AS
+SELECT
+    s.repo_hash,
+    e.session_id,
+    e.model,
+    SUM(e.cost_usd) AS cost_usd,
+    SUM(e.input_tokens) AS input_tokens,
+    SUM(e.output_tokens) AS output_tokens,
+    SUM(e.cache_read_tokens) AS cache_read_tokens,
+    SUM(e.cache_write_tokens) AS cache_write_tokens
+FROM session_events e
+JOIN sessions s ON e.session_id = s.session_id
+GROUP BY s.repo_hash, e.session_id, e.model;
+
+CREATE VIEW IF NOT EXISTS v_an_session_steps AS
+SELECT
+    s.repo_hash,
+    e.session_id,
+    e.line_number,
+    e.event_type,
+    e.vendor,
+    e.tool_name,
+    e.is_error,
+    e.timestamp
+FROM session_events e
+JOIN sessions s ON e.session_id = s.session_id;
+
+CREATE VIEW IF NOT EXISTS v_an_prs AS
+SELECT
+    s.repo_hash,
+    s.pr_number,
+    s.pr_title,
+    s.pr_url,
+    s.pr_head_ref,
+    COUNT(DISTINCT s.session_id) AS session_count,
+    MAX(s.last_event_at) AS last_session_at
+FROM sessions s
+WHERE s.pr_number IS NOT NULL
+GROUP BY s.repo_hash, s.pr_number, s.pr_title, s.pr_url, s.pr_head_ref;
+
+CREATE VIEW IF NOT EXISTS v_an_repositories AS
+SELECT
+    s.repo_hash,
+    s.repo_owner AS owner,
+    s.repo_name,
+    COUNT(DISTINCT s.session_id) AS session_count,
+    MAX(s.last_event_at) AS last_activity_at
+FROM sessions s
+WHERE s.repo_hash IS NOT NULL
+GROUP BY s.repo_hash, s.repo_owner, s.repo_name;
