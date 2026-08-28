@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.Sqlite;
+using Npgsql;
 using Capacitor.Cli.Core;
 using Capacitor.Server.Data;
 using Capacitor.Server.Data.Entities;
@@ -12,30 +13,39 @@ using Capacitor.Server.Api;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Database & Persistence
-var dbPath = builder.Configuration["Database:Path"] ?? "capacitor.db";
-var connectionString = $"Data Source={dbPath}";
-var connection = new SqliteConnection(connectionString);
-connection.Open();
-await SqliteDatabaseInitializer.InitializeAsync(connection);
+var dbProvider = builder.Configuration["Database:Provider"] ?? "Sqlite";
+var connString = builder.Configuration["Database:ConnectionString"] ?? "Data Source=capacitor.db";
 
-builder.Services.AddSingleton(connection);
-// Every repository/service below shares this one connection; SqliteGate serializes access to
-// it so two concurrent requests never run commands on it at the same time (Microsoft.Data.Sqlite
-// connections aren't thread-safe). One singleton instance for the whole app — DI hands the same
-// gate to every repository, which is what makes the serialization apply across all of them.
-builder.Services.AddSingleton<SqliteGate>();
-builder.Services.AddSingleton<IEventStoreRepository, SqliteEventStoreRepository>();
-builder.Services.AddSingleton<ISessionWatermarkRepository, SqliteWatermarkRepository>();
-builder.Services.AddSingleton<ISessionRepository, SqliteSessionRepository>();
+if (string.Equals(dbProvider, "Postgres", StringComparison.OrdinalIgnoreCase)) {
+    var dataSource = NpgsqlDataSource.Create(connString);
+    builder.Services.AddSingleton(dataSource);
+    builder.Services.AddSingleton<IEventStoreRepository, PostgresEventStoreRepository>();
+    builder.Services.AddSingleton<ISessionWatermarkRepository, PostgresWatermarkRepository>();
+    builder.Services.AddSingleton<ISessionRepository, PostgresSessionRepository>();
+} else {
+    var sqliteConn = new SqliteConnection(connString);
+    sqliteConn.Open();
+    await SqliteDatabaseInitializer.InitializeAsync(sqliteConn);
+
+    builder.Services.AddSingleton(sqliteConn);
+    // Every repository/service below shares this one connection; SqliteGate serializes access to
+    // it so two concurrent requests never run commands on it at the same time (Microsoft.Data.Sqlite
+    // connections aren't thread-safe). One singleton instance for the whole app — DI hands the same
+    // gate to every repository, which is what makes the serialization apply across all of them.
+    builder.Services.AddSingleton<SqliteGate>();
+    builder.Services.AddSingleton<IEventStoreRepository, SqliteEventStoreRepository>();
+    builder.Services.AddSingleton<ISessionWatermarkRepository, SqliteWatermarkRepository>();
+    builder.Services.AddSingleton<ISessionRepository, SqliteSessionRepository>();
+    builder.Services.AddSingleton<SqliteAnalyticsService>();
+}
+
 builder.Services.AddSingleton<NormalizerRouter>();
 builder.Services.AddSingleton<SessionRollupProjector>();
-builder.Services.AddSingleton<SqliteAnalyticsService>();
 
 var app = builder.Build();
 
 // Health Check
-app.MapGet("/health", () => Results.Ok(new { status = "healthy", time = DateTimeOffset.UtcNow }));
+app.MapGet("/health", () => Results.Ok(new { status = "healthy", provider = dbProvider, time = DateTimeOffset.UtcNow }));
 
 // Ingestion Hooks
 
@@ -173,6 +183,30 @@ app.MapGet("/watermarks", async (
     var sessionId = session_id.Replace("-", "");
     var line = await watermarks.GetLastLineNumberAsync(sessionId, agent_id ?? "");
     return Results.Ok(new { session_id = sessionId, agent_id = agent_id ?? "", last_line_number = line });
+});
+
+// Fleet Node Enrollment & Heartbeat
+app.MapPost("/api/machines/enroll", (
+    [FromBody] MachineEnrollmentRequest request) => {
+    var machineId = string.IsNullOrWhiteSpace(request.MachineId)
+        ? Guid.NewGuid().ToString("N")
+        : request.MachineId;
+    var token = $"kcap_node_{Guid.NewGuid():N}";
+    return Results.Ok(new {
+        machine_id = machineId,
+        hostname = request.Hostname,
+        auth_token = token,
+        enrolled_at = DateTimeOffset.UtcNow
+    });
+});
+
+app.MapPost("/api/machines/heartbeat", (
+    [FromBody] MachineHeartbeatRequest request) => {
+    return Results.Ok(new {
+        machine_id = request.MachineId,
+        status = "healthy",
+        acknowledged_at = DateTimeOffset.UtcNow
+    });
 });
 
 // Evals & Catalog
@@ -327,4 +361,7 @@ namespace Capacitor.Server.Api {
         [JsonPropertyName("ended_at")]
         public DateTimeOffset? EndedAt { get; init; }
     }
+
+    public record MachineEnrollmentRequest(string? MachineId, string Hostname, string Os, string Arch);
+    public record MachineHeartbeatRequest(string MachineId);
 }

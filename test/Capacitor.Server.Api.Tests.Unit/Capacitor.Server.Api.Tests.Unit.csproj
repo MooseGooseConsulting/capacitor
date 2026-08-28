@@ -16,6 +16,7 @@
     <ItemGroup>
         <PackageReference Include="TUnit" />
         <PackageReference Include="Microsoft.Data.Sqlite" />
+        <PackageReference Include="Npgsql" />
     </ItemGroup>
     <ItemGroup>
         <Using Include="Capacitor.Tests.Helpers" />
