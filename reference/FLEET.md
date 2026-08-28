@@ -39,21 +39,21 @@ The mechanism already exists in the client and is exactly right:
 KCAP_CLIENT_ID  +  KCAP_CLIENT_SECRET      →  grant_type=client_credentials  →  bearer
 ```
 
-`MachineAuth` reads those two environment variables; upstream's own comment describes the
+`MachineAuth` reads those two environment variables; kcap's own comment describes the
 consumer as "a fresh container with two environment variables" with no profile and no
 token store, and calls the shared value "one value for the whole fleet." `kcap machine
 create | list | revoke` is the management surface, and `/api/admin/machines` is its route.
 
-The token endpoint pointed at the vendor's WorkOS tenant (`signin.kcap.ai/oauth2/token`)
+The token endpoint pointed at kcap's WorkOS tenant (`signin.kcap.ai/oauth2/token`)
 and was severed at the fork. **That is a route to reimplement, not a feature to delete.**
 
 So the minimum sink is **nine routes, not eight** — the eight in `SURFACE.md` §4 plus a
 client-credentials token exchange. `/api/admin/machines` and `/api/daemons` move from
 "product surface, out of scope" to **core**.
 
-### 3. The canonical model needs a machine dimension — upstream's does not have one
+### 3. The canonical model needs a machine dimension — kcap's does not have one
 
-This is the one place where "match upstream exactly" is the wrong instruction.
+This is the one place where "match kcap exactly" is the wrong instruction.
 
 `v_an_sessions` has no machine or host column. Sessions attribute to a *user*, and a user
 is one identity across machines, which is sufficient for a product sold to teams. It is
@@ -101,8 +101,8 @@ Supersedes the informal cut elsewhere in this repo.
 | Auth (some form) | optional | **required** |
 | Spool + drain durability | nice | **core — offline nodes must lose nothing** |
 | `remap` (cwd rewriting) | rename fixup | **core — per-node path normalisation** |
-| Machine dimension on sessions | absent upstream | **build it — deliberate divergence** |
-| Telemetry to the vendor | cut | cut |
+| Machine dimension on sessions | absent in kcap | **build it — deliberate divergence** |
+| Telemetry to kcap | cut | cut |
 | Tenant provisioning / SaaS signup | delete | delete |
 | npm distribution / update channel | cut | **revisit** — how does a fleet node get updated? |
 | Teams, projects, roles, members | mostly cut | **revisit** — one user, many machines is not the same as one user, one machine |
@@ -112,7 +112,7 @@ Two that genuinely change under fleet framing rather than merely surviving:
 
 - **Distribution.** Cutting the update channel is right for one laptop you build on. For
   N nodes it reopens as "how does a node get a new binary" — a real question with a real
-  answer, just not the vendor's npm package.
+  answer, just not kcap's npm package.
 - **Visibility.** `--private` / `hide` / `org_public` looked like team scaffolding. With
   many machines feeding one corpus, per-session visibility is how a node records without
   everything on it becoming equally exposed.

@@ -12,7 +12,7 @@ from the installed binary; and the console's own downloaded stylesheets.
 
 | | source | status |
 |---|---|---|
-| **Client** | this repo, 772 commits, upstream `main` @ `50928963` | **inherited, working** |
+| **Client** | this repo, 772 commits, Kurrent's `main` @ `50928963` | **inherited, working** |
 | **Server** | closed | **to be built** |
 
 The client is complete and battle-tested: ten vendors' on-disk discovery, classification
@@ -105,7 +105,7 @@ turns as first-class rows.
 
 **No machine dimension.** `v_an_sessions` has no machine or host column; sessions
 attribute to a *user*. Sufficient for a product sold to teams, insufficient here — see
-`FLEET.md` §3. This is the one place where matching upstream exactly is the wrong
+`FLEET.md` §3. This is the one place where matching kcap exactly is the wrong
 instruction.
 
 **Identifiers.** Session ids are stored **dashless**: the session UUID
@@ -270,7 +270,7 @@ to fix it). Default shell is `cmd.exe`: `&` not `;`, `findstr` not `grep`.
 
 ---
 
-## 7. Upstream coupling to cut
+## 7. kcap coupling to cut
 
 Detaching from Kurrent's hosted service, in rough order of importance:
 

@@ -48,14 +48,14 @@ You are not diffing files. You cannot mechanically diff raw JSONL against a rend
 What you are doing is **establishing the standard from observation, then building to
 match it**:
 
-1. Observe upstream's behaviour for a specific real session — its events, its turns, its
+1. Observe kcap's behaviour for a specific real session — its events, its turns, its
    token accounting, its rendered transcript, its analytics rows.
 2. Write that down as an executable expectation: a **conformance test** that asserts what
    the output must be for that input.
 3. Build until the test passes.
 
 The target is a **duplicate that matches**, verified per session, per vendor, per field.
-Upstream is the oracle. Where upstream is silent or contradictory, decide, and record the
+The live kcap instance is the oracle. Where kcap is silent or contradictory, decide, and record the
 decision as an assumption.
 
 ---
@@ -90,7 +90,7 @@ side by side; the unknown-vendor behaviour is known, not assumed.
 accept batches, persist raw lines keyed by `(session_id, agent_id, line_number)`, answer
 `last-line` honestly.
 
-**Client agent** cuts the upstream coupling (§7 of SURFACE.md): telemetry, hosted URL
+**Client agent** cuts kcap coupling (§7 of SURFACE.md): telemetry, hosted URL
 defaults, update check, feedback. Adds a local profile with `auth_provider: null` so the
 client posts unauthenticated. Gets the client building and running against localhost.
 
@@ -125,7 +125,7 @@ Then write the **Claude normalizer** and prove it against probe session #1.
 **Client agent** meanwhile: prove the resend invariants against the wave-2 skeleton —
 import twice, drain a spool, force a `--reimport`, and confirm no duplicates.
 
-**Gate:** for one real Claude session, your turns and events match upstream's for that
+**Gate:** for one real Claude session, your turns and events match kcap's for that
 same session — turn count, per-turn tool counts, token totals, event ordering. Not "looks
 similar." Matches.
 
@@ -159,7 +159,7 @@ approved.
 ## Wave 5 — The console
 
 Blazor + MudBlazor. MudBlazor is MIT and gives you the component vocabulary for free;
-`reference/ui-assets/components.css` shows how upstream layers on top of it.
+`reference/ui-assets/components.css` shows how kcap layers on top of it.
 
 Minimum: a session list, and a session detail with **Transcript** and **Trace**. Those two
 tabs are what proves the model is real — everything else is reporting.
@@ -173,11 +173,11 @@ replaced before this leaves the org.
 
 ## Wave 6 — Prove the gate is gone
 
-Add a **fourth vendor that upstream does not support**, end to end: discovery, normalizer,
+Add a **fourth agent vendor that kcap does not support**, end to end: discovery, normalizer,
 live hook, rendered in the console.
 
 This is the acceptance test for the entire premise. The reason for the whole job is that
-upstream's closed normalizer selector made new vendors impossible from the client side.
+kcap's closed normalizer selector made new vendors impossible from the client side.
 If a fourth vendor lands in a day, the premise held.
 
 **Gate:** a coding agent kcap cannot record, recorded.
@@ -188,9 +188,9 @@ If a fourth vendor lands in a day, the premise held.
 
 - **This is a brief, not a checklist.** If reality diverges from a wave, re-plan the
   wave — don't force the plan.
-- **Measure before you design.** If you're about to assume something about upstream's
+- **Measure before you design.** If you're about to assume something about kcap's
   behaviour, check whether a tool call or a browser click would just tell you.
-- **Upstream is the oracle.** "It compiles" is not done. "It matches upstream for this
+- **The live kcap instance is the oracle.** "It compiles" is not done. "It matches kcap for this
   session" is done.
 - **Write down what you learn as you learn it**, in `reference/`. The failure mode that
   killed previous attempts at this was knowledge living in one agent's context and dying

@@ -168,13 +168,15 @@ sealed class OpenCodeHookCommand(ConfigRoot config, ProfileContext profiles, Hoo
         // suppress an injection whose once-per-session lease has already been spent. The plugin reads
         // stdout regardless of what the watcher did.
         var fragment = await SessionStartMemoryHookSupport.AwaitBounded(memoryTask, budget);
-        var workItemsNudge = canConsumeFragment
-            ? WorkItemsNudgeEmitter.Resolve(SessionStartHarness.OpenCode, sessionId, activeProfile?.DisableWorkItemsNudge is true)
-            : null;
-        // The harness nudge is independent of the once-per-session memory lease — it has its own
-        // 6h evaluation throttle, so it can surface even on a re-fired session that can't reconsume.
-        var combinedNudge = HarnessNudgeEmitter.Combine(
-            workItemsNudge, HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config));
+        // A restart or resume re-fires this for the same session id, so the nudges need their own
+        // once-per-session fence: the harness nudge's 6h throttle is wall-clock and the work-items
+        // nudge has none, and neither may touch the memory lease's disposition decided above.
+        var combinedNudge = SessionStartNudgeGate.Once(config, LifecycleFor(sessionId), () =>
+            HarnessNudgeEmitter.Combine(
+                canConsumeFragment
+                    ? WorkItemsNudgeEmitter.Resolve(SessionStartHarness.OpenCode, sessionId, activeProfile?.DisableWorkItemsNudge is true)
+                    : null,
+                HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config)));
         await WriteMemoryFragment(stdout, fragment, combinedNudge);
 
         if (!AgentHookPoster.ShouldSpawnAfter(outcome, Url)) return 0;

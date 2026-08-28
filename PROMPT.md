@@ -13,12 +13,12 @@ disagree.
 **Read these three documents before doing anything else:**
 
 - `reference/FLEET.md` — the fleet objective and what it changes: a networked server,
-  headless machine credentials, a machine dimension the upstream model does not have,
+  headless machine credentials, a machine dimension kcap's model does not have,
   and cross-node identity problems that do not exist on one machine.
 
 - `reference/SURFACE.md` — everything observable about the system, and which half we
   already have. Includes the full wire contract, the canonical model as observed on a
-  live instance, the 32 analytics views, the console's stack, and the list of upstream
+  live instance, the 32 analytics views, the console's stack, and the list of vendor
   couplings to cut.
 - `reference/WAVES.md` — a **proposed** decomposition into six waves, each ending at a
   demonstrable gate. Read its "method" section carefully; it is not what you'd assume.
@@ -38,7 +38,7 @@ but only after you've genuinely tried to break it, because cheap agreement is th
 failure this brief exists to prevent.
 
 Three things are not yours to re-decide: the **invariants** (evidence-backed, read from
-the client's own source), the **licensing constraints**, and the rule that **upstream is
+the client's own source), the **licensing constraints**, and the rule that **kcap is
 the oracle**. Everything else — sequence, split, milestones, the two-agent seam — is
 yours.
 
@@ -86,14 +86,14 @@ nine routes and one file of wire types. There is very little to negotiate in the
 You are **not** diffing files, and you cannot mechanically diff raw JSONL against a
 rendered UI. What you are doing is:
 
-1. **Observe** upstream's behaviour for a specific real session on the live instance.
+1. **Observe** kcap's behaviour for a specific real session on the live instance.
 2. **Write it down as an executable expectation** — a conformance test asserting what the
    output must be for that input.
 3. **Build until it passes.**
 
 The goal is a duplicate that *matches*, verified per session, per vendor, per field.
-**Upstream is the oracle.** "It compiles" is not done; "it matches upstream for this
-session" is done. Where upstream is silent or self-contradictory, decide — and record the
+**The live kcap instance is the oracle.** "It compiles" is not done; "it matches kcap for this
+session" is done. Where kcap is silent or self-contradictory, decide — and record the
 decision as an assumption, not as a fact.
 
 You have an unusual advantage here: **both ends of the transform are observable.** The
@@ -103,7 +103,7 @@ yourself speculating about server behaviour, stop — you have a way to measure 
 
 ## What you have access to
 
-- **This repo** — the client. 772 commits of upstream history, remote already detached.
+- **This repo** — the client. 772 commits of Kurrent's history; their remote is gone.
 - **A live instance** — `https://moosegoose.kcap.ai`, authenticated in the browser,
   ~123 real sessions. Drive it.
 - **The `kcap` MCP tools** — `kcap-analytics`, `kcap-sessions`, `kcap-review`,
@@ -157,7 +157,7 @@ placeholders to be replaced before anything leaves the org.
 ## Done means
 
 - **The stack runs standalone** — our client, our server, our store, our console, on one
-  machine, with no dependency on the vendor's hosted service.
+  machine, with no dependency on Kurrent's hosted service.
 - A real import of real on-disk sessions lands and renders.
 - Correct on the invariants: import twice and get no duplicates; deliver a transcript
   before its session-start and have it reconcile; import a session with subagents and see
@@ -165,7 +165,7 @@ placeholders to be replaced before anything leaves the org.
 - **Three vendors normalized end to end**, each verified against the live instance's own
   output for the same sessions.
 - A console that renders a captured session — Transcript and Trace at minimum.
-- **A fourth vendor the upstream product does not support, added end to end.** The
+- **A fourth agent vendor that kcap does not support, added end to end.** The
   acceptance test for the normalizer premise.
 - **A second machine enrolled headlessly and recording into the same corpus**, its
   sessions distinguishable from this laptop's. The acceptance test for the fleet

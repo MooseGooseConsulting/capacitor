@@ -33,13 +33,13 @@ already has a parser for this shape.
 A complete `KimiImportSource` (232 lines: discovery across both on-disk layouts,
 classification, per-child watermarks, subagent attachment) exists on
 `MooseGooseConsulting/kcap-cli` branch `feat/kimi-history-import`, PR #1. **This repo is
-upstream `main`, so it is absent here** — `src/Capacitor.Cli/Harness/` has no `Kimi/`.
+Kurrent's `main`, so it is absent here** — `src/Capacitor.Cli/Harness/` has no `Kimi/`.
 
 **Requirement:** port it. Two on-disk layouts, both live: `~/.kimi`
 (`<group>/<guid>/wire.jsonl`, subagents under `subagents/`) and `~/.kimi-code`
 (`session_<id>/agents/main/wire.jsonl`, siblings under `agents/`).
 
-Kimi is **import-only** upstream — no `HarnessCatalog` entry, no live hook. Live capture
+Kimi is **import-only** kcap — no `HarnessCatalog` entry, no live hook. Live capture
 was specified and never built; that spec is the only place it is written down and it is
 not in this repo either.
 
@@ -120,9 +120,9 @@ Two things to decide before building:
 
 ---
 
-## 3. Model divergences from upstream
+## 3. Model divergences from kcap
 
-Both are cases where "match upstream" is the wrong instruction, because upstream's model
+Both are cases where "match kcap" is the wrong instruction, because kcap's model
 has a gap that its own product doesn't feel.
 
 - **Machine dimension.** `v_an_sessions` has no machine or host column. See
@@ -131,7 +131,7 @@ has a gap that its own product doesn't feel.
 - **Cross-repository sessions.** A session can span multiple working directories and
   therefore multiple repositories — measured, not assumed: 13 of 365 Claude transcripts
   on this laptop, one spanning 7 directories across 5 repos. The model attributes a
-  session to exactly one repo. Upstream half-noticed and added mid-session repo
+  session to exactly one repo. kcap half-noticed and added mid-session repo
   *replacement* (`ShouldReplaceRepository`, `RepoEvidenceScanner`) rather than
   accumulation, while `SessionTranscriptLocator.cs:59` still asserts "a cwd never
   changes." See `CROSS-REPO-SESSIONS.md` for the per-vendor measurement and the proposed
@@ -143,7 +143,7 @@ has a gap that its own product doesn't feel.
 
 - Does an unsupported `vendor` tag get rejected by the server, or silently accepted and
   dropped during normalization? Unverified; settle by measurement (`PROMPT.md`).
-- How does a fleet node get a new binary, now that the vendor's npm channel is severed?
+- How does a fleet node get a new binary, now that kcap's npm channel is severed?
 - Do we keep evals? Real recurring API spend, entirely a taste call.
 - Do we keep per-session visibility (`--private`, `hide`, `org_public`)? Trivial to keep,
   awkward to retrofit.

@@ -3,7 +3,7 @@
 **This repo is a private derivative** of `kurrent-io/kcap-cli`, detached at its fork
 point. See `NOTICE.md` for provenance, `PROMPT.md` for what we are building, and
 `reference/FLEET.md` for the objective. The technical conventions below are inherited and
-still correct — the upstream *process* is not ours and has been removed.
+still correct — Kurrent's *process* is not ours and has been removed.
 
 **File paths:** CLI source at `src/Capacitor.Cli/`, shared core at `src/Capacitor.Cli.Core/`, daemon at `src/Capacitor.Cli.Daemon/`, desktop app at `src/Capacitor.App/`, npm packages at `npm/`, Claude Code plugin at `kcap/`.
 
@@ -29,7 +29,7 @@ answer. See `reference/SURFACE.md` §4 for the wire contract.
 ## Invariants
 
 Deliberate choices a change can silently undo — each looks like a bug until you know why.
-Inherited `docs/` is upstream's and is reference material, not our process.
+Inherited `docs/` is Kurrent's and is reference material, not our process.
 
 - **A vendor either contains borrowed review or does not offer it.** Cursor and Copilot read a
   daemon-owned snapshot, Codex its own tool clamp; Claude declares no containment, so a borrowed
@@ -173,9 +173,9 @@ Squash-merge concatenates the branch's messages verbatim, and the merge is usual
 
 ## Issues and pull requests
 
-**This is a private repository.** Upstream's process — public-issue etiquette, Linear ids,
+**This is a private repository.** Kurrent's process — public-issue etiquette, Linear ids,
 their PR template — does not apply and has been removed. Do not open issues or PRs against
-`kurrent-io`; there is no upstream remote and we are not contributing back.
+`kurrent-io`; the only remote is our own org repo and we are not contributing back.
 
 Title: commit-subject rules minus the reference.
 
@@ -195,4 +195,4 @@ of the diff.
 - **macOS AOT binary code signing** — After copying an AOT binary, run `codesign --force --sign -` to re-sign.
 - **Never read an agent-owned file with a write-denying open** — `File.ReadAllText`/`ReadAllTextAsync` open `FileShare.Read`, which *denies Write to every other handle* for the duration. On Windows that sharing is mandatory, so it stops the agent writing to its own transcript/sidecar — worst on the shutdown final drain, when it is flushing its last records. Read via `WatchCommand.ReadAllTextShared`/`ReadAllTextSharedAsync` (or your own `FileStream(..., FileShare.ReadWrite)`) for anything the agent writes: transcripts and their `{id}.json` sidecars. Config/settings files we own are fine. **This is invisible on macOS/Linux** — Unix has no mandatory sharing, so a violation passes locally and only reddens the Windows CI leg (AI-1629 was exactly this, on the one read that missed the rule while seven siblings had it).
 - **Do not re-introduce a vendor endpoint.** Six hardcoded phone-homes were severed at the fork (telemetry collector and its write key, provisioning, auth proxy, machine token exchange, npm update channel, `{slug}.kcap.ai` expansion). Each is marked `// severed at the fork`. The machine token exchange is a route we must **build**, not restore — see `reference/FLEET.md` §2.
-- **`README.md` is ours**, not upstream's; the inherited one is kept at `reference/UPSTREAM-README.md`. A change to user-facing CLI surface still updates our README in the same change — `src/Capacitor.Cli.Core/Resources/help-*.txt` alone is not enough.
+- **`README.md` is ours**, not Kurrent's; the inherited one is kept at `reference/VENDOR-README.md`. A change to user-facing CLI surface still updates our README in the same change — `src/Capacitor.Cli.Core/Resources/help-*.txt` alone is not enough.

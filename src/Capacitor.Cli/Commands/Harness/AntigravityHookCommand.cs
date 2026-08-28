@@ -206,9 +206,14 @@ sealed class AntigravityHookCommand(ConfigRoot config, ProfileContext profiles, 
         // subtracts HookBudget.Safety — do NOT subtract it again. Written even when the watcher-spawn
         // gate below returns early — a withheld watcher must not suppress injection.
         var fragment = await SessionStartMemoryHookSupport.AwaitBounded(memoryTask, budget);
-        var workItemsNudge = HarnessNudgeEmitter.Combine(
-            WorkItemsNudgeEmitter.Resolve(SessionStartHarness.Antigravity, sessionId, activeProfile?.DisableWorkItemsNudge is true),
-            HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config));
+        // PreInvocation repeats per turn and injects `userMessage`, which the vendor documents as
+        // durable — an ungated nudge would leave a copy in the conversation for every turn after the
+        // first. The gate is the nudges' own, keyed exactly as the lifecycle is and holding no lease
+        // state, so it cannot disturb the memory/guidelines disposition decided above.
+        var workItemsNudge = SessionStartNudgeGate.Once(config, LifecycleFor(sessionId), () =>
+            HarnessNudgeEmitter.Combine(
+                WorkItemsNudgeEmitter.Resolve(SessionStartHarness.Antigravity, sessionId, activeProfile?.DisableWorkItemsNudge is true),
+                HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config)));
         WritePreInvocationOutput(stdout, fragment, workItemsNudge);
         await stdout.FlushAsync();
 
