@@ -102,11 +102,19 @@ Supersedes the informal cut elsewhere in this repo.
 | Spool + drain durability | nice | **core — offline nodes must lose nothing** |
 | `remap` (cwd rewriting) | rename fixup | **core — per-node path normalisation** |
 | Machine dimension on sessions | absent in kcap | **build it — deliberate divergence** |
+| Eval execution | product feature | **core — retained as the generic session/experiment judging primitive** |
+| Review flows | operator's call | operator's call |
 | Telemetry to kcap | cut | cut |
 | Tenant provisioning / SaaS signup | delete | delete |
 | npm distribution / update channel | cut | **revisit** — how does a fleet node get updated? |
 | Teams, projects, roles, members | mostly cut | **revisit** — one user, many machines is not the same as one user, one machine |
-| Flows, evals | operator's call | operator's call |
+
+**Eval execution is a decided exception to the general feature-cut process: keep it.**
+The valuable primitive is not an automatic paid score on every session; it is the ability
+to dispatch a versioned set of independent evaluators over any captured or replayed
+session and persist their grounded findings. Judge execution must not depend on Kurrent's
+hosted service or on a paid model. Free hosted endpoints and local model backends should
+be first-class; paid hosted judges remain an optional configuration choice.
 
 Two that genuinely change under fleet framing rather than merely surviving:
 

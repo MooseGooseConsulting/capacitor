@@ -37,10 +37,12 @@ yours where you can defend it. Adopting the proposal wholesale is a legitimate o
 but only after you've genuinely tried to break it, because cheap agreement is the exact
 failure this brief exists to prevent.
 
-Three things are not yours to re-decide: the **invariants** (evidence-backed, read from
-the client's own source), the **licensing constraints**, and the rule that **kcap is
-the oracle**. Everything else — sequence, split, milestones, the two-agent seam — is
-yours.
+Four things are not yours to re-decide: the **invariants** (evidence-backed, read from
+the client's own source), the **licensing constraints**, the rule that **kcap is the
+oracle**, and the decision to **keep eval execution as a core primitive**. The evaluator
+catalog, orchestration, and model backend may evolve; the ability to run independent,
+grounded evaluators over stored sessions must survive the rebuild. Everything else —
+sequence, split, milestones, the two-agent seam — is yours.
 
 Re-plan between waves too. What you learn in one should change the next, and any plan
 written before the first import will be partly wrong.
@@ -125,6 +127,12 @@ capture (evals, review flows, a hosted agent runtime, terminal multiplexing, per
 telemetry, work items, analytics dashboards, memory). Some of that is core and some is
 peripheral, and **you do not get to decide which alone.**
 
+**One feature decision is already made: keep eval execution.** Do not cut the machinery
+that dispatches independent evaluator questions over stored sessions, gives judges
+read-only evidence access, and persists per-question results. It may be generalized away
+from kcap's fixed taxonomy, and its judge backend should support free hosted and local
+models so paid API spend is optional, but the primitive itself is core.
+
 Wave 4 has the procedure: enumerate the complete surface from evidence, propose in / out /
 later with a cost per item, then **stop and get the operator's confirmation.** That is the
 only place in this job where you should block and wait.
@@ -165,6 +173,9 @@ placeholders to be replaced before anything leaves the org.
 - **Three vendors normalized end to end**, each verified against the live instance's own
   output for the same sessions.
 - A console that renders a captured session — Transcript and Trace at minimum.
+- **Eval execution survives standalone:** an arbitrary stored session can run a selected
+  evaluator question set through a configurable free/local judge backend, with grounded
+  per-question results persisted without depending on Kurrent's hosted service.
 - **A fourth agent vendor that kcap does not support, added end to end.** The
   acceptance test for the normalizer premise.
 - **A second machine enrolled headlessly and recording into the same corpus**, its

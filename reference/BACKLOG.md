@@ -139,11 +139,36 @@ has a gap that its own product doesn't feel.
 
 ---
 
-## 4. Open questions worth an answer before they cost something
+## 4. Evaluation — keep the execution primitive
+
+**Decision: keep evals.** Do not cut the existing eval execution machinery during the
+server rebuild or feature cut.
+
+The useful capability is broader than kcap's current fixed 13-question product score:
+Capacitor needs a generic way to dispatch a versioned set of independent, grounded
+questions over any captured or replayed session, persist the per-question verdicts, and
+compare them later as part of corpus learning and counterfactual experiments.
+
+Cost is not a reason to remove this. The intended steady-state judge path is **free or
+local models**. Judge/model routing therefore needs to become provider-agnostic enough to
+support local model endpoints and free hosted endpoints as first-class choices. Paid
+hosted judges are optional, not an architectural dependency.
+
+Preserve the good inherited properties while generalizing it:
+
+- one evaluator question per independent invocation;
+- read-only, session-scoped evidence access for large traces;
+- versioned evaluator/question text;
+- persisted per-question findings, not only an aggregate score;
+- model/backend identity recorded with every eval run;
+- no requirement to auto-evaluate every captured session.
+
+---
+
+## 5. Open questions worth an answer before they cost something
 
 - Does an unsupported `vendor` tag get rejected by the server, or silently accepted and
   dropped during normalization? Unverified; settle by measurement (`PROMPT.md`).
 - How does a fleet node get a new binary, now that kcap's npm channel is severed?
-- Do we keep evals? Real recurring API spend, entirely a taste call.
 - Do we keep per-session visibility (`--private`, `hide`, `org_public`)? Trivial to keep,
   awkward to retrofit.
