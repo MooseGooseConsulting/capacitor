@@ -19,8 +19,8 @@ on:
 
 jobs:
   build-and-test:
-    name: Build and test (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    name: Build and test (${{ matrix.name }})
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
@@ -32,7 +32,11 @@ jobs:
         # advertisement, which no longer carries any OS/arch precondition) is
         # additionally pinned by host-independent source guards in the unit suite —
         # see DaemonRunnerCursorAvailabilityTests' platform coverage matrix.
-        os: [ubuntu-latest, windows-latest]
+        include:
+          - name: linux-x64
+            runner: [self-hosted, moosegoose-build]
+          - name: windows-x64
+            runner: windows-latest
 
     steps:
       - uses: actions/checkout@v7
@@ -75,7 +79,7 @@ jobs:
 
   lint-linear-ids:
     name: No Linear issue IDs in C# source
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, moosegoose-build]
     steps:
       - uses: actions/checkout@v7
       - name: Check for Linear issue ID tokens in src/**/*.cs and test/**/*.cs
@@ -83,7 +87,7 @@ jobs:
 
   aot-check:
     name: AOT publish check
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, moosegoose-build]
     strategy:
       fail-fast: false
       matrix:
@@ -102,7 +106,9 @@ jobs:
           cache-dependency-path: Directory.Packages.props
 
       - name: Install build dependencies
-        run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev
+        run: |
+          command -v clang >/dev/null && dpkg -s zlib1g-dev >/dev/null 2>&1 && exit 0
+          sudo apt-get update && sudo apt-get install -y clang zlib1g-dev
 
       # Whole solution, and the RID pulls ILCompiler — a superset of build-and-test's set.
       - name: Restore solution
