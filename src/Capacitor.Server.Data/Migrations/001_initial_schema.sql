@@ -187,5 +187,7 @@ CREATE TABLE IF NOT EXISTS dead_letter_entries (
 );
 
 CREATE INDEX IF NOT EXISTS idx_session_events_lookup ON session_events(session_id, timestamp);
+CREATE INDEX IF NOT EXISTS idx_session_events_vendor_model ON session_events(vendor, model);
 CREATE INDEX IF NOT EXISTS idx_sessions_repo ON sessions(repo_hash, started_at);
+CREATE INDEX IF NOT EXISTS idx_sessions_owner ON sessions(owner_user_id, started_at);
 CREATE INDEX IF NOT EXISTS idx_sessions_machine ON sessions(machine_id, started_at);

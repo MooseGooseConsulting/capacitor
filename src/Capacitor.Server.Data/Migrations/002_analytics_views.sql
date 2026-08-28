@@ -3,7 +3,8 @@
 -- Compatible with SQLite and PostgreSQL
 -- ============================================================================
 
-CREATE VIEW IF NOT EXISTS v_an_sessions AS
+DROP VIEW IF EXISTS v_an_sessions;
+CREATE VIEW v_an_sessions AS
 SELECT
     s.repo_hash,
     s.session_id,
@@ -28,7 +29,8 @@ SELECT
     s.machine_id
 FROM sessions s;
 
-CREATE VIEW IF NOT EXISTS v_an_token_usage_by_model AS
+DROP VIEW IF EXISTS v_an_token_usage_by_model;
+CREATE VIEW v_an_token_usage_by_model AS
 SELECT
     s.repo_hash,
     e.vendor,
@@ -43,7 +45,8 @@ FROM session_events e
 JOIN sessions s ON e.session_id = s.session_id
 GROUP BY s.repo_hash, e.vendor, e.model;
 
-CREATE VIEW IF NOT EXISTS v_an_tool_usage AS
+DROP VIEW IF EXISTS v_an_tool_usage;
+CREATE VIEW v_an_tool_usage AS
 SELECT
     s.repo_hash,
     e.vendor,
@@ -56,7 +59,8 @@ JOIN sessions s ON e.session_id = s.session_id
 WHERE e.tool_name IS NOT NULL
 GROUP BY s.repo_hash, e.vendor, e.tool_name;
 
-CREATE VIEW IF NOT EXISTS v_an_eval_scores AS
+DROP VIEW IF EXISTS v_an_eval_scores;
+CREATE VIEW v_an_eval_scores AS
 SELECT
     s.repo_hash,
     r.session_id,
@@ -73,7 +77,8 @@ FROM eval_runs r
 JOIN sessions s ON r.session_id = s.session_id
 JOIN eval_verdicts v ON r.eval_run_id = v.eval_run_id;
 
-CREATE VIEW IF NOT EXISTS v_an_work_items AS
+DROP VIEW IF EXISTS v_an_work_items;
+CREATE VIEW v_an_work_items AS
 SELECT
     w.repo_hash,
     w.work_item_id,

@@ -39,6 +39,26 @@ public class SchemaMigrationTests {
     }
 
     [Test]
+    public async Task InitializeAsync_creates_indexes_documented_in_the_schema_spec() {
+        using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+
+        await SqliteDatabaseInitializer.InitializeAsync(connection);
+
+        var indexes = new List<string>();
+        using (var cmd = connection.CreateCommand()) {
+            cmd.CommandText = "SELECT name FROM sqlite_master WHERE type = 'index';";
+            using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync()) {
+                indexes.Add(reader.GetString(0));
+            }
+        }
+
+        await Assert.That(indexes).Contains("idx_session_events_vendor_model");
+        await Assert.That(indexes).Contains("idx_sessions_owner");
+    }
+
+    [Test]
     public async Task SessionEventRecord_serializes_and_deserializes_cleanly() {
         var record = new SessionEventRecord {
             SessionId = "70dc37b2b3b14f139c153858abbe88a8",
