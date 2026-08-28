@@ -16,12 +16,19 @@ var builder = WebApplication.CreateBuilder(args);
 var dbProvider = builder.Configuration["Database:Provider"] ?? "Sqlite";
 var connString = builder.Configuration["Database:ConnectionString"] ?? "Data Source=capacitor.db";
 
-if (string.Equals(dbProvider, "Postgres", StringComparison.OrdinalIgnoreCase)) {
+var isPostgres = string.Equals(dbProvider, "Postgres", StringComparison.OrdinalIgnoreCase);
+
+if (isPostgres) {
     var dataSource = NpgsqlDataSource.Create(connString);
+    await using (var initConn = await dataSource.OpenConnectionAsync()) {
+        await PostgresDatabaseInitializer.InitializeAsync(initConn);
+    }
+
     builder.Services.AddSingleton(dataSource);
     builder.Services.AddSingleton<IEventStoreRepository, PostgresEventStoreRepository>();
     builder.Services.AddSingleton<ISessionWatermarkRepository, PostgresWatermarkRepository>();
     builder.Services.AddSingleton<ISessionRepository, PostgresSessionRepository>();
+    builder.Services.AddSingleton<IMachineRepository, PostgresMachineRepository>();
 } else {
     var sqliteConn = new SqliteConnection(connString);
     sqliteConn.Open();
@@ -36,6 +43,7 @@ if (string.Equals(dbProvider, "Postgres", StringComparison.OrdinalIgnoreCase)) {
     builder.Services.AddSingleton<IEventStoreRepository, SqliteEventStoreRepository>();
     builder.Services.AddSingleton<ISessionWatermarkRepository, SqliteWatermarkRepository>();
     builder.Services.AddSingleton<ISessionRepository, SqliteSessionRepository>();
+    builder.Services.AddSingleton<IMachineRepository, SqliteMachineRepository>();
     builder.Services.AddSingleton<SqliteAnalyticsService>();
 }
 
@@ -186,24 +194,35 @@ app.MapGet("/watermarks", async (
 });
 
 // Fleet Node Enrollment & Heartbeat
-app.MapPost("/api/machines/enroll", (
-    [FromBody] MachineEnrollmentRequest request) => {
+app.MapPost("/api/machines/enroll", async (
+    [FromBody] MachineEnrollmentRequest request,
+    IMachineRepository machines) => {
     var machineId = string.IsNullOrWhiteSpace(request.MachineId)
         ? Guid.NewGuid().ToString("N")
         : request.MachineId;
     var token = $"kcap_node_{Guid.NewGuid():N}";
+    var now = DateTimeOffset.UtcNow;
+    await machines.EnrollAsync(machineId, request.Hostname, request.Os, request.Arch, MachineTokenHasher.Hash(token), now);
     return Results.Ok(new {
         machine_id = machineId,
         hostname = request.Hostname,
         auth_token = token,
-        enrolled_at = DateTimeOffset.UtcNow
+        enrolled_at = now
     });
 });
 
-app.MapPost("/api/machines/heartbeat", (
-    [FromBody] MachineHeartbeatRequest request) => {
+app.MapPost("/api/machines/heartbeat", async (
+    HttpRequest request,
+    IMachineRepository machines) => {
+    var header = request.Headers.Authorization.ToString();
+    if (!header.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)) return Results.Unauthorized();
+
+    var token = header["Bearer ".Length..].Trim();
+    var machineId = await machines.HeartbeatAsync(MachineTokenHasher.Hash(token), DateTimeOffset.UtcNow);
+    if (machineId == null) return Results.Unauthorized();
+
     return Results.Ok(new {
-        machine_id = request.MachineId,
+        machine_id = machineId,
         status = "healthy",
         acknowledged_at = DateTimeOffset.UtcNow
     });
@@ -275,49 +294,55 @@ app.MapGet("/api/sessions/{id}/eval-context", async (
     });
 });
 
-// Analytics Views
-app.MapGet("/api/analytics/schema", async (SqliteConnection conn, SqliteGate gate) => {
-    var text = await gate.RunAsync(async () => {
-        var sb = new StringBuilder();
-        sb.AppendLine("# Capacitor analytics views");
-        sb.AppendLine();
-        sb.AppendLine("Only single-statement SELECT queries over these v_an_* views are permitted.");
-        sb.AppendLine("Every view carries repo_hash — governed queries are scoped to the caller's repos.");
-        sb.AppendLine();
-
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT name, sql FROM sqlite_master WHERE type = 'view' AND name LIKE 'v_an_%' ORDER BY name;";
-        using var reader = await cmd.ExecuteReaderAsync();
-        while (await reader.ReadAsync()) {
-            var name = reader.GetString(0);
-            var viewSql = reader.IsDBNull(1) ? "" : reader.GetString(1);
-            sb.Append("## ").AppendLine(name);
-            sb.AppendLine("```sql");
-            sb.AppendLine(viewSql.Trim());
-            sb.AppendLine("```");
+// Analytics Views — SqliteAnalyticsService reads the v_an_* views directly off the Sqlite
+// connection, which the Postgres provider never opens.
+if (isPostgres) {
+    app.MapGet("/api/analytics/schema", () => Results.Problem("Analytics views are not yet available under Database:Provider=Postgres.", statusCode: 501));
+    app.MapPost("/api/analytics/query", () => Results.Problem("Analytics queries are not yet available under Database:Provider=Postgres.", statusCode: 501));
+} else {
+    app.MapGet("/api/analytics/schema", async (SqliteConnection conn, SqliteGate gate) => {
+        var text = await gate.RunAsync(async () => {
+            var sb = new StringBuilder();
+            sb.AppendLine("# Capacitor analytics views");
             sb.AppendLine();
-        }
+            sb.AppendLine("Only single-statement SELECT queries over these v_an_* views are permitted.");
+            sb.AppendLine("Every view carries repo_hash — governed queries are scoped to the caller's repos.");
+            sb.AppendLine();
 
-        sb.AppendLine("Example: SELECT vendor, model, total_cost_usd FROM v_an_token_usage_by_model;");
-        return sb.ToString();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT name, sql FROM sqlite_master WHERE type = 'view' AND name LIKE 'v_an_%' ORDER BY name;";
+            using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync()) {
+                var name = reader.GetString(0);
+                var viewSql = reader.IsDBNull(1) ? "" : reader.GetString(1);
+                sb.Append("## ").AppendLine(name);
+                sb.AppendLine("```sql");
+                sb.AppendLine(viewSql.Trim());
+                sb.AppendLine("```");
+                sb.AppendLine();
+            }
+
+            sb.AppendLine("Example: SELECT vendor, model, total_cost_usd FROM v_an_token_usage_by_model;");
+            return sb.ToString();
+        });
+
+        return Results.Ok(new { text, max_rows = SqliteAnalyticsService.DefaultMaxRows });
     });
 
-    return Results.Ok(new { text, max_rows = SqliteAnalyticsService.DefaultMaxRows });
-});
-
-app.MapPost("/api/analytics/query", async (
-    [FromBody] ApiAnalyticsQueryRequest request,
-    SqliteAnalyticsService analytics,
-    CancellationToken ct) => {
-    try {
-        var result = await analytics.ExecuteGovernedQueryAsync(request.Sql, request.Repos, request.MaxRows, ct);
-        return Results.Ok(new { rows = result.Rows, truncated = result.Truncated, max_rows = result.MaxRows });
-    } catch (InvalidOperationException ex) {
-        return Results.Problem(statusCode: 400, detail: ex.Message);
-    } catch (SqliteException ex) {
-        return Results.Problem(statusCode: 400, detail: ex.Message);
-    }
-});
+    app.MapPost("/api/analytics/query", async (
+        [FromBody] ApiAnalyticsQueryRequest request,
+        SqliteAnalyticsService analytics,
+        CancellationToken ct) => {
+        try {
+            var result = await analytics.ExecuteGovernedQueryAsync(request.Sql, request.Repos, request.MaxRows, ct);
+            return Results.Ok(new { rows = result.Rows, truncated = result.Truncated, max_rows = result.MaxRows });
+        } catch (InvalidOperationException ex) {
+            return Results.Problem(statusCode: 400, detail: ex.Message);
+        } catch (SqliteException ex) {
+            return Results.Problem(statusCode: 400, detail: ex.Message);
+        }
+    });
+}
 
 app.Run();
 
@@ -363,5 +388,4 @@ namespace Capacitor.Server.Api {
     }
 
     public record MachineEnrollmentRequest(string? MachineId, string Hostname, string Os, string Arch);
-    public record MachineHeartbeatRequest(string MachineId);
 }

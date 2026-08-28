@@ -14,7 +14,7 @@ public static class PostgresDatabaseInitializer {
             await cmd.ExecuteNonQueryAsync(ct);
         }
 
-        var viewsSql = await SqliteDatabaseInitializer.GetEmbeddedMigrationAsync("002_analytics_views.sql", ct);
+        var viewsSql = await SqliteDatabaseInitializer.GetEmbeddedMigrationAsync("002_analytics_views.postgres.sql", ct);
         using (var cmd = connection.CreateCommand()) {
             cmd.CommandText = viewsSql;
             await cmd.ExecuteNonQueryAsync(ct);

@@ -39,3 +39,10 @@ public interface ISessionRepository {
         DateTimeOffset? lastEventAt,
         CancellationToken ct = default);
 }
+
+public interface IMachineRepository {
+    Task EnrollAsync(string machineId, string hostname, string os, string arch, string tokenHash, DateTimeOffset now, CancellationToken ct = default);
+
+    /// <summary>Updates last_heartbeat for the machine owning tokenHash; returns its machine_id, or null if the token matches no machine.</summary>
+    Task<string?> HeartbeatAsync(string tokenHash, DateTimeOffset now, CancellationToken ct = default);
+}

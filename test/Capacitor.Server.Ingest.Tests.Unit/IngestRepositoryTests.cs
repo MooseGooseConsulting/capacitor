@@ -9,6 +9,7 @@ public sealed class IngestRepositoryTests : IDisposable {
     private readonly SqliteEventStoreRepository _eventStore;
     private readonly SqliteWatermarkRepository _watermarks;
     private readonly SqliteSessionRepository _sessions;
+    private readonly SqliteMachineRepository _machines;
 
     public IngestRepositoryTests() {
         _connection = new SqliteConnection("Data Source=:memory:");
@@ -18,6 +19,7 @@ public sealed class IngestRepositoryTests : IDisposable {
         _eventStore = new SqliteEventStoreRepository(_connection);
         _watermarks = new SqliteWatermarkRepository(_connection);
         _sessions = new SqliteSessionRepository(_connection);
+        _machines = new SqliteMachineRepository(_connection);
     }
 
     public void Dispose() {
@@ -172,5 +174,22 @@ public sealed class IngestRepositoryTests : IDisposable {
         var placeholder = await _sessions.GetOrCreatePlaceholderAsync(sessionId, "codex", "user-1", "owner");
 
         await Assert.That(placeholder.Visibility).IsEqualTo("owner");
+    }
+
+    [Test]
+    public async Task Heartbeat_resolves_the_machine_that_owns_the_enrolled_token() {
+        var now = DateTimeOffset.UtcNow;
+        await _machines.EnrollAsync("mach-1", "hephastus", "linux", "x64", MachineTokenHasher.Hash("tok-1"), now);
+
+        var resolved = await _machines.HeartbeatAsync(MachineTokenHasher.Hash("tok-1"), now.AddMinutes(1));
+
+        await Assert.That(resolved).IsEqualTo("mach-1");
+    }
+
+    [Test]
+    public async Task Heartbeat_rejects_a_token_no_enrollment_issued() {
+        var resolved = await _machines.HeartbeatAsync(MachineTokenHasher.Hash("never-enrolled"), DateTimeOffset.UtcNow);
+
+        await Assert.That(resolved).IsNull();
     }
 }

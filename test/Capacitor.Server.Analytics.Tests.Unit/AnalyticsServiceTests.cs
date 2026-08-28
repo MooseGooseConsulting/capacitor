@@ -19,7 +19,7 @@ public sealed class AnalyticsServiceTests : IDisposable {
 
         _eventStore = new SqliteEventStoreRepository(_connection);
         _sessions = new SqliteSessionRepository(_connection);
-        _projector = new SessionRollupProjector(_connection, _sessions);
+        _projector = new SessionRollupProjector(_eventStore, _sessions);
         _analytics = new SqliteAnalyticsService(_connection);
     }
 

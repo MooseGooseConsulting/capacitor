@@ -59,6 +59,18 @@ public class SchemaMigrationTests {
     }
 
     [Test]
+    public async Task Postgres_analytics_views_migration_uses_valid_postgres_view_syntax() {
+        var sql = await SqliteDatabaseInitializer.GetEmbeddedMigrationAsync("002_analytics_views.postgres.sql");
+
+        await Assert.That(sql).DoesNotContain("IF NOT EXISTS");
+        await Assert.That(sql).Contains("CREATE OR REPLACE VIEW v_an_sessions");
+        await Assert.That(sql).Contains("CREATE OR REPLACE VIEW v_an_token_usage_by_model");
+        await Assert.That(sql).Contains("CREATE OR REPLACE VIEW v_an_tool_usage");
+        await Assert.That(sql).Contains("CREATE OR REPLACE VIEW v_an_eval_scores");
+        await Assert.That(sql).Contains("CREATE OR REPLACE VIEW v_an_work_items");
+    }
+
+    [Test]
     public async Task SessionEventRecord_serializes_and_deserializes_cleanly() {
         var record = new SessionEventRecord {
             SessionId = "70dc37b2b3b14f139c153858abbe88a8",

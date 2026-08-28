@@ -67,7 +67,7 @@ public class PostgresEventStoreRepository : IEventStoreRepository {
         return inserted;
     }
 
-    public async Task<IReadOnlyList<SessionEventRecord>> GetEventsAsync(string sessionId, string? agentId = null, int fromLine = 1, CancellationToken ct = default) {
+    public async Task<IReadOnlyList<SessionEventRecord>> GetEventsAsync(string sessionId, string? agentId = null, int fromLine = 0, CancellationToken ct = default) {
         var list = new List<SessionEventRecord>();
         await using var conn = await _dataSource.OpenConnectionAsync(ct);
         await using var cmd = conn.CreateCommand();

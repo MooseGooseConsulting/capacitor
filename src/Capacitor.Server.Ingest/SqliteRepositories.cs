@@ -260,3 +260,50 @@ public class SqliteSessionRepository : ISessionRepository {
             await cmd.ExecuteNonQueryAsync(ct);
         }, ct);
 }
+
+public class SqliteMachineRepository : IMachineRepository {
+    private readonly SqliteConnection _connection;
+    private readonly SqliteGate _gate;
+
+    public SqliteMachineRepository(SqliteConnection connection, SqliteGate? gate = null) {
+        _connection = connection;
+        _gate = gate ?? new SqliteGate();
+    }
+
+    public Task EnrollAsync(string machineId, string hostname, string os, string arch, string tokenHash, DateTimeOffset now, CancellationToken ct = default) =>
+        _gate.RunAsync(async () => {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = @"
+                INSERT INTO machines (machine_id, hostname, os, arch, client_id, registered_at, last_heartbeat)
+                VALUES ($machine_id, $hostname, $os, $arch, $client_id, $registered_at, $registered_at)
+                ON CONFLICT(machine_id) DO UPDATE SET
+                    hostname = excluded.hostname,
+                    os = excluded.os,
+                    arch = excluded.arch,
+                    client_id = excluded.client_id;
+            ";
+            cmd.Parameters.AddWithValue("$machine_id", machineId);
+            cmd.Parameters.AddWithValue("$hostname", hostname);
+            cmd.Parameters.AddWithValue("$os", os);
+            cmd.Parameters.AddWithValue("$arch", arch);
+            cmd.Parameters.AddWithValue("$client_id", tokenHash);
+            cmd.Parameters.AddWithValue("$registered_at", now.ToString("o", CultureInfo.InvariantCulture));
+
+            await cmd.ExecuteNonQueryAsync(ct);
+        }, ct);
+
+    public Task<string?> HeartbeatAsync(string tokenHash, DateTimeOffset now, CancellationToken ct = default) =>
+        _gate.RunAsync(async () => {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = @"
+                UPDATE machines SET last_heartbeat = $now
+                WHERE client_id = $client_id
+                RETURNING machine_id;
+            ";
+            cmd.Parameters.AddWithValue("$now", now.ToString("o", CultureInfo.InvariantCulture));
+            cmd.Parameters.AddWithValue("$client_id", tokenHash);
+
+            using var reader = await cmd.ExecuteReaderAsync(ct);
+            return await reader.ReadAsync(ct) ? reader.GetString(0) : null;
+        }, ct);
+}

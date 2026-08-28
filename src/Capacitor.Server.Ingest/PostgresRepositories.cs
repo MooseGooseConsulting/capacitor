@@ -11,7 +11,7 @@ public class PostgresWatermarkRepository : ISessionWatermarkRepository {
         _dataSource = dataSource;
     }
 
-    public async Task<int> GetLastLineNumberAsync(string sessionId, string agentId = "", CancellationToken ct = default) {
+    public async Task<int?> GetLastLineNumberAsync(string sessionId, string agentId = "", CancellationToken ct = default) {
         await using var conn = await _dataSource.OpenConnectionAsync(ct);
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = "SELECT last_line_number FROM session_watermarks WHERE session_id = $1 AND agent_id = $2;";
@@ -19,7 +19,7 @@ public class PostgresWatermarkRepository : ISessionWatermarkRepository {
         cmd.Parameters.AddWithValue(agentId ?? string.Empty);
 
         var result = await cmd.ExecuteScalarAsync(ct);
-        if (result == null || result is DBNull) return 0;
+        if (result == null || result is DBNull) return null;
         return Convert.ToInt32(result, CultureInfo.InvariantCulture);
     }
 
@@ -52,7 +52,7 @@ public class PostgresSessionRepository : ISessionRepository {
         _dataSource = dataSource;
     }
 
-    public async Task<SessionHeaderRecord> GetOrCreatePlaceholderAsync(string sessionId, string vendor, string? ownerUserId = null, CancellationToken ct = default) {
+    public async Task<SessionHeaderRecord> GetOrCreatePlaceholderAsync(string sessionId, string vendor, string? ownerUserId = null, string? defaultVisibility = null, CancellationToken ct = default) {
         var existing = await GetSessionAsync(sessionId, ct);
         if (existing != null) return existing;
 
@@ -63,7 +63,7 @@ public class PostgresSessionRepository : ISessionRepository {
             OwnerUserId = ownerUserId ?? "anonymous",
             StartedAt = now,
             Status = "active",
-            Visibility = "project"
+            Visibility = string.IsNullOrWhiteSpace(defaultVisibility) ? "project" : defaultVisibility
         };
 
         await using var conn = await _dataSource.OpenConnectionAsync(ct);
@@ -74,7 +74,8 @@ public class PostgresSessionRepository : ISessionRepository {
             ) VALUES (
                 $1, $2, $3, $4, $5, $6
             )
-            ON CONFLICT(session_id) DO NOTHING;
+            ON CONFLICT(session_id) DO NOTHING
+            RETURNING session_id;
         ";
 
         cmd.Parameters.AddWithValue(placeholder.SessionId);
@@ -84,8 +85,11 @@ public class PostgresSessionRepository : ISessionRepository {
         cmd.Parameters.AddWithValue(placeholder.Visibility);
         cmd.Parameters.AddWithValue(placeholder.StartedAt.ToString("o", CultureInfo.InvariantCulture));
 
-        await cmd.ExecuteNonQueryAsync(ct);
-        return placeholder;
+        var wonRace = await cmd.ExecuteScalarAsync(ct) != null;
+        if (wonRace) return placeholder;
+
+        // Someone else's insert landed first: report the row that actually exists, not this local guess.
+        return await GetSessionAsync(sessionId, ct) ?? placeholder;
     }
 
     public async Task<SessionHeaderRecord?> GetSessionAsync(string sessionId, CancellationToken ct = default) {
@@ -192,5 +196,84 @@ public class PostgresSessionRepository : ISessionRepository {
         cmd.Parameters.AddWithValue(session.TotalCostUsd);
 
         await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task UpdateRollupAsync(
+            string sessionId,
+            int eventCount,
+            int toolCount,
+            long totalTokens,
+            decimal totalCostUsd,
+            decimal durationMin,
+            DateTimeOffset? lastEventAt,
+            CancellationToken ct = default
+        ) {
+        await using var conn = await _dataSource.OpenConnectionAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+            UPDATE sessions SET
+                last_event_at = COALESCE($2, last_event_at),
+                duration_min = $3,
+                event_count = $4,
+                tool_count = $5,
+                total_tokens = $6,
+                total_cost_usd = $7
+            WHERE session_id = $1;
+        ";
+
+        cmd.Parameters.AddWithValue(sessionId);
+        cmd.Parameters.AddWithValue(lastEventAt.HasValue ? lastEventAt.Value.ToString("o", CultureInfo.InvariantCulture) : (object)DBNull.Value);
+        cmd.Parameters.AddWithValue(durationMin);
+        cmd.Parameters.AddWithValue(eventCount);
+        cmd.Parameters.AddWithValue(toolCount);
+        cmd.Parameters.AddWithValue(totalTokens);
+        cmd.Parameters.AddWithValue(totalCostUsd);
+
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+}
+
+public class PostgresMachineRepository : IMachineRepository {
+    private readonly NpgsqlDataSource _dataSource;
+
+    public PostgresMachineRepository(NpgsqlDataSource dataSource) {
+        _dataSource = dataSource;
+    }
+
+    public async Task EnrollAsync(string machineId, string hostname, string os, string arch, string tokenHash, DateTimeOffset now, CancellationToken ct = default) {
+        await using var conn = await _dataSource.OpenConnectionAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+            INSERT INTO machines (machine_id, hostname, os, arch, client_id, registered_at, last_heartbeat)
+            VALUES ($1, $2, $3, $4, $5, $6, $6)
+            ON CONFLICT(machine_id) DO UPDATE SET
+                hostname = excluded.hostname,
+                os = excluded.os,
+                arch = excluded.arch,
+                client_id = excluded.client_id;
+        ";
+        cmd.Parameters.AddWithValue(machineId);
+        cmd.Parameters.AddWithValue(hostname);
+        cmd.Parameters.AddWithValue(os);
+        cmd.Parameters.AddWithValue(arch);
+        cmd.Parameters.AddWithValue(tokenHash);
+        cmd.Parameters.AddWithValue(now.ToString("o", CultureInfo.InvariantCulture));
+
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task<string?> HeartbeatAsync(string tokenHash, DateTimeOffset now, CancellationToken ct = default) {
+        await using var conn = await _dataSource.OpenConnectionAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+            UPDATE machines SET last_heartbeat = $1
+            WHERE client_id = $2
+            RETURNING machine_id;
+        ";
+        cmd.Parameters.AddWithValue(now.ToString("o", CultureInfo.InvariantCulture));
+        cmd.Parameters.AddWithValue(tokenHash);
+
+        var result = await cmd.ExecuteScalarAsync(ct);
+        return result as string;
     }
 }
