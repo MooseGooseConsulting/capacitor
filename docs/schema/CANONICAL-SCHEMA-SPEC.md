@@ -2,7 +2,7 @@
 
 This document defines the authoritative database schema for the Capacitor Server.
 
-The schema is designed to support high-throughput, append-only event streams across a multi-node fleet (`FLEET.md`), position-addressed idempotent ingestion, subagent trees, work item graphs, 13-question session evals, and 32 governed analytics views.
+The schema is designed to support high-throughput, append-only event streams across a multi-node fleet (`FLEET.md`), position-addressed idempotent ingestion, subagent trees, work item graphs, session evals, and a governed analytics surface. Live `get_analytics_schema` inventories 32 view *names*; this wave defines tables plus SQL for the cores the session list and MCP tour actually query. Do not invent the remaining view bodies here.
 
 ---
 
@@ -23,7 +23,7 @@ The schema is designed to support high-throughput, append-only event streams acr
 | `judge_facts` | Cross-session patterns and lessons learned | `fact_hash` |
 | `machines` | Fleet node registry (`FLEET.md`) | `machine_id` |
 | `daemons` | Hosted agent runner daemon instances | `daemon_id` |
-| `memories` | Team memories and preferences | `memory_id` |
+| `memories` | Team memories and preferences (name reserved; DDL deferred) | `memory_id` |
 
 ---
 
@@ -36,7 +36,7 @@ The append-only log of every user turn, model thought, tool call, tool result, a
 CREATE TABLE session_events (
     session_id          VARCHAR(64) NOT NULL,
     agent_id            VARCHAR(64) NOT NULL DEFAULT '', -- Empty string for parent session; subagent UUID for child
-    line_number         INTEGER NOT NULL,                -- 1-indexed position in transcript
+    line_number         INTEGER NOT NULL,                -- 0-based index in the vendor transcript (WatchCommand / SessionImporter)
     event_type          VARCHAR(64) NOT NULL,            -- 'SessionStarted', 'ToolCall', 'ToolResult', 'AssistantThinking', 'UserMessage', 'CostRecorded'
     vendor              VARCHAR(32) NOT NULL,            -- 'claude', 'codex', 'cursor', 'gemini', 'antigravity', 'copilot', 'opencode', 'pi', 'kiro', 'kimi'
     model               VARCHAR(64),                     -- 'claude-3-5-sonnet', 'gpt-5', 'gemini-2.5-flash', etc.
@@ -64,6 +64,9 @@ CREATE TABLE session_events (
     PRIMARY KEY (session_id, agent_id, line_number)
 );
 
+-- One stored row per transcript line at this PK. Nested Claude content blocks
+-- stay inside raw_payload until a later wave adds a sub-line ordinal (logical_seq).
+
 CREATE INDEX idx_session_events_lookup ON session_events(session_id, timestamp);
 CREATE INDEX idx_session_events_vendor_model ON session_events(vendor, model);
 ```
@@ -75,7 +78,7 @@ Maintains the ingested frontier per session and agent stream.
 CREATE TABLE session_watermarks (
     session_id          VARCHAR(64) NOT NULL,
     agent_id            VARCHAR(64) NOT NULL DEFAULT '',
-    last_line_number    INTEGER NOT NULL,
+    last_line_number    INTEGER NOT NULL,                -- 0-based; clients resume at last_line_number + 1. Missing row ≠ 0.
     byte_offset         BIGINT NOT NULL DEFAULT 0,
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (session_id, agent_id)
@@ -94,6 +97,8 @@ CREATE TABLE sessions (
     model                       VARCHAR(64),
     status                      VARCHAR(32) NOT NULL DEFAULT 'active', -- 'active', 'completed', 'hidden', 'archived'
     visibility                  VARCHAR(32) NOT NULL DEFAULT 'project',-- 'private', 'project', 'org_public', 'public'
+    hidden_reason               VARCHAR(64),             -- live v_an_sessions column
+    disposition                 VARCHAR(32),             -- live v_an_sessions column
     owner_user_id               VARCHAR(64) NOT NULL,
     machine_id                  VARCHAR(64),             -- Host node attribution (FLEET.md)
     daemon_id                   VARCHAR(64),             -- Daemon attribution if hosted

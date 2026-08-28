@@ -12,7 +12,7 @@ This document defines the 1:1 mapping between client-side wire payloads (defined
   "session_id": "70dc37b2b3b14f139c153858abbe88a8",
   "agent_id": "subagent-1234",
   "lines": ["..."],
-  "line_numbers": [1, 2, 3],
+  "line_numbers": [0, 1, 2],
   "vendor": "claude",
   "strict": false,
   "repository": {
@@ -35,26 +35,35 @@ This document defines the 1:1 mapping between client-side wire payloads (defined
 1. **`session_events`:**
    * `session_id` $\leftarrow$ `batch.SessionId` (dashless)
    * `agent_id` $\leftarrow$ `batch.AgentId ?? ""`
-   * `line_number` $\leftarrow$ `batch.LineNumbers[i]` (or position offset)
+   * `line_number` $\leftarrow$ `batch.LineNumbers[i]` (0-based transcript index; do not invent 1-based positions)
    * `vendor` $\leftarrow$ `batch.Vendor ?? "claude"`
    * `raw_payload` $\leftarrow$ `batch.Lines[i]` (parsed JSON)
    * `event_type`, `model`, `tokens`, `tools` $\leftarrow$ extracted by vendor normalizer
 2. **`session_watermarks`:**
-   * `(session_id, agent_id)` $\leftarrow$ updated to `max(line_number)`
+   * `(session_id, agent_id)` $\leftarrow$ updated to `max(line_number)` (0-based)
 3. **`sessions`:**
    * Updated with repo metadata if `batch.Repository` is present.
+4. **Resume probe** (`GET /api/sessions/{id}/last-line`):
+   * 200 + `{ "last_line_number": N }` (0-based; resume at `N + 1`)
+   * 204 — stream known, nothing ingested yet
+   * 404 — unknown session
+   * There is no `/watermarks` route on the live CLI.
 
 ---
 
 ## 2. Session Title & Recap Mapping
 
-### Wire Payload: `SessionTitlePayload` (`POST /api/sessions/title`)
+Live CLI posts hook routes, not `/api/sessions/title` or `/api/sessions/whats-done`.
+
+### Wire Payload: `SessionTitlePayload` (`POST /hooks/session-title` and `POST /hooks/set-title`)
 * `session_id` $\to$ `sessions.session_id`
 * `title` $\to$ `sessions.title`
+* `model`, `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens` — present on the wire; discarded at this schema (not persisted).
 
-### Wire Payload: `WhatsDonePayload` (`POST /api/sessions/whats-done`)
+### Wire Payload: `WhatsDonePayload` (`POST /hooks/whats-done`)
 * `session_id` $\to$ `sessions.session_id`
 * `content` $\to$ stored in session recap / events rollup.
+* Same usage-token fields as title — discarded at this schema.
 
 ---
 
