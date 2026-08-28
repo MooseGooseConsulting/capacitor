@@ -74,10 +74,22 @@ Header actions: share, copy link, refresh, delete, an `Active`/status pill, owne
 
 ### Known dead ends
 
-- **Insights is not configured** on this instance ("Insights agent not configured. Enable
-  it in Server Settings (Insights:Agent)"). Don't chase it.
 - Global search matches session **titles and transcripts**, not vendor. Searching a
   vendor name returns sessions *about* it.
+
+### Insights, now enabled
+
+Was unconfigured as of the original capture; enabled on this instance since, at
+**Administration → Assistants → Insights agent** (`Provider: OpenRouter`, `Model:
+poolside/laguna-s-2.1:free` — the same free-tier model the title/backfill assistants on
+this tenant already use, reusing that vendor's key from AI Providers; no separate key
+needed). Once enabled it renders six category tabs — Adoption & Utilization, Cost/
+Attribution/Allocation, Productivity & Impact, Agent Behavior & Observability, Delivery &
+SDLC, Evaluation & Quality — plus a chat box (`Ask about sessions, tools, evals...`) backed
+by a `query_read_model` tool that runs live queries, not canned answers: asked "How many
+sessions ran in the last day?", it answered correctly against the actual corpus. Confirms
+the settings page's own description — the agent "also runs live, event-level queries over
+KurrentDB Flight SQL" on the tenant-wide view.
 
 ---
 
