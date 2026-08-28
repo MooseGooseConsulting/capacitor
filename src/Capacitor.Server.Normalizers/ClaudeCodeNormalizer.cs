@@ -13,7 +13,8 @@ public class ClaudeCodeNormalizer : INormalizer {
         string.Equals(vendor, "claude", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(vendor, "claude-code", StringComparison.OrdinalIgnoreCase);
 
-    public IReadOnlyList<SessionEventRecord> NormalizeLine(string vendor, string sessionId, string? agentId, int lineNumber, string rawLine) {
+    public IReadOnlyList<SessionEventRecord> NormalizeLine(string vendor, string sessionId, string? agentId, int lineNumber, string rawLine, out bool failed) {
+        failed = false;
         var timestamp = DateTimeOffset.UtcNow;
 
         try {
@@ -27,6 +28,7 @@ public class ClaudeCodeNormalizer : INormalizer {
                 _ => [Frame(sessionId, agentId, lineNumber, rawLine, timestamp, "RawMessage")],
             };
         } catch (JsonException) {
+            failed = true;
             return [Frame(sessionId, agentId, lineNumber, rawLine, timestamp, "RawMessage", content: rawLine)];
         }
     }

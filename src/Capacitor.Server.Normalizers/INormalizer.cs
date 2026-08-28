@@ -9,5 +9,8 @@ public interface INormalizer {
     // One transcript line can hold several logical events (an assistant turn with text plus
     // N tool calls, a planner response with visible content plus internal thinking), so a
     // normalizer returns one envelope per event rather than collapsing them into one record.
-    IReadOnlyList<SessionEventRecord> NormalizeLine(string vendor, string sessionId, string? agentId, int lineNumber, string rawLine);
+    // `failed` is true when rawLine could not be parsed into the vendor's expected shape and
+    // the normalizer fell back to a bare content record — a strict ingestion batch reads it,
+    // everyone else can discard it.
+    IReadOnlyList<SessionEventRecord> NormalizeLine(string vendor, string sessionId, string? agentId, int lineNumber, string rawLine, out bool failed);
 }

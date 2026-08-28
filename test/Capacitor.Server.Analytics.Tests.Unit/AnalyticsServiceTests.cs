@@ -73,18 +73,29 @@ public sealed class AnalyticsServiceTests : IDisposable {
         var sessionId = "sess-views-1";
         await _sessions.GetOrCreatePlaceholderAsync(sessionId, "claude", "dev-user");
 
-        var rows = await _analytics.ExecuteGovernedQueryAsync(
-            "SELECT * FROM v_an_sessions WHERE session_id = 'sess-views-1';", scope: "global");
-        await Assert.That(rows.Count).IsEqualTo(1);
-        await Assert.That(rows[0]["vendor"]).IsEqualTo("claude");
-        await Assert.That(rows[0]["owner_user_id"]).IsEqualTo("dev-user");
+        var result = await _analytics.ExecuteGovernedQueryAsync("SELECT * FROM v_an_sessions WHERE session_id = 'sess-views-1';");
+        await Assert.That(result.Rows.Count).IsEqualTo(1);
+        await Assert.That(result.Truncated).IsFalse();
+        await Assert.That(result.Rows[0]["vendor"]).IsEqualTo("claude");
+        await Assert.That(result.Rows[0]["owner_user_id"]).IsEqualTo("dev-user");
+    }
+
+    [Test]
+    public async Task GovernedAnalytics_rejects_a_second_statement() {
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => _analytics.ExecuteGovernedQueryAsync("SELECT * FROM v_an_sessions; DROP TABLE sessions;"));
+    }
+
+    [Test]
+    public async Task GovernedAnalytics_rejects_a_non_view_table() {
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => _analytics.ExecuteGovernedQueryAsync("SELECT * FROM sessions;"));
     }
 
     [Test]
     public async Task GovernedAnalytics_rejects_raw_table_access() {
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            _analytics.ExecuteGovernedQueryAsync(
-                "SELECT content, raw_payload FROM session_events;", scope: "global"));
+            _analytics.ExecuteGovernedQueryAsync("SELECT content, raw_payload FROM session_events;"));
     }
 
     [Test]
@@ -92,36 +103,37 @@ public sealed class AnalyticsServiceTests : IDisposable {
         var sessionId = "sess-with-1";
         await _sessions.GetOrCreatePlaceholderAsync(sessionId, "claude", "dev-user");
 
-        var rows = await _analytics.ExecuteGovernedQueryAsync(
+        var result = await _analytics.ExecuteGovernedQueryAsync(
             @"WITH mine AS (SELECT * FROM v_an_sessions WHERE session_id = 'sess-with-1')
-              SELECT * FROM mine;",
-            scope: "global");
-        await Assert.That(rows.Count).IsEqualTo(1);
+              SELECT * FROM mine;");
+        await Assert.That(result.Rows.Count).IsEqualTo(1);
     }
 
     [Test]
-    public async Task GovernedAnalytics_scope_filters_out_other_repos() {
-        var sessionId = "sess-scope-1";
-        var placeholder = await _sessions.GetOrCreatePlaceholderAsync(sessionId, "claude", "dev-user");
-        await _sessions.UpdateSessionAsync(placeholder with { RepoHash = "repo-a" });
+    public async Task GovernedAnalytics_scopes_results_to_the_given_repos() {
+        var inRepo = "sess-repo-a";
+        var outOfRepo = "sess-repo-b";
+        await _sessions.GetOrCreatePlaceholderAsync(inRepo, "claude", "dev-user");
+        await _sessions.GetOrCreatePlaceholderAsync(outOfRepo, "claude", "dev-user");
+        await _sessions.UpdateSessionAsync((await _sessions.GetSessionAsync(inRepo))! with { RepoHash = "repo-a" });
+        await _sessions.UpdateSessionAsync((await _sessions.GetSessionAsync(outOfRepo))! with { RepoHash = "repo-b" });
 
-        var sameRepo = await _analytics.ExecuteGovernedQueryAsync(
-            "SELECT * FROM v_an_sessions WHERE session_id = 'sess-scope-1';", scope: "repo-a");
-        await Assert.That(sameRepo.Count).IsEqualTo(1);
+        var result = await _analytics.ExecuteGovernedQueryAsync("SELECT * FROM v_an_sessions;", repos: ["repo-a"]);
 
-        var otherRepo = await _analytics.ExecuteGovernedQueryAsync(
-            "SELECT * FROM v_an_sessions WHERE session_id = 'sess-scope-1';", scope: "repo-b");
-        await Assert.That(otherRepo.Count).IsEqualTo(0);
+        await Assert.That(result.Rows.Select(r => r["session_id"])).Contains(inRepo);
+        await Assert.That(result.Rows.Select(r => r["session_id"])).DoesNotContain(outOfRepo);
     }
 
     [Test]
-    public async Task GovernedAnalytics_caps_result_rows() {
-        for (var i = 0; i < 5; i++) {
+    public async Task GovernedAnalytics_reports_truncation_past_max_rows() {
+        for (var i = 0; i < 3; i++) {
             await _sessions.GetOrCreatePlaceholderAsync($"sess-cap-{i}", "claude", "dev-user");
         }
 
-        var rows = await _analytics.ExecuteGovernedQueryAsync(
-            "SELECT * FROM v_an_sessions;", scope: "global", maxRows: 3);
-        await Assert.That(rows.Count).IsEqualTo(3);
+        var result = await _analytics.ExecuteGovernedQueryAsync("SELECT * FROM v_an_sessions;", maxRows: 2);
+
+        await Assert.That(result.Rows.Count).IsEqualTo(2);
+        await Assert.That(result.Truncated).IsTrue();
+        await Assert.That(result.MaxRows).IsEqualTo(2);
     }
 }

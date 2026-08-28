@@ -9,13 +9,33 @@ public interface IEventStoreRepository {
 }
 
 public interface ISessionWatermarkRepository {
-    /// <summary>Null means no watermark row exists yet; 0 is a genuinely ingested line 0.</summary>
+    // Null means no watermark row exists yet; 0 is a genuinely ingested line 0 — the two read
+    // as identical through an int, which the 200-vs-204 contract on GET /api/sessions/{id}/last-line
+    // needs told apart.
     Task<int?> GetLastLineNumberAsync(string sessionId, string agentId = "", CancellationToken ct = default);
     Task UpdateWatermarkAsync(string sessionId, string agentId, int lastLineNumber, long byteOffset = 0, CancellationToken ct = default);
 }
 
 public interface ISessionRepository {
-    Task<SessionHeaderRecord> GetOrCreatePlaceholderAsync(string sessionId, string vendor, string? ownerUserId = null, CancellationToken ct = default);
+    Task<SessionHeaderRecord> GetOrCreatePlaceholderAsync(
+        string sessionId,
+        string vendor,
+        string? ownerUserId = null,
+        string? defaultVisibility = null,
+        CancellationToken ct = default);
     Task<SessionHeaderRecord?> GetSessionAsync(string sessionId, CancellationToken ct = default);
     Task UpdateSessionAsync(SessionHeaderRecord session, CancellationToken ct = default);
+
+    // Rollup-only write: touches the aggregate columns exclusively. A concurrent session-end can
+    // commit status="completed" between this projection's read and its write, so this must never
+    // set status/ended_at — that stays UpdateSessionAsync's job for the handlers that intend it.
+    Task UpdateRollupAsync(
+        string sessionId,
+        int eventCount,
+        int toolCount,
+        long totalTokens,
+        decimal totalCostUsd,
+        decimal durationMin,
+        DateTimeOffset? lastEventAt,
+        CancellationToken ct = default);
 }

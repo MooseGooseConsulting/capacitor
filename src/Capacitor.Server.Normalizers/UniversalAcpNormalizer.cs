@@ -16,7 +16,8 @@ public class UniversalAcpNormalizer : INormalizer {
 
     public bool CanNormalize(string vendor) => SupportedVendors.Contains(vendor);
 
-    public IReadOnlyList<SessionEventRecord> NormalizeLine(string vendor, string sessionId, string? agentId, int lineNumber, string rawLine) {
+    public IReadOnlyList<SessionEventRecord> NormalizeLine(string vendor, string sessionId, string? agentId, int lineNumber, string rawLine, out bool failed) {
+        failed = false;
         var timestamp = DateTimeOffset.UtcNow;
 
         try {
@@ -31,6 +32,7 @@ public class UniversalAcpNormalizer : INormalizer {
 
             return NormalizeAcpUpdate(vendor, sessionId, agentId, lineNumber, rawLine, timestamp, root);
         } catch (JsonException) {
+            failed = true;
             return [Frame(vendor, sessionId, agentId, lineNumber, rawLine, timestamp, "AcpFrame", content: rawLine)];
         }
     }

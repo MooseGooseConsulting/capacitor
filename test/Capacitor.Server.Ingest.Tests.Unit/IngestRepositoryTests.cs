@@ -127,12 +127,12 @@ public sealed class IngestRepositoryTests : IDisposable {
         await Assert.That(placeholder.SessionId).IsEqualTo(sessionId);
         await Assert.That(placeholder.Vendor).IsEqualTo("codex");
         await Assert.That(placeholder.Status).IsEqualTo("active");
-        await Assert.That(placeholder.Visibility).IsEqualTo("private");
+        await Assert.That(placeholder.Visibility).IsEqualTo("project");
 
         var retrieved = await _sessions.GetSessionAsync(sessionId);
         await Assert.That(retrieved).IsNotNull();
         await Assert.That(retrieved!.SessionId).IsEqualTo(sessionId);
-        await Assert.That(retrieved.Visibility).IsEqualTo("private");
+        await Assert.That(retrieved.Visibility).IsEqualTo("project");
     }
 
     [Test]
@@ -164,5 +164,13 @@ public sealed class IngestRepositoryTests : IDisposable {
         var retrieved = await _eventStore.GetEventsAsync(sessionId);
         await Assert.That(retrieved.Count).IsEqualTo(1);
         await Assert.That(retrieved[0].LineNumber).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Placeholder_honours_an_explicit_default_visibility() {
+        var sessionId = "sess-private";
+        var placeholder = await _sessions.GetOrCreatePlaceholderAsync(sessionId, "codex", "user-1", "owner");
+
+        await Assert.That(placeholder.Visibility).IsEqualTo("owner");
     }
 }

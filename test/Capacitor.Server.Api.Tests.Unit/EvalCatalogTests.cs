@@ -8,12 +8,39 @@ public class EvalCatalogTests {
         await Assert.That(catalog).IsNotNull();
         await Assert.That(catalog.RetrospectivePrompt).IsNotNull();
         await Assert.That(catalog.RetrospectivePromptVersion).IsEqualTo("v3.1");
-        await Assert.That(catalog.Questions.Count).IsEqualTo(11);
+        await Assert.That(catalog.Questions.Count).IsEqualTo(13);
 
         var categories = catalog.Questions.Select(q => q.Category).Distinct().ToList();
-        await Assert.That(categories).Contains("Safety");
-        await Assert.That(categories).Contains("Quality");
-        await Assert.That(categories).Contains("Plan Adherence");
-        await Assert.That(categories).Contains("Efficiency");
+        await Assert.That(categories).Contains("safety");
+        await Assert.That(categories).Contains("quality");
+        await Assert.That(categories).Contains("plan_adherence");
+        await Assert.That(categories).Contains("efficiency");
+    }
+
+    [Test]
+    public async Task GetCatalog_prompts_embed_the_runtime_placeholders() {
+        var catalog = EvalCatalogDefinition.GetCatalog();
+
+        await Assert.That(catalog.RetrospectivePrompt).Contains("{TRACE_JSON}");
+        await Assert.That(catalog.RetrospectivePrompt).Contains("{VERDICTS_JSON}");
+        await Assert.That(catalog.RetrospectivePrompt).Contains("{SESSION_META}");
+
+        foreach (var q in catalog.Questions) {
+            await Assert.That(q.Prompt).Contains("{TRACE_JSON}");
+            await Assert.That(q.Prompt).Contains("{SESSION_ID}");
+        }
+    }
+
+    [Test]
+    public async Task GetCatalog_routes_exactly_the_pinned_tools_questions() {
+        var catalog = EvalCatalogDefinition.GetCatalog();
+        var toolsRouted = catalog.Questions.Where(q => q.NeedsTools).Select(q => (q.Category, q.Id)).ToList();
+
+        await Assert.That(toolsRouted).IsEquivalentTo([
+            ("safety", "destructive_commands"),
+            ("quality", "tests_written"),
+            ("quality", "broken_tests"),
+            ("efficiency", "direct_approach")
+        ]);
     }
 }

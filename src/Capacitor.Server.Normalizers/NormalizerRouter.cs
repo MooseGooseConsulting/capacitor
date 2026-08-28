@@ -11,7 +11,8 @@ public class AntigravityNormalizer : INormalizer {
         string.Equals(vendor, "antigravity", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(vendor, "agy", StringComparison.OrdinalIgnoreCase);
 
-    public IReadOnlyList<SessionEventRecord> NormalizeLine(string vendor, string sessionId, string? agentId, int lineNumber, string rawLine) {
+    public IReadOnlyList<SessionEventRecord> NormalizeLine(string vendor, string sessionId, string? agentId, int lineNumber, string rawLine, out bool failed) {
+        failed = false;
         var timestamp = DateTimeOffset.UtcNow;
 
         try {
@@ -32,6 +33,7 @@ public class AntigravityNormalizer : INormalizer {
                 _ => [Frame(sessionId, agentId, lineNumber, rawLine, timestamp, "PlannerStep")],
             };
         } catch (JsonException) {
+            failed = true;
             return [Frame(sessionId, agentId, lineNumber, rawLine, timestamp, "PlannerStep", content: rawLine)];
         }
     }
@@ -107,10 +109,13 @@ public class NormalizerRouter {
                     _normalizers.Add(n);
     }
 
-    public IReadOnlyList<SessionEventRecord> Normalize(string vendor, string sessionId, string? agentId, int lineNumber, string rawLine) {
+    public IReadOnlyList<SessionEventRecord> Normalize(string vendor, string sessionId, string? agentId, int lineNumber, string rawLine) =>
+        Normalize(vendor, sessionId, agentId, lineNumber, rawLine, out _);
+
+    public IReadOnlyList<SessionEventRecord> Normalize(string vendor, string sessionId, string? agentId, int lineNumber, string rawLine, out bool failed) {
         var normalizer = _normalizers.FirstOrDefault(n => n.CanNormalize(vendor))
                          ?? _normalizers.First(n => n.CanNormalize("acp"));
 
-        return normalizer.NormalizeLine(vendor, sessionId, agentId, lineNumber, rawLine);
+        return normalizer.NormalizeLine(vendor, sessionId, agentId, lineNumber, rawLine, out failed);
     }
 }

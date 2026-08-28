@@ -132,4 +132,16 @@ public class NormalizerTests {
         await Assert.That(events[0].CacheReadTokens).IsEqualTo(10);
         await Assert.That(events[0].Timestamp).IsEqualTo(DateTimeOffset.Parse("2026-06-01T12:00:00.000Z", System.Globalization.CultureInfo.InvariantCulture));
     }
+
+    [Test]
+    public async Task Normalize_reports_failure_for_unparseable_lines() {
+        _router.Normalize("claude", "sess-4", "", 1, "not json", out var failed);
+        await Assert.That(failed).IsTrue();
+    }
+
+    [Test]
+    public async Task Normalize_reports_no_failure_for_well_formed_lines() {
+        _router.Normalize("claude", "sess-5", "", 1, @"{""type"": ""user"", ""message"": ""hi""}", out var failed);
+        await Assert.That(failed).IsFalse();
+    }
 }
