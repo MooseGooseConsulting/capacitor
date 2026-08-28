@@ -70,12 +70,12 @@ public static class CliTelemetry {
                 _suppressedSticky = true;
             }
             if (_suppressedSticky) return; // app-spawned child: no notice, no device id, no events, _client stays null
-            // Severed at the fork. There is no collector to report to, so telemetry is off
-            // unconditionally — not merely defaulted off. The config key and DO_NOT_TRACK still
-            // resolve below for `kcap config show`, but cannot turn collection back on.
-            _ = TelemetrySettings.Resolve(TelemetryState.PersistedEnabled(config)).Enabled
-             && CommandEvents.IsReportable(command);
-            Enabled = false;
+            // Severed at the fork: there is no collector to report to. Production stays off
+            // unconditionally. Tests assign TestSink before Initialize so the in-process
+            // capture suites still run; they never open a client (TestSink is non-null).
+            var reportable = TelemetrySettings.Resolve(TelemetryState.PersistedEnabled(config)).Enabled
+                          && CommandEvents.IsReportable(command);
+            Enabled = TestSink is not null && reportable;
             if (!Enabled) return;
 
             _debug = Environment.GetEnvironmentVariable("KCAP_TELEMETRY_DEBUG") == "1";

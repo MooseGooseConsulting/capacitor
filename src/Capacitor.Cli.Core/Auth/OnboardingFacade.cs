@@ -282,6 +282,10 @@ public sealed class OnboardingFacade(
     }
 
     async Task<AuthResult> DiscoverCoreAsync(HttpClient http, string provider, bool forceDevice, CancellationToken ct) {
+        if (!AuthProxyEndpoint.IsConfigured && http.BaseAddress is null) {
+            return Fail(AuthProxyEndpoint.UnavailableHint, ct, AuthFailureReason.Unreachable);
+        }
+
         var proxy       = new AuthProxyClient(http);
         var proxyConfig = await proxy.GetConfigAsync(AuthProxyEndpoint.Url, ct);
 

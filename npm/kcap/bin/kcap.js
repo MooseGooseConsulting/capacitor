@@ -16,10 +16,9 @@ const { PLATFORM_PACKAGES, platformKey } = require("./resolve");
 // Falls back to "latest" when the probe is missing, failed, or has no tag,
 // preserving today's default behavior.
 function resolveInstallSpec(info) {
-  const tag = info && typeof info.install_tag === "string" && info.install_tag
-    ? info.install_tag
-    : "latest";
-  return `@kurrent/kcap@${tag}`;
+  throw new Error(
+    "This Capacitor fork has no npm update channel; refusing to install @kurrent/kcap.",
+  );
 }
 
 // Builds the arg list for the `kcap update --check` probe, forwarding only
@@ -238,7 +237,11 @@ if (require.main === module) {
     const checkOnly = updArgs.includes("--check");
     const wantsHelp = updArgs.some((a) => a === "--help" || a === "-h");
     if (process.argv[2] === "update" && !checkOnly && !wantsHelp) {
-      runUpdate(binaryPath, updArgs); // never returns
+      // Severed at the fork: native update --check also has an empty registry, and
+      // falling through here used to `npm install -g @kurrent/kcap@latest`.
+      console.error("This Capacitor fork has no npm update channel.");
+      console.error("Update it the way you installed it. Do not `npm install -g @kurrent/kcap`.");
+      process.exit(1);
     }
   }
 

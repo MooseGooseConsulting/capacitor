@@ -9,6 +9,8 @@ public class AuthProxyEndpointTests {
         Environment.SetEnvironmentVariable("KCAP_AUTH_PROXY_URL", null);
         try {
             await Assert.That(AuthProxyEndpoint.Url).IsEqualTo(AuthProxyEndpoint.DefaultUrl);
+            await Assert.That(AuthProxyEndpoint.IsConfigured).IsFalse();
+            await Assert.That(AuthProxyEndpoint.IsConfigured).IsFalse();
         } finally {
             Environment.SetEnvironmentVariable("KCAP_AUTH_PROXY_URL", null);
         }
@@ -20,6 +22,7 @@ public class AuthProxyEndpointTests {
         Environment.SetEnvironmentVariable("KCAP_AUTH_PROXY_URL", "https://local-proxy.test/");
         try {
             await Assert.That(AuthProxyEndpoint.Url).IsEqualTo("https://local-proxy.test");
+            await Assert.That(AuthProxyEndpoint.IsConfigured).IsTrue();
         } finally {
             Environment.SetEnvironmentVariable("KCAP_AUTH_PROXY_URL", null);
         }

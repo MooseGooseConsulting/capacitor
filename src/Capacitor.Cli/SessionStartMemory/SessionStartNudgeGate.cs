@@ -29,10 +29,12 @@ internal static class SessionStartNudgeGate {
     /// something to say, null on every later one. A harness whose callback cannot repeat is passed
     /// straight through and never touches this store.
     ///
-    /// <para><paramref name="resolve"/> runs only while the claim is still open, so the config probes
-    /// and the harness-offer ledger stamp behind it cost once per session rather than once per turn.
-    /// A claim is taken only for a nudge that is actually returned, so a session that had nothing to
-    /// say on its first firing can still speak on a later one.</para>
+    /// <para><paramref name="resolve"/> runs only after this firing has won the exclusive claim, so
+    /// the config probes and the harness-offer ledger stamp behind it cost once per session rather
+    /// than once per concurrent hook process. A claim that resolves to nothing is released, so a
+    /// session that had nothing to say on its first firing can still speak on a later one. A crash
+    /// or a throwing resolver after the claim is taken is fail-closed: the marker stays, and later
+    /// firings stay silent.</para>
     ///
     /// <para>Every fault suppresses the nudge instead of emitting it. Both directions are silent to the
     /// hook; they differ in what a broken gate costs. One nudge too few loses standing guidance the
@@ -47,20 +49,29 @@ internal static class SessionStartNudgeGate {
                 lifecycle.Harness, lifecycle.SessionId, lifecycleInstanceId: null) + ClaimSuffix);
             if (File.Exists(claim)) return null;
 
-            var nudge = resolve();
-            if (string.IsNullOrWhiteSpace(nudge)) return null;
-
             SessionStartMemoryStorePaths.ValidateRoot(root);
             // CreateNew is the whole concurrency story: the winner of a race between two hook
-            // processes gets the handle, everyone else gets an IOException and stays silent. An empty
-            // marker also means a crash between claim and write can only over-suppress.
+            // processes gets the handle, everyone else gets an IOException and stays silent. The
+            // exclusive claim is taken BEFORE resolve(), so only the winner stamps the offer ledger.
             using (new FileStream(claim, FileMode.CreateNew, FileAccess.Write, FileShare.None)) { }
+
+            var nudge = resolve();
+            if (string.IsNullOrWhiteSpace(nudge)) {
+                TryRelease(claim);
+                return null;
+            }
 
             Reap(root);
             return nudge;
         } catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) {
             return null;
         }
+    }
+
+    static void TryRelease(string claim) {
+        try {
+            File.Delete(claim);
+        } catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { }
     }
 
     /// <summary>Drops claims past the store's retention. Nothing else sweeps this directory, and this

@@ -8,8 +8,8 @@ namespace Capacitor.App.Tests.Unit;
 /// run without the headless session — the step owns no commands and no Rx subscriptions.
 public class ConnectStepViewModelTests {
     [Test]
-    [Arguments("acme", "https://acme.kcap.ai")]
-    [Arguments("  acme  ", "https://acme.kcap.ai")]
+    [Arguments("acme", "https://acme")]
+    [Arguments("  acme  ", "https://acme")]
     [Arguments("https://acme.kcap.ai/sessions/42", "https://acme.kcap.ai")]
     [Arguments("acme.kcap.ai", "https://acme.kcap.ai")]
     [Arguments("http://localhost:5108", "http://localhost:5108")]
@@ -82,7 +82,7 @@ public class ConnectStepViewModelTests {
 
         await Assert.That(vm.Choice).IsEqualTo(ConnectChoice.Paste);
         await Assert.That(vm.ServerInputText).IsEqualTo("acme");
-        await Assert.That(vm.Intent).IsEqualTo(new ConnectIntent.Paste("https://acme.kcap.ai"));
+        await Assert.That(vm.Intent).IsEqualTo(new ConnectIntent.Paste("https://acme"));
     }
 
     [Test]

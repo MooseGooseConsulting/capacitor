@@ -20,6 +20,14 @@ namespace Capacitor.Cli.Core.Tests.Unit.Auth;
 public class OnboardingFacadeTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
+    EnvScope? _authProxy;
+
+    [Before(Test)]
+    public void PinAuthProxy() => _authProxy = TestAuthProxy();
+
+    [After(Test)]
+    public void UnpinAuthProxy() => _authProxy?.Dispose();
+
     string TokensDir  => Config.PathTo("tokens");
     string ConfigPath => AppConfig.GetConfigPath(Config.Root);
 

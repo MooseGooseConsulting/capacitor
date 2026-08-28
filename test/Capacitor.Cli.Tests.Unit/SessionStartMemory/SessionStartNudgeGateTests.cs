@@ -123,9 +123,10 @@ public class SessionStartNudgeGateTests {
             Config.Root, AntigravityHookCommand.LifecycleFor(ConversationId),
             () => throw new InvalidOperationException("resolver"))).IsNull();
 
-        // The failed firing takes no claim, so a working later one still emits.
+        // Fail-closed: the claim is already taken, so a later firing stays silent.
         await Assert.That(SessionStartNudgeGate.Once(
-            Config.Root, AntigravityHookCommand.LifecycleFor(ConversationId), () => Nudge)).IsEqualTo(Nudge);
+            Config.Root, AntigravityHookCommand.LifecycleFor(ConversationId), () => Nudge)).IsNull();
+        await Assert.That(MemoryStoreProbe.NudgeClaims(Config.Root)).IsNotEmpty();
     }
 
     /// <summary>Concurrent hook processes fire as separate short-lived processes, so the claim has to be

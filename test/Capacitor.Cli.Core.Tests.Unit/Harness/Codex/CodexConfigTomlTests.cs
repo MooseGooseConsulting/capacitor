@@ -16,23 +16,22 @@ public class CodexConfigTomlTests {
     // ── BuildAllowDomains ────────────────────────────────────────────────────
 
     [Test]
-    public async Task BuildAllowDomains_collapses_kcap_ai_tenants_to_one_wildcard() {
+    public async Task BuildAllowDomains_lists_each_host_literally_and_sorted() {
         var domains = CodexConfigToml.BuildAllowDomains([
             "https://acme.kcap.ai", "https://globex.kcap.ai"
         ]);
 
-        await Assert.That(domains).IsEquivalentTo(new[] { "**.kcap.ai" });
+        await Assert.That(domains).IsEquivalentTo(new[] { "acme.kcap.ai", "globex.kcap.ai" });
     }
 
     [Test]
-    public async Task BuildAllowDomains_keeps_self_hosted_hosts_exact_and_sorted_after_wildcard() {
+    public async Task BuildAllowDomains_keeps_self_hosted_hosts_exact_and_sorted() {
         var domains = CodexConfigToml.BuildAllowDomains([
             "https://team.kcap.ai", "https://kcap.internal.corp", "https://capacitor.example.com"
         ]);
 
-        // Wildcard first (kcap.ai tenant present), then self-hosted hosts sorted.
         await Assert.That(domains).IsEquivalentTo(new[] {
-            "**.kcap.ai", "capacitor.example.com", "kcap.internal.corp"
+            "capacitor.example.com", "kcap.internal.corp", "team.kcap.ai"
         });
     }
 
@@ -58,7 +57,7 @@ public class CodexConfigTomlTests {
     public async Task BuildAllowDomains_accepts_bare_host_without_scheme() {
         var domains = CodexConfigToml.BuildAllowDomains(["my-tenant.kcap.ai", "self.example.com"]);
 
-        await Assert.That(domains).IsEquivalentTo(new[] { "**.kcap.ai", "self.example.com" });
+        await Assert.That(domains).IsEquivalentTo(new[] { "my-tenant.kcap.ai", "self.example.com" });
     }
 
     // ── EnableNetworkAccess: default config ──────────────────────────────────

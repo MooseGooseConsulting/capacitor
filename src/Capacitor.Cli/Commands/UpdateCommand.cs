@@ -303,6 +303,10 @@ public sealed class UpdateCommand(ConfigRoot root, ProfileContext profiles) {
             return new UpdateCheckResult(current, cached.LatestVersion, IsNewer(cached.LatestVersion, current), FromCache: true);
         }
 
+        if (!HttpClientExtensions.IsAcceptableUrl(RegistryBaseUrl)) {
+            return new UpdateCheckResult(current, cached?.LatestVersion, Newer: false, FromCache: true);
+        }
+
         // Query npm registry.
         using var http = new HttpClient();
         http.Timeout = TimeSpan.FromSeconds(5);

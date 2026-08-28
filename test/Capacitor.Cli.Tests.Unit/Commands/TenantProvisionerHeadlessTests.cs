@@ -42,8 +42,9 @@ public class TenantProvisionerHeadlessTests {
 
         await Assert.That(message).Contains("--org");
         await Assert.That(message).Contains("--slug");
-        await Assert.That(message).Contains("/signup");
+        await Assert.That(message).Contains("README.md");
         await Assert.That(message).Contains("--server-url");
+        await Assert.That(message).DoesNotContain("/signup");
         await Assert.That(message).DoesNotContain("admin");
     }
 
@@ -167,7 +168,7 @@ public class TenantProvisionerHeadlessTests {
         var written = capture.GetCapturedError();
 
         await Assert.That(written).Contains("Acme");
-        await Assert.That(written).Contains("https://acme.kcap.ai");
+        await Assert.That(written).Contains("at acme");
     }
 
     // The wait renders through a Spectre live display, the one part of the poll that wants a

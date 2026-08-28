@@ -29,16 +29,18 @@ public interface IAuthProxyClient {
 
 public class AuthProxyClient(HttpClient http) : IAuthProxyClient {
     public async Task<ProxyConfigResponse?> GetConfigAsync(string proxyUrl, CancellationToken ct = default) {
+        if (!Usable(proxyUrl)) return null;
         try {
             using var response = await http.GetAsync($"{proxyUrl}/config", ct);
             if (!response.IsSuccessStatusCode) return null;
             return await response.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.ProxyConfigResponse, ct);
-        } catch (Exception e) when (e is HttpRequestException or OperationCanceledException) {
+        } catch (Exception e) when (e is HttpRequestException or OperationCanceledException or InvalidOperationException) {
             return null;
         }
     }
 
     public async Task<DiscoveryResult> DiscoverTenantsAsync(string proxyUrl, string githubAccessToken, CancellationToken ct = default) {
+        if (!Usable(proxyUrl)) return new([], DiscoveryError.ProxyUnreachable);
         try {
             using var request = new HttpRequestMessage(HttpMethod.Post, $"{proxyUrl}/discover-tenants");
             request.Headers.Authorization = new("Bearer", githubAccessToken);
@@ -49,12 +51,13 @@ public class AuthProxyClient(HttpClient http) : IAuthProxyClient {
                 HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden => new([], DiscoveryError.TokenRejected),
                 _                                                       => new([], DiscoveryError.UpstreamError)
             };
-        } catch (Exception e) when (e is HttpRequestException or OperationCanceledException) {
+        } catch (Exception e) when (e is HttpRequestException or OperationCanceledException or InvalidOperationException) {
             return new([], DiscoveryError.ProxyUnreachable);
         }
     }
 
     public async Task<DiscoveryResult> DiscoverWorkOSTenantsAsync(string proxyUrl, string workosAccessToken, CancellationToken ct = default) {
+        if (!Usable(proxyUrl)) return new([], DiscoveryError.ProxyUnreachable);
         try {
             using var request = new HttpRequestMessage(HttpMethod.Post, $"{proxyUrl}/discover-tenants-workos");
             request.Headers.Authorization = new("Bearer", workosAccessToken);
@@ -65,13 +68,14 @@ public class AuthProxyClient(HttpClient http) : IAuthProxyClient {
                 HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden => new([], DiscoveryError.TokenRejected),
                 _                                                       => new([], DiscoveryError.UpstreamError)
             };
-        } catch (Exception e) when (e is HttpRequestException or OperationCanceledException) {
+        } catch (Exception e) when (e is HttpRequestException or OperationCanceledException or InvalidOperationException) {
             return new([], DiscoveryError.ProxyUnreachable);
         }
     }
 
     public async Task<CliPickerPrepareResponse?> PreparePickAsync(
             string proxyUrl, string bearer, string secretHash, CancellationToken ct = default) {
+        if (!Usable(proxyUrl)) return null;
         try {
             using var request = new HttpRequestMessage(HttpMethod.Post, $"{proxyUrl}/cli/v1/picker/prepare") {
                 Content = JsonContent.Create(
@@ -86,13 +90,14 @@ public class AuthProxyClient(HttpClient http) : IAuthProxyClient {
 
             return await response.Content.ReadFromJsonAsync(
                 CapacitorJsonContext.Default.CliPickerPrepareResponse, ct);
-        } catch (Exception e) when (e is HttpRequestException or OperationCanceledException or System.Text.Json.JsonException) {
+        } catch (Exception e) when (e is HttpRequestException or OperationCanceledException or System.Text.Json.JsonException or InvalidOperationException) {
             return null;
         }
     }
 
     public async Task<CliPickerResultResponse?> PollPickAsync(
             string proxyUrl, string handle, string secret, CancellationToken ct = default) {
+        if (!Usable(proxyUrl)) return null;
         try {
             using var attempt = Bounded(ct);
             using var response = await http.PostAsJsonAsync(
@@ -104,20 +109,24 @@ public class AuthProxyClient(HttpClient http) : IAuthProxyClient {
 
             return await response.Content.ReadFromJsonAsync(
                 CapacitorJsonContext.Default.CliPickerResultResponse, ct);
-        } catch (Exception e) when (e is HttpRequestException or OperationCanceledException or System.Text.Json.JsonException) {
+        } catch (Exception e) when (e is HttpRequestException or OperationCanceledException or System.Text.Json.JsonException or InvalidOperationException) {
             return null;
         }
     }
 
     public async Task AbandonPickAsync(string proxyUrl, string handle, CancellationToken ct = default) {
+        if (!Usable(proxyUrl)) return;
         try {
             using var attempt = Bounded(ct);
             using var response = await http.DeleteAsync($"{proxyUrl}/cli/v1/picker/{handle}", attempt.Token);
-        } catch (Exception e) when (e is HttpRequestException or OperationCanceledException) {
+        } catch (Exception e) when (e is HttpRequestException or OperationCanceledException or InvalidOperationException) {
             // Nothing to do about it and nothing to tell the user: the pick is already abandoned
             // locally, and the TTL is what actually guarantees the handle goes away.
         }
     }
+
+    bool Usable(string proxyUrl) =>
+        HttpClientExtensions.IsAcceptableUrl(proxyUrl) || http.BaseAddress is not null;
 
     /// <summary>
     /// Bounds one picker attempt. The shared client's default is 100 seconds, which on an

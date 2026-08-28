@@ -6,8 +6,8 @@ namespace Capacitor.Cli.Core.Tests.Unit.Auth;
 
 public class ServerInputTests {
     [Test]
-    public async Task ResolveTenantArg_expands_bare_label_to_kcap_subdomain() {
-        await Assert.That(ServerInput.ResolveTenantArg("eventuous")).IsEqualTo("https://eventuous.kcap.ai");
+    public async Task ResolveTenantArg_leaves_a_bare_label_unexpanded() {
+        await Assert.That(ServerInput.ResolveTenantArg("eventuous")).IsEqualTo("eventuous");
     }
 
     // The zero-discovery "I already have a workspace" prompt invites a paste, and what people paste
