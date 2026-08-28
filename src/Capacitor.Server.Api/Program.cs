@@ -357,6 +357,23 @@ if (isPostgres) {
     });
 }
 
+// MCP Gateway Endpoints for Agent Integration
+app.MapPost("/api/mcp/sessions", async (
+    [FromBody] McpRequest request,
+    ISessionRepository sessions,
+    IEventStoreRepository eventStore) => {
+    switch (request.Method) {
+        case "search_sessions":
+            return Results.Ok(new { results = Array.Empty<object>() });
+        case "get_session_summary":
+            var id = request.Params?.GetValueOrDefault("session_id")?.ToString() ?? "";
+            var s = await sessions.GetSessionAsync(id.Replace("-", ""));
+            return s != null ? Results.Ok(s) : Results.NotFound();
+        default:
+            return Results.Ok(new { result = "acknowledged", method = request.Method });
+    }
+});
+
 app.Run();
 
 static string EvalContextKind(string eventType) => eventType switch {
@@ -401,4 +418,5 @@ namespace Capacitor.Server.Api {
     }
 
     public record MachineEnrollmentRequest(string? MachineId, string Hostname, string Os, string Arch);
+    public record McpRequest(string Method, Dictionary<string, object>? Params = null);
 }
