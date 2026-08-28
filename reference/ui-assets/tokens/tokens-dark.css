@@ -33,15 +33,18 @@
   --mud-palette-warning-rgb: 255,237,78;
   --mud-palette-warning-darken: rgb(255,234,41);
   --mud-palette-warning-lighten: rgb(255,241,112);
+  --mud-palette-warning-hover: rgba(255,237,78,0.058823529411764705);
   --mud-palette-warning-text: rgba(8,11,13,1);
   --mud-palette-error: rgba(255,74,128,1);
   --mud-palette-error-rgb: 255,74,128;
   --mud-palette-error-darken: rgb(255,41,105);
   --mud-palette-error-lighten: rgb(255,112,155);
+  --mud-palette-error-hover: rgba(255,74,128,0.058823529411764705);
   --mud-palette-info: rgba(71,155,255,1);
   --mud-palette-info-rgb: 71,155,255;
   --mud-palette-info-darken: rgb(36,134,255);
   --mud-palette-info-lighten: rgb(112,176,255);
+  --mud-palette-info-hover: rgba(71,155,255,0.058823529411764705);
   --mud-palette-dark: rgba(39,39,47,1);
   --mud-palette-dark-rgb: 39,39,47;
   --mud-palette-dark-darken: rgb(23,23,28);

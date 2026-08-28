@@ -15,7 +15,9 @@ typeface, fine as internal reference, replaced before anything leaves the org.
 | `tokens/tokens-dark.css` | the same for dark — only the tokens that differ |
 | `css/components.css` | the bespoke stylesheet (unchanged; byte-identical to live) |
 | `css/components-inline-list-card.css` | session card CSS recovered from an inline `<style>` — **not in components.css** |
-| `js/` | the console's own bundles, including `theme.js` |
+| `js/` | the console's own bundles, including `theme.js`, byte-for-byte as served — comments and all, so nothing in them is edited to house style |
+| `js/THIRD-PARTY-NOTICES.md` | licences of the libraries embedded in those bundles |
+| `js/vendor/driver/driver.css` | Driver.js base styles, at the path `css/product-tour.css` imports |
 | `icons-extracted/README.md` | which Material icon carries which meaning |
 | `screenshots/` | 14 screens, dark plus a light reference |
 
