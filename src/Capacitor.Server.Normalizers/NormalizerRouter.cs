@@ -17,9 +17,12 @@ public class AntigravityNormalizer : INormalizer {
         try {
             using var doc = JsonDocument.Parse(rawLine);
             var root = doc.RootElement;
+            if (root.Str("created_at") is { } createdAt && DateTimeOffset.TryParse(createdAt, out var parsedTs))
+                timestamp = parsedTs;
 
             return root.Str("type") switch {
-                "USER_INPUT" => [Frame(sessionId, agentId, lineNumber, rawLine, timestamp, "UserMessage", content: root.Str("content"))],
+                "USER_INPUT" => [Frame(sessionId, agentId, lineNumber, rawLine, timestamp, "UserMessage",
+                    content: StripUserRequest(root.Str("content")))],
                 "PLANNER_RESPONSE" => NormalizePlannerResponse(sessionId, agentId, lineNumber, rawLine, timestamp, root),
                 // The transcript's own result step for a completed tool call — content is the
                 // tool's output, status ("DONE"/"ERROR") flags failure.
@@ -86,6 +89,17 @@ public class AntigravityNormalizer : INormalizer {
             Content = content,
             RawPayload = rawLine
         };
+
+    static string? StripUserRequest(string? content) {
+        if (content is null) return null;
+        const string open = "<USER_REQUEST>", close = "</USER_REQUEST>";
+        var start = content.IndexOf(open, StringComparison.Ordinal);
+        if (start < 0) return content;
+        start += open.Length;
+        var end = content.IndexOf(close, start, StringComparison.Ordinal);
+        var inner = (end < 0 ? content[start..] : content[start..end]).Trim();
+        return inner.Length > 0 ? inner : null;
+    }
 }
 
 public class NormalizerRouter {
