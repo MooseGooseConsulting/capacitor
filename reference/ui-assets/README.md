@@ -12,11 +12,11 @@ typeface, fine as internal reference, replaced before anything leaves the org.
 | path | what |
 |---|---|
 | `tokens/tokens.css` | every custom property as **resolved** on `:root`, light theme |
-| `tokens/tokens-dark.css` | the same for dark — only the tokens that differ |
+| `tokens/tokens-dark.css` | the same for dark — only the tokens that differ, including hover twins; chosen-dark plus a `prefers-color-scheme` arm for visitors who never chose |
 | `css/components.css` | the bespoke stylesheet (unchanged; byte-identical to live) |
 | `css/components-inline-list-card.css` | session card CSS recovered from an inline `<style>` — **not in components.css** |
 | `js/` | the console's own bundles, including `theme.js`, byte-for-byte as served — comments and all, so nothing in them is edited to house style |
-| `js/THIRD-PARTY-NOTICES.md` | licences of the libraries embedded in those bundles |
+| `js/THIRD-PARTY-NOTICES.md` | copyright notices and full MIT / BSD-3-Clause texts of the libraries embedded in those bundles |
 | `js/vendor/driver/driver.css` | Driver.js base styles, at the path `css/product-tour.css` imports |
 | `icons-extracted/README.md` | which Material icon carries which meaning |
 | `screenshots/` | 14 screens, dark plus a light reference |
@@ -89,3 +89,11 @@ session page's DOM is ~1.8 MB, too large to bring back through the tool channel.
 structural skeleton and the class vocabulary above cover what a rebuild needs from it; if a
 full snapshot is wanted later, `single-file-cli` driven against a Chrome profile that has
 signed in once is the tool for it.
+
+MudBlazor.Markdown runtime assets. `js/MudBlazor.Markdown.min.js` is the captured bundle;
+syntax-theme CSS and MathJax are loaded later from the NuGet static-web-asset root
+`_content/MudBlazor.Markdown/` (`code-styles/<theme>.css` via `setHighlightStylesheet`,
+`MudBlazor.Markdown.MathJax.min.js` via `appendMathJaxScript`). Those files are not in
+this tree. A reconstruction that turns those features on still needs that package's
+`wwwroot` (or the 404s are expected). The bundle itself is enough for the Markdown
+renderer that ships without those options.
