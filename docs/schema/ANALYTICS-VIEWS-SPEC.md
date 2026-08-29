@@ -155,14 +155,16 @@ GROUP BY s.repo_hash, e.session_id, e.model;
 ```
 
 ### `v_an_session_steps`
-Per-event grain. No `latency_ms` column: nothing in the schema records per-step latency yet, so the guided-tour's `v_an_session_steps.latency_ms` claim stays unmet until a wave adds that column to `session_events`.
+Per-event grain. `agent_id` and `logical_seq` are part of the event key — line numbers are unique only within an agent. No `latency_ms` column: nothing in the schema records per-step latency yet, so the guided-tour's `v_an_session_steps.latency_ms` claim stays unmet until a wave adds that column to `session_events`.
 
 ```sql
 CREATE VIEW v_an_session_steps AS
 SELECT
     s.repo_hash,
     e.session_id,
+    e.agent_id,
     e.line_number,
+    e.logical_seq,
     e.event_type,
     e.vendor,
     e.tool_name,
@@ -173,21 +175,36 @@ JOIN sessions s ON e.session_id = s.session_id;
 ```
 
 ### `v_an_prs`
-`sessions` carries PR fields directly — there is no separate `prs` table.
+`sessions` carries PR fields directly — there is no separate `prs` table. Grouped by `(repo_hash, pr_number)` so a title or head-ref edit does not split one PR into two rows; metadata is the snapshot from the latest session.
 
 ```sql
 CREATE VIEW v_an_prs AS
 SELECT
     s.repo_hash,
     s.pr_number,
-    s.pr_title,
-    s.pr_url,
-    s.pr_head_ref,
+    (
+        SELECT s2.pr_title FROM sessions s2
+        WHERE s2.repo_hash IS s.repo_hash AND s2.pr_number = s.pr_number
+        ORDER BY s2.last_event_at DESC, s2.session_id DESC
+        LIMIT 1
+    ) AS pr_title,
+    (
+        SELECT s2.pr_url FROM sessions s2
+        WHERE s2.repo_hash IS s.repo_hash AND s2.pr_number = s.pr_number
+        ORDER BY s2.last_event_at DESC, s2.session_id DESC
+        LIMIT 1
+    ) AS pr_url,
+    (
+        SELECT s2.pr_head_ref FROM sessions s2
+        WHERE s2.repo_hash IS s.repo_hash AND s2.pr_number = s.pr_number
+        ORDER BY s2.last_event_at DESC, s2.session_id DESC
+        LIMIT 1
+    ) AS pr_head_ref,
     COUNT(DISTINCT s.session_id) AS session_count,
     MAX(s.last_event_at) AS last_session_at
 FROM sessions s
 WHERE s.pr_number IS NOT NULL
-GROUP BY s.repo_hash, s.pr_number, s.pr_title, s.pr_url, s.pr_head_ref;
+GROUP BY s.repo_hash, s.pr_number;
 ```
 
 ### `v_an_repositories`
