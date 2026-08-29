@@ -24,16 +24,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # linux-x64 only. windows-latest is omitted: hosted minutes refuse this org
-        # before checkout, so that matrix entry cannot be a gate. macOS is not in
-        # this matrix: the unit suite has a known cluster of macOS-local
-        # temp-path/parallel-load flakes that would make a macOS leg permanently
-        # red. macOS arm64 is covered by maintainer runs; macOS x64 is
-        # intentionally untested. Platform-sensitive daemon behavior that must
-        # hold everywhere (e.g. the borrowed-review capability advertisement,
-        # which no longer carries any OS/arch precondition) is additionally
-        # pinned by host-independent source guards in the unit suite — see
-        # DaemonRunnerCursorAvailabilityTests' platform coverage matrix.
+        # Self-hosted linux-x64 only. Hosted windows-latest fails before checkout
+        # on billing. macOS is omitted: local temp-path flakes would stay red.
         include:
           - name: linux-x64
             runner: [self-hosted, moosegoose-build]
@@ -80,31 +72,31 @@ jobs:
           node npm/kcap/bin/refresh.test.js
 
       - name: Run server unit tests
-        # Compile/run Capacitor.Server.Data and Capacitor.Server.Ingest unit
-        # projects when those csproj files exist on the branch. SqliteDatabaseInitializer
-        # walks from the process working directory to Capacitor.slnx, so these
-        # tests must start at the repo root rather than the test host's output dir.
-        # --maximum-parallel-tests 1 caps TUnit's unkeyed bucket; keyed
-        # [NotInParallel] tests still run concurrently with disjoint-key classes.
+        # Run Data and Ingest unit projects when present. SqliteDatabaseInitializer
+        # walks from cwd to Capacitor.slnx, so this step starts at the repo root.
         shell: bash
         working-directory: ${{ github.workspace }}
         run: |
-          set -euo pipefail
+          set -uo pipefail
           projects=(
             test/Capacitor.Server.Data.Tests.Unit/Capacitor.Server.Data.Tests.Unit.csproj
             test/Capacitor.Server.Ingest.Tests.Unit/Capacitor.Server.Ingest.Tests.Unit.csproj
           )
           found=0
+          failed=0
           for proj in "${projects[@]}"; do
             if [[ -f "$proj" ]]; then
               found=1
               echo "Running $proj from ${PWD}"
-              dotnet test "$proj" -- --maximum-parallel-tests 1
+              if ! dotnet test "$proj" -- --maximum-parallel-tests 1; then
+                failed=1
+              fi
             fi
           done
           if [[ "$found" -eq 0 ]]; then
             echo "Server Data/Ingest unit test projects are not on this branch; skipping."
           fi
+          exit "$failed"
 
   lint-linear-ids:
     name: No Linear issue IDs in C# source
@@ -140,10 +132,8 @@ jobs:
 
       - name: Install build dependencies
         id: aot-deps
-        # ILCompiler shells out to clang and links against zlib, so both must be present before
-        # publish. A self-hosted runner account without passwordless sudo cannot install them,
-        # and an interactive sudo would hang the job until timeout. Skip AOT rather than fail
-        # the Linux compile/test gate when the host has neither the packages nor sudo.
+        # ILCompiler needs clang and zlib. Interactive sudo hangs until timeout.
+        # Pull requests skip AOT when the host cannot install them; push/tag fail.
         run: |
           if command -v clang >/dev/null && dpkg -s zlib1g-dev >/dev/null 2>&1; then
             echo "available=true" >> "$GITHUB_OUTPUT"
@@ -155,7 +145,11 @@ jobs:
             exit 0
           fi
           echo "available=false" >> "$GITHUB_OUTPUT"
-          echo "::warning::clang and zlib1g-dev are missing and this runner has no passwordless sudo. Skipping AOT publish. Install them on the runner host: sudo apt-get install -y clang zlib1g-dev"
+          echo "::warning::clang and zlib1g-dev are missing and this runner has no passwordless sudo. Install them on the runner host: sudo apt-get install -y clang zlib1g-dev"
+          if [[ "${{ github.event_name }}" != "pull_request" ]]; then
+            echo "::error::AOT publish is required on push/tag and the host cannot install clang/zlib."
+            exit 1
+          fi
 
       # Whole solution, and the RID pulls ILCompiler — a superset of build-and-test's set.
       - name: Restore solution
