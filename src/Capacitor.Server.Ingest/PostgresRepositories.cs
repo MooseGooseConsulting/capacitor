@@ -216,6 +216,107 @@ public class PostgresSessionRepository : ISessionRepository {
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
+    public async Task UpdateRepositoryMetadataAsync(
+            string sessionId,
+            string? repoHash,
+            string? repoOwner,
+            string? repoName,
+            string? branch,
+            int? prNumber,
+            string? prTitle,
+            string? prUrl,
+            string? prHeadRef,
+            CancellationToken ct = default
+        ) {
+        await using var conn = await _dataSource.OpenConnectionAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+            UPDATE sessions SET
+                repo_hash = COALESCE($2, repo_hash),
+                repo_owner = COALESCE($3, repo_owner),
+                repo_name = COALESCE($4, repo_name),
+                branch = COALESCE($5, branch),
+                pr_number = COALESCE($6, pr_number),
+                pr_title = COALESCE($7, pr_title),
+                pr_url = COALESCE($8, pr_url),
+                pr_head_ref = COALESCE($9, pr_head_ref)
+            WHERE session_id = $1;
+        ";
+        cmd.Parameters.AddWithValue(sessionId);
+        cmd.Parameters.AddWithValue((object?)repoHash ?? DBNull.Value);
+        cmd.Parameters.AddWithValue((object?)repoOwner ?? DBNull.Value);
+        cmd.Parameters.AddWithValue((object?)repoName ?? DBNull.Value);
+        cmd.Parameters.AddWithValue((object?)branch ?? DBNull.Value);
+        cmd.Parameters.AddWithValue((object?)prNumber ?? DBNull.Value);
+        cmd.Parameters.AddWithValue((object?)prTitle ?? DBNull.Value);
+        cmd.Parameters.AddWithValue((object?)prUrl ?? DBNull.Value);
+        cmd.Parameters.AddWithValue((object?)prHeadRef ?? DBNull.Value);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task PersistEvalRunAsync(EvalRunRecord run, IReadOnlyList<EvalVerdictRecord> verdicts, CancellationToken ct = default) {
+        await using var conn = await _dataSource.OpenConnectionAsync(ct);
+        await using var tx = await conn.BeginTransactionAsync(ct);
+
+        await using (var cmd = new NpgsqlCommand(@"
+            INSERT INTO eval_runs (
+                eval_run_id, session_id, judge_model, overall_score, summary,
+                retrospective_json, retrospective_prompt_version, evaluated_at
+            ) VALUES (
+                $1, $2, $3, $4, $5, $6, $7, $8
+            )
+            ON CONFLICT(eval_run_id) DO UPDATE SET
+                overall_score = EXCLUDED.overall_score,
+                summary = EXCLUDED.summary,
+                retrospective_json = EXCLUDED.retrospective_json,
+                retrospective_prompt_version = EXCLUDED.retrospective_prompt_version,
+                evaluated_at = EXCLUDED.evaluated_at;
+        ", conn, tx)) {
+            cmd.Parameters.AddWithValue(run.EvalRunId);
+            cmd.Parameters.AddWithValue(run.SessionId);
+            cmd.Parameters.AddWithValue(run.JudgeModel);
+            cmd.Parameters.AddWithValue(run.OverallScore);
+            cmd.Parameters.AddWithValue(run.Summary);
+            cmd.Parameters.AddWithValue((object?)run.RetrospectiveJson ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)run.RetrospectivePromptVersion ?? DBNull.Value);
+            cmd.Parameters.AddWithValue(EventTimestamp.ToUtcString(run.EvaluatedAt));
+            await cmd.ExecuteNonQueryAsync(ct);
+        }
+
+        foreach (var verdict in verdicts) {
+            await using var cmd = new NpgsqlCommand(@"
+                INSERT INTO eval_verdicts (
+                    eval_run_id, category, question_id, score, verdict, finding,
+                    evidence, recommendation, tools_used, prompt_version
+                ) VALUES (
+                    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+                )
+                ON CONFLICT(eval_run_id, question_id) DO UPDATE SET
+                    category = EXCLUDED.category,
+                    score = EXCLUDED.score,
+                    verdict = EXCLUDED.verdict,
+                    finding = EXCLUDED.finding,
+                    evidence = EXCLUDED.evidence,
+                    recommendation = EXCLUDED.recommendation,
+                    tools_used = EXCLUDED.tools_used,
+                    prompt_version = EXCLUDED.prompt_version;
+            ", conn, tx);
+            cmd.Parameters.AddWithValue(verdict.EvalRunId);
+            cmd.Parameters.AddWithValue(verdict.Category);
+            cmd.Parameters.AddWithValue(verdict.QuestionId);
+            cmd.Parameters.AddWithValue(verdict.Score);
+            cmd.Parameters.AddWithValue(verdict.Verdict);
+            cmd.Parameters.AddWithValue(verdict.Finding);
+            cmd.Parameters.AddWithValue((object?)verdict.Evidence ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)verdict.Recommendation ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)verdict.ToolsUsed ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)verdict.PromptVersion ?? DBNull.Value);
+            await cmd.ExecuteNonQueryAsync(ct);
+        }
+
+        await tx.CommitAsync(ct);
+    }
+
     public async Task UpdateRollupAsync(
             string sessionId,
             int eventCount,

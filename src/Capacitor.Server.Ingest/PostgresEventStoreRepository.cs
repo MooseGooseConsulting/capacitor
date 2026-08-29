@@ -67,6 +67,81 @@ public class PostgresEventStoreRepository : IEventStoreRepository {
         return inserted;
     }
 
+    public async Task<int> AppendEventsAndAdvanceWatermarkAsync(
+            IReadOnlyList<SessionEventRecord> events,
+            string sessionId,
+            string agentId,
+            int lastLineNumber,
+            CancellationToken ct = default
+        ) {
+        var inserted = 0;
+        await using var conn = await _dataSource.OpenConnectionAsync(ct);
+        await using var tx = await conn.BeginTransactionAsync(ct);
+
+        if (events.Count > 0) {
+            const string sql = @"
+                INSERT INTO session_events (
+                    session_id, agent_id, line_number, logical_seq, event_id, event_type, vendor, model,
+                    timestamp, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd,
+                    tool_server, tool_name, tool_input, tool_output, tool_exit_code, is_error, content, raw_payload
+                ) VALUES (
+                    $1, $2, $3, $4, $5, $6, $7, $8,
+                    $9, $10, $11, $12, $13, $14,
+                    $15, $16, $17, $18, $19, $20, $21, $22
+                )
+                ON CONFLICT(session_id, agent_id, line_number) DO UPDATE SET
+                    tool_output = COALESCE(EXCLUDED.tool_output, session_events.tool_output),
+                    tool_exit_code = COALESCE(EXCLUDED.tool_exit_code, session_events.tool_exit_code),
+                    is_error = EXCLUDED.is_error OR session_events.is_error,
+                    raw_payload = COALESCE(EXCLUDED.raw_payload, session_events.raw_payload);
+            ";
+
+            foreach (var ev in events) {
+                await using var cmd = new NpgsqlCommand(sql, conn, tx);
+                cmd.Parameters.AddWithValue(ev.SessionId);
+                cmd.Parameters.AddWithValue(ev.AgentId ?? string.Empty);
+                cmd.Parameters.AddWithValue(ev.LineNumber);
+                cmd.Parameters.AddWithValue(ev.LogicalSeq);
+                cmd.Parameters.AddWithValue((object?)ev.EventId ?? DBNull.Value);
+                cmd.Parameters.AddWithValue(ev.EventType);
+                cmd.Parameters.AddWithValue(ev.Vendor);
+                cmd.Parameters.AddWithValue((object?)ev.Model ?? DBNull.Value);
+                cmd.Parameters.AddWithValue(EventTimestamp.ToUtcString(ev.Timestamp));
+                cmd.Parameters.AddWithValue(ev.InputTokens);
+                cmd.Parameters.AddWithValue(ev.OutputTokens);
+                cmd.Parameters.AddWithValue(ev.CacheReadTokens);
+                cmd.Parameters.AddWithValue(ev.CacheWriteTokens);
+                cmd.Parameters.AddWithValue(ev.CostUsd);
+                cmd.Parameters.AddWithValue((object?)ev.ToolServer ?? DBNull.Value);
+                cmd.Parameters.AddWithValue((object?)ev.ToolName ?? DBNull.Value);
+                cmd.Parameters.AddWithValue((object?)ev.ToolInput ?? DBNull.Value);
+                cmd.Parameters.AddWithValue((object?)ev.ToolOutput ?? DBNull.Value);
+                cmd.Parameters.AddWithValue((object?)ev.ToolExitCode ?? DBNull.Value);
+                cmd.Parameters.AddWithValue(ev.IsError);
+                cmd.Parameters.AddWithValue((object?)ev.Content ?? DBNull.Value);
+                cmd.Parameters.AddWithValue((object?)ev.RawPayload ?? DBNull.Value);
+                inserted += await cmd.ExecuteNonQueryAsync(ct);
+            }
+        }
+
+        await using (var watermark = new NpgsqlCommand(@"
+            INSERT INTO session_watermarks (session_id, agent_id, last_line_number, byte_offset, updated_at)
+            VALUES ($1, $2, $3, 0, $4)
+            ON CONFLICT(session_id, agent_id) DO UPDATE SET
+                last_line_number = GREATEST(session_watermarks.last_line_number, EXCLUDED.last_line_number),
+                updated_at = EXCLUDED.updated_at;
+        ", conn, tx)) {
+            watermark.Parameters.AddWithValue(sessionId);
+            watermark.Parameters.AddWithValue(agentId ?? string.Empty);
+            watermark.Parameters.AddWithValue(lastLineNumber);
+            watermark.Parameters.AddWithValue(EventTimestamp.ToUtcString(DateTimeOffset.UtcNow));
+            await watermark.ExecuteNonQueryAsync(ct);
+        }
+
+        await tx.CommitAsync(ct);
+        return inserted;
+    }
+
     public async Task<IReadOnlyList<SessionEventRecord>> GetEventsAsync(string sessionId, string? agentId = null, int fromLine = 0, CancellationToken ct = default) {
         var list = new List<SessionEventRecord>();
         await using var conn = await _dataSource.OpenConnectionAsync(ct);

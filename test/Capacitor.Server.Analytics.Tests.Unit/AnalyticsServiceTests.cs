@@ -113,9 +113,16 @@ public sealed class AnalyticsServiceTests : IDisposable {
     }
 
     [Test]
-    public async Task GovernedAnalytics_rejects_raw_table_access() {
+    public async Task GovernedAnalytics_rejects_quoted_raw_table_identifiers() {
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            _analytics.ExecuteGovernedQueryAsync("SELECT content, raw_payload FROM session_events;"));
+            _analytics.ExecuteGovernedQueryAsync("SELECT raw_payload FROM \"session_events\";"));
+    }
+
+    [Test]
+    public async Task GovernedAnalytics_accepts_a_semicolon_inside_a_string_literal() {
+        var result = await _analytics.ExecuteGovernedQueryAsync(
+            "SELECT * FROM v_an_sessions WHERE owner_user_id = 'a;b';");
+        await Assert.That(result.Rows.Count).IsEqualTo(0);
     }
 
     [Test]

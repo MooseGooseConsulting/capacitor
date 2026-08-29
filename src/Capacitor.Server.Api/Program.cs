@@ -70,7 +70,7 @@ app.MapGet("/health", () => Results.Ok(new { status = "healthy", provider = dbPr
 // Ingestion Hooks
 
 async Task<IResult> HandleSessionStart(string vendor, ApiSessionStartPayload payload, ISessionRepository sessions) {
-    var sessionId = payload.SessionId.Replace("-", "");
+    var sessionId = IdCanonicalizer.Canonicalize(payload.SessionId);
     var existed = await sessions.GetSessionAsync(sessionId) != null;
     var session = await sessions.GetOrCreatePlaceholderAsync(sessionId, vendor, payload.UserId, payload.DefaultVisibility);
 
@@ -85,7 +85,7 @@ async Task<IResult> HandleSessionStart(string vendor, ApiSessionStartPayload pay
 }
 
 async Task<IResult> HandleSessionEnd(string vendor, ApiSessionEndPayload payload, ISessionRepository sessions, SessionRollupProjector projector) {
-    var sessionId = payload.SessionId.Replace("-", "");
+    var sessionId = IdCanonicalizer.Canonicalize(payload.SessionId);
     var session = await sessions.GetSessionAsync(sessionId);
     // A missing session must not read as delivered — the client's spool retries a non-2xx but
     // treats 200 as final, so an out-of-order session-end would otherwise be lost for good.
@@ -115,8 +115,8 @@ app.MapPost("/hooks/session-end", ([FromBody] ApiSessionEndPayload payload, ISes
 // subagent's content — this endpoint's whole job is to be that ACK. Unqualified, matching what
 // every harness posts (reference/SURFACE.md §4).
 app.MapPost("/hooks/subagent-start", async ([FromBody] JsonElement payload, ISessionRepository sessions) => {
-    var sessionId = payload.Str("session_id")?.Replace("-", "");
-    if (sessionId is { Length: > 0 }) await sessions.GetOrCreatePlaceholderAsync(sessionId, "claude");
+    var sessionId = IdCanonicalizer.Canonicalize(payload.Str("session_id"));
+    if (sessionId.Length > 0) await sessions.GetOrCreatePlaceholderAsync(sessionId, "claude");
     return Results.Ok(new { status = "started" });
 });
 
@@ -125,11 +125,10 @@ app.MapPost("/hooks/subagent-stop", ([FromBody] JsonElement payload) => Results.
 app.MapPost("/hooks/transcript", async (
     [FromBody] TranscriptBatch batch,
     ISessionRepository sessions,
-    ISessionWatermarkRepository watermarks,
     IEventStoreRepository eventStore,
     NormalizerRouter router,
     SessionRollupProjector projector) => {
-    var sessionId = batch.SessionId.Replace("-", "");
+    var sessionId = IdCanonicalizer.Canonicalize(batch.SessionId);
     var vendor = batch.Vendor ?? "claude";
 
     // A short line_numbers array used to fall back to a per-batch `i + 1`, which can collide
@@ -139,20 +138,17 @@ app.MapPost("/hooks/transcript", async (
         return Results.BadRequest(new { detail = "line_numbers, when present, must have the same length as lines." });
     }
 
-    var placeholder = await sessions.GetOrCreatePlaceholderAsync(sessionId, vendor);
+    await sessions.GetOrCreatePlaceholderAsync(sessionId, vendor);
     if (batch.Repository is { } repo) {
-        await sessions.UpdateSessionAsync(placeholder with {
-            RepoOwner  = repo.Owner,
-            RepoName   = repo.RepoName,
-            Branch     = repo.Branch,
-            PrNumber   = repo.PrNumber,
-            PrTitle    = repo.PrTitle,
-            PrUrl      = repo.PrUrl,
-            PrHeadRef  = repo.PrHeadRef
-        });
+        var repoHash = repo.Owner is { Length: > 0 } && repo.RepoName is { Length: > 0 }
+            ? RepoHashHelper.ComputeRepoHash(repo.Owner, repo.RepoName)
+            : null;
+        await sessions.UpdateRepositoryMetadataAsync(
+            sessionId, repoHash, repo.Owner, repo.RepoName, repo.Branch,
+            repo.PrNumber, repo.PrTitle, repo.PrUrl, repo.PrHeadRef);
     }
 
-    var agentId = batch.AgentId ?? string.Empty;
+    var agentId = IdCanonicalizer.Canonicalize(batch.AgentId);
     var events = new List<SessionEventRecord>();
     var highestLine = 0;
     var failedCount = 0;
@@ -163,12 +159,13 @@ app.MapPost("/hooks/transcript", async (
 
         var lineEvents = router.Normalize(vendor, sessionId, agentId, lineNum, batch.Lines[i], out var lineFailed);
         if (lineFailed) failedCount++;
-        events.AddRange(lineEvents);
+        foreach (var ev in lineEvents) {
+            events.Add(ev with { Vendor = vendor, AgentId = agentId, SessionId = sessionId });
+        }
     }
 
+    await eventStore.AppendEventsAndAdvanceWatermarkAsync(events, sessionId, agentId, highestLine);
     if (events.Count > 0) {
-        await eventStore.AppendEventsAsync(events);
-        await watermarks.UpdateWatermarkAsync(sessionId, agentId, highestLine);
         await projector.ProjectSessionRollupAsync(sessionId);
     }
 
@@ -186,23 +183,24 @@ app.MapGet("/api/sessions/{id}/last-line", async (
     [FromQuery] string? agentId,
     ISessionRepository sessions,
     ISessionWatermarkRepository watermarks) => {
-    var sessionId = id.Replace("-", "");
+    var sessionId = IdCanonicalizer.Canonicalize(id);
     var session = await sessions.GetSessionAsync(sessionId);
     if (session == null) return Results.NotFound();
 
-    var line = await watermarks.GetLastLineNumberAsync(sessionId, agentId ?? "");
+    var line = await watermarks.GetLastLineNumberAsync(sessionId, IdCanonicalizer.Canonicalize(agentId));
     if (line is null) return Results.NoContent();
 
-    return Results.Ok(new { session_id = sessionId, agent_id = agentId ?? "", last_line_number = line.Value });
+    return Results.Ok(new { session_id = sessionId, agent_id = IdCanonicalizer.Canonicalize(agentId), last_line_number = line.Value });
 });
 
 app.MapGet("/watermarks", async (
     [FromQuery] string session_id,
     [FromQuery] string? agent_id,
     ISessionWatermarkRepository watermarks) => {
-    var sessionId = session_id.Replace("-", "");
-    var line = await watermarks.GetLastLineNumberAsync(sessionId, agent_id ?? "");
-    return Results.Ok(new { session_id = sessionId, agent_id = agent_id ?? "", last_line_number = line });
+    var sessionId = IdCanonicalizer.Canonicalize(session_id);
+    var canonicalAgent = IdCanonicalizer.Canonicalize(agent_id);
+    var line = await watermarks.GetLastLineNumberAsync(sessionId, canonicalAgent);
+    return Results.Ok(new { session_id = sessionId, agent_id = canonicalAgent, last_line_number = line });
 });
 
 // Fleet Node Enrollment & Heartbeat
@@ -273,7 +271,7 @@ app.MapGet("/api/sessions/{id}/eval-context", async (
     [FromQuery] int? threshold,
     ISessionRepository sessions,
     IEventStoreRepository eventStore) => {
-    var sessionId = id.Replace("-", "");
+    var sessionId = IdCanonicalizer.Canonicalize(id);
     var session = await sessions.GetSessionAsync(sessionId);
     if (session == null) return Results.NotFound();
 
@@ -291,27 +289,59 @@ app.MapGet("/api/sessions/{id}/eval-context", async (
         sessionChain = [.. ancestors, sessionId];
     }
 
-    var events = await eventStore.GetEventsAsync(sessionId);
-    var trace = events.Select(e => new {
-        kind      = EvalContextKind(e.EventType),
-        timestamp = e.Timestamp,
-        text      = e.Content ?? e.ToolOutput,
-        tool      = e.ToolName
-    }).ToList();
-    var toolResultsTotal = events.Count(e => e.EventType == "ToolResult");
+    var events = new List<SessionEventRecord>();
+    foreach (var chainedId in sessionChain) {
+        events.AddRange(await eventStore.GetEventsAsync(chainedId));
+    }
 
+    var (trace, compaction) = EvalContextComposer.Compose(events, threshold ?? 2000);
     return Results.Ok(new {
         session_id    = sessionId,
         session_chain = sessionChain,
         trace         = trace,
-        compaction    = new {
-            threshold_bytes        = threshold ?? 2000,
-            entries                = trace.Count,
-            tool_results_total     = toolResultsTotal,
-            tool_results_truncated = 0,
-            bytes_saved            = 0L
-        }
+        compaction    = compaction
     });
+});
+
+app.MapPost("/api/sessions/{id}/evals/v3", async (
+    string id,
+    [FromBody] SessionEvalCompletedPayloadV3 payload,
+    ISessionRepository sessions) => {
+    var sessionId = IdCanonicalizer.Canonicalize(id);
+    var session = await sessions.GetSessionAsync(sessionId);
+    if (session == null) return Results.NotFound();
+
+    var retrospectiveJson = payload.Retrospective is null
+        ? null
+        : JsonSerializer.Serialize(payload.Retrospective, CapacitorJsonContext.Default.EvalRetrospectiveV2);
+
+    var run = new EvalRunRecord {
+        EvalRunId = payload.EvalRunId,
+        SessionId = sessionId,
+        JudgeModel = payload.JudgeModel,
+        OverallScore = payload.OverallScore,
+        Summary = payload.Summary,
+        RetrospectiveJson = retrospectiveJson,
+        RetrospectivePromptVersion = payload.RetrospectivePromptVersion,
+        EvaluatedAt = DateTimeOffset.UtcNow
+    };
+    var verdicts = payload.Categories
+        .SelectMany(c => c.Questions.Select(q => new EvalVerdictRecord {
+            EvalRunId = payload.EvalRunId,
+            Category = q.Category,
+            QuestionId = q.QuestionId,
+            Score = q.Score,
+            Verdict = q.Verdict,
+            Finding = q.Finding,
+            Evidence = q.Evidence,
+            Recommendation = q.Recommendation,
+            ToolsUsed = q.ToolsUsed,
+            PromptVersion = q.PromptVersion
+        }))
+        .ToList();
+
+    await sessions.PersistEvalRunAsync(run, verdicts);
+    return Results.Ok(new { status = "saved", eval_run_id = payload.EvalRunId, session_id = sessionId });
 });
 
 // Analytics Views — SqliteAnalyticsService reads the v_an_* views directly off the Sqlite
@@ -365,14 +395,6 @@ if (isPostgres) {
 }
 
 app.Run();
-
-static string EvalContextKind(string eventType) => eventType switch {
-    "UserMessage"   => "user_message",
-    "AssistantTurn" => "assistant_turn",
-    "ToolCall"      => "tool_call",
-    "ToolResult"    => "tool_result",
-    _               => "event"
-};
 
 namespace Capacitor.Server.Api {
     using System.Text.Json.Serialization;

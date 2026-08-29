@@ -1,3 +1,4 @@
+using System.Globalization;
 using Microsoft.Data.Sqlite;
 using Capacitor.Server.Data;
 using Capacitor.Server.Data.Entities;
@@ -235,5 +236,69 @@ public sealed class IngestRepositoryTests : IDisposable {
         var resolved = await _machines.HeartbeatAsync(MachineTokenHasher.Hash("never-enrolled"), DateTimeOffset.UtcNow);
 
         await Assert.That(resolved).IsNull();
+    }
+
+    [Test]
+    public async Task UpdateRepositoryMetadata_does_not_reset_completed_status() {
+        var sessionId = "sess-repo-race";
+        await _sessions.GetOrCreatePlaceholderAsync(sessionId, "claude");
+        var completed = (await _sessions.GetSessionAsync(sessionId))! with {
+            Status = "completed",
+            EndedAt = DateTimeOffset.UtcNow
+        };
+        await _sessions.UpdateSessionAsync(completed);
+
+        await _sessions.UpdateRepositoryMetadataAsync(
+            sessionId, "abc123def4567890", "acme", "widget", "main",
+            14, "title", "https://example.test/pr/14", "head");
+
+        var retrieved = await _sessions.GetSessionAsync(sessionId);
+        await Assert.That(retrieved!.Status).IsEqualTo("completed");
+        await Assert.That(retrieved.RepoHash).IsEqualTo("abc123def4567890");
+        await Assert.That(retrieved.RepoOwner).IsEqualTo("acme");
+        await Assert.That(retrieved.RepoName).IsEqualTo("widget");
+        await Assert.That(retrieved.EndedAt).IsEqualTo(completed.EndedAt);
+    }
+
+    [Test]
+    public async Task AppendEventsAndAdvanceWatermark_advances_watermark_for_empty_batches() {
+        var sessionId = "sess-empty-accepted";
+        await _eventStore.AppendEventsAndAdvanceWatermarkAsync([], sessionId, "", 4);
+
+        var line = await _watermarks.GetLastLineNumberAsync(sessionId, "");
+        await Assert.That(line).IsEqualTo(4);
+        await Assert.That(await _eventStore.GetEventCountAsync(sessionId)).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task PersistEvalRun_writes_run_and_verdicts() {
+        var sessionId = "sess-eval-1";
+        await _sessions.GetOrCreatePlaceholderAsync(sessionId, "claude");
+        var run = new EvalRunRecord {
+            EvalRunId = "run-1",
+            SessionId = sessionId,
+            JudgeModel = "test-model",
+            OverallScore = 80,
+            Summary = "ok",
+            EvaluatedAt = DateTimeOffset.UtcNow
+        };
+        var verdicts = new List<EvalVerdictRecord> {
+            new() {
+                EvalRunId = "run-1",
+                Category = "safety",
+                QuestionId = "destructive_commands",
+                Score = 80,
+                Verdict = "pass",
+                Finding = "none"
+            }
+        };
+
+        await _sessions.PersistEvalRunAsync(run, verdicts);
+
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM eval_runs WHERE eval_run_id = 'run-1';";
+        await Assert.That(Convert.ToInt32(await cmd.ExecuteScalarAsync(), CultureInfo.InvariantCulture)).IsEqualTo(1);
+        cmd.CommandText = "SELECT COUNT(*) FROM eval_verdicts WHERE eval_run_id = 'run-1';";
+        await Assert.That(Convert.ToInt32(await cmd.ExecuteScalarAsync(), CultureInfo.InvariantCulture)).IsEqualTo(1);
     }
 }
