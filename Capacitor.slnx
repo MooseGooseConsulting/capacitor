@@ -13,6 +13,7 @@
     <Project Path="src\Capacitor.Cli.Daemon\Capacitor.Cli.Daemon.csproj" />
     <Project Path="src\Capacitor.Cli\Capacitor.Cli.csproj" />
     <Project Path="src\Capacitor.Server.Data\Capacitor.Server.Data.csproj" />
+    <Project Path="src\Capacitor.Server.Ingest\Capacitor.Server.Ingest.csproj" />
   </Folder>
   <Folder Name="/test/">
     <File Path="test\Directory.Build.props" />
@@ -24,5 +25,6 @@
     <Project Path="test\Capacitor.Cli.Tests.Unit\Capacitor.Cli.Tests.Unit.csproj" />
     <Project Path="test\Capacitor.Cli.Tests.Unit.NativeTestHost\Capacitor.Cli.Tests.Unit.NativeTestHost.csproj" />
     <Project Path="test\Capacitor.Server.Data.Tests.Unit\Capacitor.Server.Data.Tests.Unit.csproj" />
+    <Project Path="test\Capacitor.Server.Ingest.Tests.Unit\Capacitor.Server.Ingest.Tests.Unit.csproj" />
   </Folder>
 </Solution>
