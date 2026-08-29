@@ -101,6 +101,12 @@ public class SqliteAnalyticsService {
         @"\b(?<kw>FROM|JOIN)\s+(?<view>[A-Za-z_][A-Za-z0-9_]*)(?:\s+(?:AS\s+)?(?<alias>(?!(?:WHERE|ON|GROUP|ORDER|LEFT|INNER|RIGHT|FULL|CROSS|JOIN|UNION|LIMIT|HAVING|SET|WHEN|FROM)\b)[A-Za-z_][A-Za-z0-9_]*))?",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+    // TableRefPattern only matches unquoted identifiers, so FROM "session_events" / FROM main.sessions
+    // would otherwise skip the allowlist and run against the raw table.
+    private static readonly Regex QuotedOrQualifiedRelationPattern = new(
+        @"\b(?:FROM|JOIN)\s+(?:[`""\[]|[A-Za-z_][A-Za-z0-9_]*\s*\.)",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     private readonly SqliteConnection _connection;
     private readonly SqliteGate _gate;
 
@@ -154,7 +160,14 @@ public class SqliteAnalyticsService {
         var trimmed = sql.Trim();
         var body = trimmed.EndsWith(';') ? trimmed[..^1].TrimEnd() : trimmed;
 
-        if (body.Contains(';', StringComparison.Ordinal)) {
+        if (QuotedOrQualifiedRelationPattern.IsMatch(body)) {
+            throw new InvalidOperationException(
+                "Governed analytics query cannot use quoted or schema-qualified table names.");
+        }
+
+        // Semicolons inside string literals are data, not a second statement. Mask those
+        // first so `SELECT 'a;b'` is accepted while `SELECT 1; DROP TABLE sessions` is not.
+        if (MaskSqlStringLiterals(body).Contains(';')) {
             throw new InvalidOperationException("Governed analytics query must be a single statement.");
         }
         var bodyUpper = body.ToUpperInvariant();
@@ -192,5 +205,24 @@ public class SqliteAnalyticsService {
             ? paramNames.Select((name, i) => (name, (object)repos[i])).ToList()
             : [];
         return scopedSql;
+    }
+
+    static string MaskSqlStringLiterals(string sql) {
+        var chars = sql.ToCharArray();
+        var inString = false;
+        for (var i = 0; i < chars.Length; i++) {
+            if (chars[i] == '\'') {
+                if (inString && i + 1 < chars.Length && chars[i + 1] == '\'') {
+                    chars[i] = ' ';
+                    chars[++i] = ' ';
+                    continue;
+                }
+                inString = !inString;
+                chars[i] = ' ';
+                continue;
+            }
+            if (inString) chars[i] = ' ';
+        }
+        return new string(chars);
     }
 }
