@@ -169,6 +169,22 @@ public sealed class IngestRepositoryTests : IDisposable {
     }
 
     [Test]
+    public async Task GetEvents_orders_same_line_by_agent_id() {
+        var sessionId = "sess-two-agents";
+        var now = DateTimeOffset.UtcNow;
+        var events = new List<SessionEventRecord> {
+            new() { SessionId = sessionId, AgentId = "beta", LineNumber = 1, EventType = "UserMessage", Vendor = "claude", Timestamp = now, Content = "b" },
+            new() { SessionId = sessionId, AgentId = "alpha", LineNumber = 1, EventType = "UserMessage", Vendor = "claude", Timestamp = now, Content = "a" }
+        };
+        await _eventStore.AppendEventsAsync(events);
+
+        var retrieved = await _eventStore.GetEventsAsync(sessionId);
+        await Assert.That(retrieved.Count).IsEqualTo(2);
+        await Assert.That(retrieved[0].AgentId).IsEqualTo("alpha");
+        await Assert.That(retrieved[1].AgentId).IsEqualTo("beta");
+    }
+
+    [Test]
     public async Task Placeholder_honours_an_explicit_default_visibility() {
         var sessionId = "sess-private";
         var placeholder = await _sessions.GetOrCreatePlaceholderAsync(sessionId, "codex", "user-1", "owner");
@@ -184,6 +200,18 @@ public sealed class IngestRepositoryTests : IDisposable {
         var resolved = await _machines.HeartbeatAsync(MachineTokenHasher.Hash("tok-1"), now.AddMinutes(1));
 
         await Assert.That(resolved).IsEqualTo("mach-1");
+    }
+
+    [Test]
+    public async Task Enroll_rejects_an_already_enrolled_machine_id_without_replacing_its_token() {
+        var now = DateTimeOffset.UtcNow;
+        var first = await _machines.EnrollAsync("mach-1", "hephastus", "linux", "x64", MachineTokenHasher.Hash("tok-1"), now);
+        var second = await _machines.EnrollAsync("mach-1", "impostor", "linux", "arm64", MachineTokenHasher.Hash("tok-2"), now.AddMinutes(1));
+
+        await Assert.That(first).IsTrue();
+        await Assert.That(second).IsFalse();
+        await Assert.That(await _machines.HeartbeatAsync(MachineTokenHasher.Hash("tok-1"), now.AddMinutes(2))).IsEqualTo("mach-1");
+        await Assert.That(await _machines.HeartbeatAsync(MachineTokenHasher.Hash("tok-2"), now.AddMinutes(2))).IsNull();
     }
 
     [Test]

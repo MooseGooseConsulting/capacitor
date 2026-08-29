@@ -140,4 +140,43 @@ public class SqliteEventStoreRepository : IEventStoreRepository {
             var res = await cmd.ExecuteScalarAsync(ct);
             return res is long count ? count : Convert.ToInt64(res, CultureInfo.InvariantCulture);
         }, ct);
+
+    public Task<SessionRollupAggregate?> GetRollupAggregateAsync(string sessionId, CancellationToken ct = default) =>
+        _gate.RunAsync(async () => {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = @"
+                SELECT
+                    COUNT(*) AS event_count,
+                    SUM(CASE WHEN tool_name IS NOT NULL THEN 1 ELSE 0 END) AS tool_count,
+                    SUM(input_tokens + output_tokens + cache_read_tokens + cache_write_tokens) AS total_tokens,
+                    SUM(cost_usd) AS total_cost_usd,
+                    MIN(timestamp) AS first_event,
+                    MAX(timestamp) AS last_event
+                FROM session_events
+                WHERE session_id = $session_id;";
+            cmd.Parameters.AddWithValue("$session_id", sessionId);
+
+            using var reader = await cmd.ExecuteReaderAsync(ct);
+            if (!await reader.ReadAsync(ct)) return (SessionRollupAggregate?)null;
+
+            var eventCount = reader.IsDBNull(0) ? 0 : Convert.ToInt32(reader.GetValue(0), CultureInfo.InvariantCulture);
+            if (eventCount == 0) return null;
+
+            var toolCount = reader.IsDBNull(1) ? 0 : Convert.ToInt32(reader.GetValue(1), CultureInfo.InvariantCulture);
+            var totalTokens = reader.IsDBNull(2) ? 0L : Convert.ToInt64(reader.GetValue(2), CultureInfo.InvariantCulture);
+            var totalCost = reader.IsDBNull(3) ? 0m : Convert.ToDecimal(reader.GetValue(3), CultureInfo.InvariantCulture);
+            var firstEventStr = reader.IsDBNull(4) ? null : reader.GetString(4);
+            var lastEventStr = reader.IsDBNull(5) ? null : reader.GetString(5);
+
+            decimal durationMin = 0m;
+            DateTimeOffset? lastEventAt = null;
+            if (firstEventStr != null && lastEventStr != null) {
+                var first = DateTimeOffset.Parse(firstEventStr, CultureInfo.InvariantCulture);
+                var last = DateTimeOffset.Parse(lastEventStr, CultureInfo.InvariantCulture);
+                lastEventAt = last;
+                durationMin = (decimal)Math.Round((last - first).TotalMinutes, 2);
+            }
+
+            return new SessionRollupAggregate(eventCount, toolCount, totalTokens, totalCost, durationMin, lastEventAt);
+        }, ct);
 }

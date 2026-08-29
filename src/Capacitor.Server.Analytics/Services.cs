@@ -4,7 +4,7 @@ using Capacitor.Server.Ingest;
 
 namespace Capacitor.Server.Analytics;
 
-/// <summary>Aggregates session_events through the repository abstraction so one implementation serves every provider.</summary>
+/// <summary>Writes session rollup columns from a store-side aggregate so a transcript batch never reloads prior events.</summary>
 public class SessionRollupProjector {
     private readonly IEventStoreRepository _eventStore;
     private readonly ISessionRepository _sessionRepo;
@@ -18,34 +18,19 @@ public class SessionRollupProjector {
         var existing = await _sessionRepo.GetSessionAsync(sessionId, ct);
         if (existing == null) return;
 
-        var events = await _eventStore.GetEventsAsync(sessionId, ct: ct);
-        if (events.Count == 0) return;
-
-        var eventCount = events.Count;
-        var toolCount = 0;
-        long totalTokens = 0;
-        decimal totalCost = 0m;
-        var first = events[0].Timestamp;
-        var last = events[0].Timestamp;
-
-        foreach (var ev in events) {
-            if (ev.ToolName != null) toolCount++;
-            totalTokens += ev.InputTokens + ev.OutputTokens + ev.CacheReadTokens + ev.CacheWriteTokens;
-            totalCost += ev.CostUsd;
-            if (ev.Timestamp < first) first = ev.Timestamp;
-            if (ev.Timestamp > last) last = ev.Timestamp;
-        }
+        var aggregate = await _eventStore.GetRollupAggregateAsync(sessionId, ct);
+        if (aggregate is not { } rollup) return;
 
         // Rollup-only write: never touches status/ended_at, so a concurrent session-end can't
         // be clobbered by a rollup projection racing it on the read-modify-write.
         await _sessionRepo.UpdateRollupAsync(
             sessionId,
-            eventCount,
-            toolCount,
-            totalTokens,
-            totalCost,
-            (decimal)Math.Round((last - first).TotalMinutes, 2),
-            last,
+            rollup.EventCount,
+            rollup.ToolCount,
+            rollup.TotalTokens,
+            rollup.TotalCostUsd,
+            rollup.DurationMin,
+            rollup.LastEventAt,
             ct);
     }
 }

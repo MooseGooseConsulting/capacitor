@@ -14,9 +14,12 @@ using Capacitor.Server.Api;
 var builder = WebApplication.CreateBuilder(args);
 
 var dbProvider = builder.Configuration["Database:Provider"] ?? "Sqlite";
-var connString = builder.Configuration["Database:ConnectionString"] ?? "Data Source=capacitor.db";
-
 var isPostgres = string.Equals(dbProvider, "Postgres", StringComparison.OrdinalIgnoreCase);
+var connString = builder.Configuration["Database:ConnectionString"];
+if (string.IsNullOrWhiteSpace(connString)) {
+    var dbPath = builder.Configuration["Database:Path"] ?? "capacitor.db";
+    connString = $"Data Source={dbPath}";
+}
 
 if (isPostgres) {
     var dataSource = NpgsqlDataSource.Create(connString);
@@ -202,7 +205,8 @@ app.MapPost("/api/machines/enroll", async (
         : request.MachineId;
     var token = $"kcap_node_{Guid.NewGuid():N}";
     var now = DateTimeOffset.UtcNow;
-    await machines.EnrollAsync(machineId, request.Hostname, request.Os, request.Arch, MachineTokenHasher.Hash(token), now);
+    var enrolled = await machines.EnrollAsync(machineId, request.Hostname, request.Os, request.Arch, MachineTokenHasher.Hash(token), now);
+    if (!enrolled) return Results.Conflict(new { detail = "machine_id is already enrolled." });
     return Results.Ok(new {
         machine_id = machineId,
         hostname = request.Hostname,

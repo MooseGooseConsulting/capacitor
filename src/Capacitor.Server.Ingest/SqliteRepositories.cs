@@ -270,17 +270,14 @@ public class SqliteMachineRepository : IMachineRepository {
         _gate = gate ?? new SqliteGate();
     }
 
-    public Task EnrollAsync(string machineId, string hostname, string os, string arch, string tokenHash, DateTimeOffset now, CancellationToken ct = default) =>
+    public Task<bool> EnrollAsync(string machineId, string hostname, string os, string arch, string tokenHash, DateTimeOffset now, CancellationToken ct = default) =>
         _gate.RunAsync(async () => {
             using var cmd = _connection.CreateCommand();
             cmd.CommandText = @"
                 INSERT INTO machines (machine_id, hostname, os, arch, client_id, registered_at, last_heartbeat)
                 VALUES ($machine_id, $hostname, $os, $arch, $client_id, $registered_at, $registered_at)
-                ON CONFLICT(machine_id) DO UPDATE SET
-                    hostname = excluded.hostname,
-                    os = excluded.os,
-                    arch = excluded.arch,
-                    client_id = excluded.client_id;
+                ON CONFLICT(machine_id) DO NOTHING
+                RETURNING machine_id;
             ";
             cmd.Parameters.AddWithValue("$machine_id", machineId);
             cmd.Parameters.AddWithValue("$hostname", hostname);
@@ -289,7 +286,7 @@ public class SqliteMachineRepository : IMachineRepository {
             cmd.Parameters.AddWithValue("$client_id", tokenHash);
             cmd.Parameters.AddWithValue("$registered_at", now.ToString("o", CultureInfo.InvariantCulture));
 
-            await cmd.ExecuteNonQueryAsync(ct);
+            return await cmd.ExecuteScalarAsync(ct) != null;
         }, ct);
 
     public Task<string?> HeartbeatAsync(string tokenHash, DateTimeOffset now, CancellationToken ct = default) =>

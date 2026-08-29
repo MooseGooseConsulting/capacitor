@@ -149,34 +149,45 @@ public class PostgresSessionRepository : ISessionRepository {
         cmd.CommandText = @"
             UPDATE sessions SET
                 title = COALESCE($2, title),
-                model = COALESCE($3, model),
-                status = $4,
-                visibility = $5,
-                machine_id = COALESCE($6, machine_id),
-                daemon_id = COALESCE($7, daemon_id),
-                repo_hash = COALESCE($8, repo_hash),
-                repo_owner = COALESCE($9, repo_owner),
-                repo_name = COALESCE($10, repo_name),
-                branch = COALESCE($11, branch),
-                pr_number = COALESCE($12, pr_number),
-                pr_title = COALESCE($13, pr_title),
-                pr_url = COALESCE($14, pr_url),
-                pr_head_ref = COALESCE($15, pr_head_ref),
-                ended_at = COALESCE($16, ended_at),
-                last_event_at = COALESCE($17, last_event_at),
-                duration_min = $18,
-                event_count = $19,
-                tool_count = $20,
-                total_tokens = $21,
-                total_cost_usd = $22
+                slug = COALESCE($3, slug),
+                model = COALESCE($4, model),
+                status = $5,
+                visibility = $6,
+                owner_user_id = COALESCE($7, owner_user_id),
+                machine_id = COALESCE($8, machine_id),
+                daemon_id = COALESCE($9, daemon_id),
+                repo_hash = COALESCE($10, repo_hash),
+                repo_owner = COALESCE($11, repo_owner),
+                repo_name = COALESCE($12, repo_name),
+                branch = COALESCE($13, branch),
+                pr_number = COALESCE($14, pr_number),
+                pr_title = COALESCE($15, pr_title),
+                pr_url = COALESCE($16, pr_url),
+                pr_head_ref = COALESCE($17, pr_head_ref),
+                started_at = $18,
+                ended_at = COALESCE($19, ended_at),
+                last_event_at = COALESCE($20, last_event_at),
+                duration_min = $21,
+                event_count = $22,
+                tool_count = $23,
+                total_tokens = $24,
+                total_cost_usd = $25,
+                previous_session_id = $26,
+                next_session_id = $27,
+                primary_phase = $28,
+                secondary_phase = $29,
+                classification_confidence = $30,
+                classification_source = $31
             WHERE session_id = $1;
         ";
 
         cmd.Parameters.AddWithValue(session.SessionId);
         cmd.Parameters.AddWithValue((object?)session.Title ?? DBNull.Value);
+        cmd.Parameters.AddWithValue((object?)session.Slug ?? DBNull.Value);
         cmd.Parameters.AddWithValue((object?)session.Model ?? DBNull.Value);
         cmd.Parameters.AddWithValue(session.Status);
         cmd.Parameters.AddWithValue(session.Visibility);
+        cmd.Parameters.AddWithValue((object?)session.OwnerUserId ?? DBNull.Value);
         cmd.Parameters.AddWithValue((object?)session.MachineId ?? DBNull.Value);
         cmd.Parameters.AddWithValue((object?)session.DaemonId ?? DBNull.Value);
         cmd.Parameters.AddWithValue((object?)session.RepoHash ?? DBNull.Value);
@@ -187,6 +198,7 @@ public class PostgresSessionRepository : ISessionRepository {
         cmd.Parameters.AddWithValue((object?)session.PrTitle ?? DBNull.Value);
         cmd.Parameters.AddWithValue((object?)session.PrUrl ?? DBNull.Value);
         cmd.Parameters.AddWithValue((object?)session.PrHeadRef ?? DBNull.Value);
+        cmd.Parameters.AddWithValue(session.StartedAt.ToString("o", CultureInfo.InvariantCulture));
         cmd.Parameters.AddWithValue(session.EndedAt.HasValue ? session.EndedAt.Value.ToString("o", CultureInfo.InvariantCulture) : (object)DBNull.Value);
         cmd.Parameters.AddWithValue(session.LastEventAt.HasValue ? session.LastEventAt.Value.ToString("o", CultureInfo.InvariantCulture) : (object)DBNull.Value);
         cmd.Parameters.AddWithValue(session.DurationMin);
@@ -194,6 +206,12 @@ public class PostgresSessionRepository : ISessionRepository {
         cmd.Parameters.AddWithValue(session.ToolCount);
         cmd.Parameters.AddWithValue(session.TotalTokens);
         cmd.Parameters.AddWithValue(session.TotalCostUsd);
+        cmd.Parameters.AddWithValue((object?)session.PreviousSessionId ?? DBNull.Value);
+        cmd.Parameters.AddWithValue((object?)session.NextSessionId ?? DBNull.Value);
+        cmd.Parameters.AddWithValue((object?)session.PrimaryPhase ?? DBNull.Value);
+        cmd.Parameters.AddWithValue((object?)session.SecondaryPhase ?? DBNull.Value);
+        cmd.Parameters.AddWithValue((object?)session.ClassificationConfidence ?? DBNull.Value);
+        cmd.Parameters.AddWithValue((object?)session.ClassificationSource ?? DBNull.Value);
 
         await cmd.ExecuteNonQueryAsync(ct);
     }
@@ -240,17 +258,14 @@ public class PostgresMachineRepository : IMachineRepository {
         _dataSource = dataSource;
     }
 
-    public async Task EnrollAsync(string machineId, string hostname, string os, string arch, string tokenHash, DateTimeOffset now, CancellationToken ct = default) {
+    public async Task<bool> EnrollAsync(string machineId, string hostname, string os, string arch, string tokenHash, DateTimeOffset now, CancellationToken ct = default) {
         await using var conn = await _dataSource.OpenConnectionAsync(ct);
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = @"
             INSERT INTO machines (machine_id, hostname, os, arch, client_id, registered_at, last_heartbeat)
             VALUES ($1, $2, $3, $4, $5, $6, $6)
-            ON CONFLICT(machine_id) DO UPDATE SET
-                hostname = excluded.hostname,
-                os = excluded.os,
-                arch = excluded.arch,
-                client_id = excluded.client_id;
+            ON CONFLICT(machine_id) DO NOTHING
+            RETURNING machine_id;
         ";
         cmd.Parameters.AddWithValue(machineId);
         cmd.Parameters.AddWithValue(hostname);
@@ -259,7 +274,7 @@ public class PostgresMachineRepository : IMachineRepository {
         cmd.Parameters.AddWithValue(tokenHash);
         cmd.Parameters.AddWithValue(now.ToString("o", CultureInfo.InvariantCulture));
 
-        await cmd.ExecuteNonQueryAsync(ct);
+        return await cmd.ExecuteScalarAsync(ct) != null;
     }
 
     public async Task<string?> HeartbeatAsync(string tokenHash, DateTimeOffset now, CancellationToken ct = default) {

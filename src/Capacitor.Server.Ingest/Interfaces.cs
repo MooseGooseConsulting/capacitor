@@ -2,10 +2,21 @@ using Capacitor.Server.Data.Entities;
 
 namespace Capacitor.Server.Ingest;
 
+public readonly record struct SessionRollupAggregate(
+    int EventCount,
+    int ToolCount,
+    long TotalTokens,
+    decimal TotalCostUsd,
+    decimal DurationMin,
+    DateTimeOffset? LastEventAt);
+
 public interface IEventStoreRepository {
     Task<int> AppendEventsAsync(IReadOnlyList<SessionEventRecord> events, CancellationToken ct = default);
     Task<IReadOnlyList<SessionEventRecord>> GetEventsAsync(string sessionId, string? agentId = null, int fromLine = 0, CancellationToken ct = default);
     Task<long> GetEventCountAsync(string sessionId, CancellationToken ct = default);
+
+    /// <summary>Null when the session has no events; otherwise the columns UpdateRollupAsync writes, computed in the store so a transcript batch never materializes prior rows.</summary>
+    Task<SessionRollupAggregate?> GetRollupAggregateAsync(string sessionId, CancellationToken ct = default);
 }
 
 public interface ISessionWatermarkRepository {
@@ -41,7 +52,8 @@ public interface ISessionRepository {
 }
 
 public interface IMachineRepository {
-    Task EnrollAsync(string machineId, string hostname, string os, string arch, string tokenHash, DateTimeOffset now, CancellationToken ct = default);
+    /// <summary>True when the machine_id was inserted. False when that id is already enrolled — the stored credential is left untouched.</summary>
+    Task<bool> EnrollAsync(string machineId, string hostname, string os, string arch, string tokenHash, DateTimeOffset now, CancellationToken ct = default);
 
     /// <summary>Updates last_heartbeat for the machine owning tokenHash; returns its machine_id, or null if the token matches no machine.</summary>
     Task<string?> HeartbeatAsync(string tokenHash, DateTimeOffset now, CancellationToken ct = default);
