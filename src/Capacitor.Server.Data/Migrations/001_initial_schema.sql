@@ -71,8 +71,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     tool_count                  INTEGER NOT NULL DEFAULT 0,
     total_tokens                BIGINT NOT NULL DEFAULT 0,
     total_cost_usd              NUMERIC(10, 4) NOT NULL DEFAULT 0,
-    previous_session_id         VARCHAR(64),
-    next_session_id             VARCHAR(64),
+    previous_session_id         VARCHAR(64) REFERENCES sessions(session_id),
+    next_session_id             VARCHAR(64) REFERENCES sessions(session_id),
     primary_phase               VARCHAR(32),
     secondary_phase             VARCHAR(32),
     classification_confidence   NUMERIC(3, 2),
@@ -80,7 +80,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 
 CREATE TABLE IF NOT EXISTS subagent_runs (
-    parent_session_id   VARCHAR(64) NOT NULL,
+    parent_session_id   VARCHAR(64) NOT NULL REFERENCES sessions(session_id),
     agent_id            VARCHAR(64) NOT NULL,
     agent_type          VARCHAR(64),
     role                VARCHAR(128),
@@ -104,8 +104,8 @@ CREATE TABLE IF NOT EXISTS work_items (
 );
 
 CREATE TABLE IF NOT EXISTS work_item_sessions (
-    work_item_id        VARCHAR(64) NOT NULL,
-    session_id          VARCHAR(64) NOT NULL,
+    work_item_id        VARCHAR(64) NOT NULL REFERENCES work_items(work_item_id),
+    session_id          VARCHAR(64) NOT NULL REFERENCES sessions(session_id),
     correlation_source  VARCHAR(32) NOT NULL,
     confidence          NUMERIC(3, 2) NOT NULL DEFAULT 1.0,
     attached_at         VARCHAR(35) NOT NULL,
@@ -113,21 +113,21 @@ CREATE TABLE IF NOT EXISTS work_item_sessions (
 );
 
 CREATE TABLE IF NOT EXISTS work_item_breakdowns (
-    parent_id           VARCHAR(64) NOT NULL,
-    part_id             VARCHAR(64) NOT NULL,
+    parent_id           VARCHAR(64) NOT NULL REFERENCES work_items(work_item_id),
+    part_id             VARCHAR(64) NOT NULL REFERENCES work_items(work_item_id),
     PRIMARY KEY (parent_id, part_id)
 );
 
 CREATE TABLE IF NOT EXISTS work_item_relations (
-    from_id             VARCHAR(64) NOT NULL,
-    to_id               VARCHAR(64) NOT NULL,
+    from_id             VARCHAR(64) NOT NULL REFERENCES work_items(work_item_id),
+    to_id               VARCHAR(64) NOT NULL REFERENCES work_items(work_item_id),
     relation_kind       VARCHAR(32) NOT NULL,
     PRIMARY KEY (from_id, to_id, relation_kind)
 );
 
 CREATE TABLE IF NOT EXISTS eval_runs (
     eval_run_id                 VARCHAR(64) PRIMARY KEY,
-    session_id                  VARCHAR(64) NOT NULL,
+    session_id                  VARCHAR(64) NOT NULL REFERENCES sessions(session_id),
     judge_model                 VARCHAR(64) NOT NULL,
     overall_score               INTEGER NOT NULL,
     summary                     TEXT NOT NULL,
@@ -137,7 +137,7 @@ CREATE TABLE IF NOT EXISTS eval_runs (
 );
 
 CREATE TABLE IF NOT EXISTS eval_verdicts (
-    eval_run_id                 VARCHAR(64) NOT NULL,
+    eval_run_id                 VARCHAR(64) NOT NULL REFERENCES eval_runs(eval_run_id),
     category                    VARCHAR(32) NOT NULL,
     question_id                 VARCHAR(64) NOT NULL,
     score                       INTEGER NOT NULL,
@@ -174,7 +174,7 @@ CREATE TABLE IF NOT EXISTS machines (
 
 CREATE TABLE IF NOT EXISTS daemons (
     daemon_id                   VARCHAR(64) PRIMARY KEY,
-    machine_id                  VARCHAR(64) NOT NULL,
+    machine_id                  VARCHAR(64) NOT NULL REFERENCES machines(machine_id),
     daemon_name                 VARCHAR(64) NOT NULL,
     advertised_vendors          TEXT NOT NULL,
     max_agents                  INTEGER NOT NULL DEFAULT 4,

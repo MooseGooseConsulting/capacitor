@@ -84,6 +84,60 @@ public class SchemaMigrationTests {
     }
 
     [Test]
+    public async Task InitializeAsync_declares_and_enforces_spec_foreign_keys() {
+        using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+
+        await SqliteDatabaseInitializer.InitializeAsync(connection);
+
+        var workItemSessions = await ListForeignKeyTargetsAsync(connection, "work_item_sessions");
+        await Assert.That(workItemSessions).Contains("work_item_id->work_items.work_item_id");
+        await Assert.That(workItemSessions).Contains("session_id->sessions.session_id");
+
+        var breakdowns = await ListForeignKeyTargetsAsync(connection, "work_item_breakdowns");
+        await Assert.That(breakdowns).Contains("parent_id->work_items.work_item_id");
+        await Assert.That(breakdowns).Contains("part_id->work_items.work_item_id");
+
+        var relations = await ListForeignKeyTargetsAsync(connection, "work_item_relations");
+        await Assert.That(relations).Contains("from_id->work_items.work_item_id");
+        await Assert.That(relations).Contains("to_id->work_items.work_item_id");
+
+        var sessions = await ListForeignKeyTargetsAsync(connection, "sessions");
+        await Assert.That(sessions).Contains("previous_session_id->sessions.session_id");
+        await Assert.That(sessions).Contains("next_session_id->sessions.session_id");
+
+        var subagents = await ListForeignKeyTargetsAsync(connection, "subagent_runs");
+        await Assert.That(subagents).Contains("parent_session_id->sessions.session_id");
+
+        var evalRuns = await ListForeignKeyTargetsAsync(connection, "eval_runs");
+        await Assert.That(evalRuns).Contains("session_id->sessions.session_id");
+
+        var verdicts = await ListForeignKeyTargetsAsync(connection, "eval_verdicts");
+        await Assert.That(verdicts).Contains("eval_run_id->eval_runs.eval_run_id");
+
+        var daemons = await ListForeignKeyTargetsAsync(connection, "daemons");
+        await Assert.That(daemons).Contains("machine_id->machines.machine_id");
+
+        using (var orphan = connection.CreateCommand()) {
+            orphan.CommandText =
+                """
+                INSERT INTO work_item_sessions (work_item_id, session_id, correlation_source, attached_at)
+                VALUES ('missing-item', 'missing-session', 'manual_mcp', '2026-01-01T00:00:00Z');
+                """;
+            await Assert.That(orphan.ExecuteNonQueryAsync).Throws<SqliteException>();
+        }
+
+        using (var eventInsert = connection.CreateCommand()) {
+            eventInsert.CommandText =
+                """
+                INSERT INTO session_events (session_id, line_number, event_type, vendor, timestamp)
+                VALUES ('ahead-of-header', 1, 'Message', 'claude', '2026-01-01T00:00:00Z');
+                """;
+            await Assert.That(await eventInsert.ExecuteNonQueryAsync()).IsEqualTo(1);
+        }
+    }
+
+    [Test]
     public async Task analytics_views_sql_is_postgresql_safe() {
         var viewsSql = await SqliteDatabaseInitializer.GetEmbeddedMigrationAsync("002_analytics_views.sql");
         await Assert.That(viewsSql.Contains("CREATE VIEW IF NOT EXISTS", StringComparison.OrdinalIgnoreCase)).IsFalse();
@@ -172,6 +226,18 @@ public class SchemaMigrationTests {
         }
 
         return columns;
+    }
+
+    static async Task<List<string>> ListForeignKeyTargetsAsync(SqliteConnection connection, string table) {
+        var keys = new List<string>();
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = $"SELECT \"from\", \"table\", \"to\" FROM pragma_foreign_key_list('{table}');";
+        using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync()) {
+            keys.Add($"{reader.GetString(0)}->{reader.GetString(1)}.{reader.GetString(2)}");
+        }
+
+        return keys;
     }
 
     static async Task<List<string>> ListPrimaryKeyColumnsAsync(SqliteConnection connection, string table) {

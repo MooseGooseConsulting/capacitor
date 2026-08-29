@@ -18,6 +18,12 @@ public static class SqliteDatabaseInitializer {
         string schemaSql,
         string viewsSql,
         CancellationToken ct = default) {
+        // SQLite ignores FOREIGN KEY inside a transaction, so enable it first.
+        using (var pragma = connection.CreateCommand()) {
+            pragma.CommandText = "PRAGMA foreign_keys = ON;";
+            await pragma.ExecuteNonQueryAsync(ct);
+        }
+
         using var transaction = connection.BeginTransaction();
         try {
             using (var cmd = connection.CreateCommand()) {
