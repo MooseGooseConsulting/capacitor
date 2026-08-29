@@ -1,0 +1,189 @@
+/* Custom properties as resolved on :root by the live console, light theme.
+   Read from https://moosegoose.kcap.ai/sessions with getComputedStyle — these are
+   computed values, not the declarations in components.css, so the MudBlazor theme
+   the server injects at runtime is already folded in.
+
+   Dark theme lives in tokens-dark.css; the console picks between them from a
+   `kcap-theme` cookie honoured during SSR (see ../js/theme.js). */
+:root {
+  --kcap-assistant-bubble-bg: rgba(255,255,255,1);
+  --kcap-tour-overlay-opacity: 0.45;
+
+  /* layout */
+  --mud-appbar-height: 64px;
+  --mud-drawer-width-left: 240px;
+  --mud-drawer-width-right: 240px;
+  --mud-drawer-width-mini-left: 56px;
+  --mud-drawer-width-mini-right: 56px;
+  --mud-default-borderradius: 4px;
+
+  /* brand */
+  --mud-palette-primary: rgba(99,27,58,1);
+  --mud-palette-primary-rgb: 99,27,58;
+  --mud-palette-primary-darken: rgb(72,20,42);
+  --mud-palette-primary-lighten: rgb(128,35,75);
+  --mud-palette-primary-hover: rgba(99,27,58,0.058823529411764705);
+  --mud-palette-primary-text: rgba(255,255,255,1);
+  --mud-palette-secondary: rgba(141,95,255,1);
+  --mud-palette-secondary-rgb: 141,95,255;
+  --mud-palette-secondary-darken: rgb(116,61,255);
+  --mud-palette-secondary-lighten: rgb(167,133,255);
+  --mud-palette-secondary-hover: rgba(141,95,255,0.058823529411764705);
+  --mud-palette-secondary-text: rgba(255,255,255,1);
+  --mud-palette-tertiary: rgba(142,47,82,1);
+  --mud-palette-tertiary-rgb: 142,47,82;
+  --mud-palette-tertiary-darken: rgb(115,38,66);
+  --mud-palette-tertiary-lighten: rgb(168,56,97);
+  --mud-palette-tertiary-hover: rgba(142,47,82,0.058823529411764705);
+  --mud-palette-tertiary-text: rgba(255,255,255,1);
+
+  /* status */
+  --mud-palette-info: rgba(72,85,167,1);
+  --mud-palette-info-rgb: 72,85,167;
+  --mud-palette-info-darken: rgb(60,70,139);
+  --mud-palette-info-lighten: rgb(91,103,185);
+  --mud-palette-info-hover: rgba(72,85,167,0.058823529411764705);
+  --mud-palette-info-text: rgba(255,255,255,1);
+  --mud-palette-success: rgba(44,102,125,1);
+  --mud-palette-success-rgb: 44,102,125;
+  --mud-palette-success-darken: rgb(34,80,98);
+  --mud-palette-success-lighten: rgb(53,123,151);
+  --mud-palette-success-hover: rgba(44,102,125,0.058823529411764705);
+  --mud-palette-success-text: rgba(255,255,255,1);
+  --mud-palette-warning: rgba(125,111,5,1);
+  --mud-palette-warning-rgb: 125,111,5;
+  --mud-palette-warning-darken: rgb(88,78,4);
+  --mud-palette-warning-lighten: rgb(157,139,7);
+  --mud-palette-warning-hover: rgba(125,111,5,0.058823529411764705);
+  --mud-palette-warning-text: rgba(255,255,255,1);
+  --mud-palette-error: rgba(183,87,129,1);
+  --mud-palette-error-rgb: 183,87,129;
+  --mud-palette-error-darken: rgb(164,70,111);
+  --mud-palette-error-lighten: rgb(194,112,148);
+  --mud-palette-error-hover: rgba(183,87,129,0.058823529411764705);
+  --mud-palette-error-text: rgba(255,255,255,1);
+  --mud-palette-dark: rgba(66,66,66,1);
+  --mud-palette-dark-rgb: 66,66,66;
+  --mud-palette-dark-darken: rgb(46,46,46);
+  --mud-palette-dark-lighten: rgb(87,87,87);
+  --mud-palette-dark-hover: rgba(66,66,66,0.058823529411764705);
+  --mud-palette-dark-text: rgba(255,255,255,1);
+
+  /* surfaces */
+  --mud-palette-background: rgba(238,242,244,1);
+  --mud-palette-background-gray: rgba(245,248,249,1);
+  --mud-palette-surface: rgba(255,255,255,1);
+  --mud-palette-surface-rgb: 255,255,255;
+  --mud-palette-appbar-background: rgba(255,255,255,0.8);
+  --mud-palette-appbar-text: rgba(0,0,0,1);
+  --mud-palette-drawer-background: rgba(255,255,255,1);
+  --mud-palette-drawer-text: rgba(0,0,0,1);
+  --mud-palette-drawer-icon: rgba(99,27,58,1);
+  --mud-palette-black: rgba(0,0,0,1);
+  --mud-palette-white: rgba(255,255,255,1);
+
+  /* text */
+  --mud-palette-text-primary: rgba(0,0,0,1);
+  --mud-palette-text-primary-rgb: 0,0,0;
+  --mud-palette-text-secondary: rgba(44,102,125,1);
+  --mud-palette-text-secondary-rgb: 44,102,125;
+  --mud-palette-text-disabled: rgba(0,0,0,0.3764705882352941);
+  --mud-palette-text-disabled-rgb: 0,0,0;
+
+  /* lines, dividers, tables */
+  --mud-palette-divider: rgba(236,241,243,1);
+  --mud-palette-divider-rgb: 236,241,243;
+  --mud-palette-divider-light: rgba(0,0,0,0.8);
+  --mud-palette-lines-default: rgba(217,227,232,1);
+  --mud-palette-lines-inputs: rgba(189,189,189,1);
+  --mud-palette-table-lines: rgba(217,227,232,1);
+  --mud-palette-table-hover: rgba(0,0,0,0.0392156862745098);
+  --mud-palette-table-striped: rgba(0,0,0,0.0196078431372549);
+  --mud-palette-border-opacity: 1;
+
+  /* greys */
+  --mud-palette-gray-default: #9E9E9E;
+  --mud-palette-gray-light: #e3eaed;
+  --mud-palette-gray-lighter: #f5f8f9;
+  --mud-palette-gray-dark: #757575;
+  --mud-palette-gray-darker: #616161;
+
+  /* action, overlay, ripple, skeleton */
+  --mud-palette-action-default: rgba(44,102,125,1);
+  --mud-palette-action-default-hover: rgba(44,102,125,0.058823529411764705);
+  --mud-palette-action-disabled: rgba(0,0,0,0.25882352941176473);
+  --mud-palette-action-disabled-background: rgba(0,0,0,0.11764705882352941);
+  --mud-palette-overlay-dark: rgba(33,33,33,0.4980392156862745);
+  --mud-palette-overlay-light: rgba(255,255,255,0.4980392156862745);
+  --mud-palette-skeleton: rgba(0,0,0,0.10980392156862745);
+  --mud-ripple-color: rgba(0,0,0,1);
+  --mud-ripple-opacity: 0.1;
+  --mud-ripple-opacity-secondary: 0.2;
+  --mud-native-html-color-scheme: light;
+
+  /* session phase taxonomy — matches primary_phase / secondary_phase in the analytics views */
+  --phase-spec: #d97706;
+  --phase-implementation: #7c5cf0;
+  --phase-review: #0d9488;
+  --phase-debug: #db2777;
+  --phase-chore: #64748b;
+  --phase-neutral: rgba(44,102,125,1);
+
+  /* work-tracker lanes and milestone states */
+  --wt-lane-commit: #64748b;
+  --wt-lane-issue: #7c5cf0;
+  --wt-lane-pr: #2f6fe0;
+  --wt-ms-idle: rgba(44,102,125,1);
+  --wt-ms-merged: #059669;
+  --wt-ms-closed: #059669;
+  --wt-ms-reopened: #d97706;
+
+  /* z-index scale */
+  --mud-zindex-drawer: 1100;
+  --mud-zindex-popover: 1200;
+  --mud-zindex-appbar: 1300;
+  --mud-zindex-dialog: 1400;
+  --mud-zindex-snackbar: 1500;
+  --mud-zindex-tooltip: 1600;
+
+  /* editor sash (Monaco) */
+  --vscode-sash-size: 4px;
+  --vscode-sash-hover-size: 4px;
+}
+
+/* Type scale. Every family is "Inter, Arial, sans-serif"; Solina is used only for the
+   wordmark, which is text rather than a logo image. The scale is heavily overridden from
+   MudBlazor's Material defaults — h1 is 1.75rem here against Material's 6rem — so a
+   rebuild that leaves MudBlazor's typography alone will not look like this console. */
+:root {
+  --mud-typography-default-family: Inter, Arial, sans-serif;
+  --mud-typography-default-size: .875rem;
+  --mud-typography-default-weight: 400;
+  --mud-typography-default-lineheight: 1.5;
+  --mud-typography-default-letterspacing: .01071em;
+  --mud-typography-default-text-transform: none;
+
+  --mud-typography-h1-size: 1.75rem;  --mud-typography-h1-weight: 700; --mud-typography-h1-lineheight: 1.2;  --mud-typography-h1-letterspacing: -0.02em;
+  --mud-typography-h2-size: 1.5rem;   --mud-typography-h2-weight: 700; --mud-typography-h2-lineheight: 1.25; --mud-typography-h2-letterspacing: -0.01em;
+  --mud-typography-h3-size: 1.25rem;  --mud-typography-h3-weight: 500; --mud-typography-h3-lineheight: 1.3;  --mud-typography-h3-letterspacing: -0.01em;
+  --mud-typography-h4-size: 1.125rem; --mud-typography-h4-weight: 500; --mud-typography-h4-lineheight: 1.35; --mud-typography-h4-letterspacing: .00735em;
+  --mud-typography-h5-size: 1rem;     --mud-typography-h5-weight: 500; --mud-typography-h5-lineheight: 1.4;  --mud-typography-h5-letterspacing: 0;
+  --mud-typography-h6-size: .875rem;  --mud-typography-h6-weight: 600; --mud-typography-h6-lineheight: 1.4;  --mud-typography-h6-letterspacing: .0075em;
+
+  --mud-typography-subtitle1-size: 1rem;    --mud-typography-subtitle1-weight: 500; --mud-typography-subtitle1-lineheight: 1.5; --mud-typography-subtitle1-letterspacing: .00938em;
+  --mud-typography-subtitle2-size: .875rem; --mud-typography-subtitle2-weight: 500; --mud-typography-subtitle2-lineheight: 1.5; --mud-typography-subtitle2-letterspacing: .00714em;
+  --mud-typography-body1-size: .875rem;     --mud-typography-body1-weight: 400; --mud-typography-body1-lineheight: 1.6; --mud-typography-body1-letterspacing: .00938em;
+  --mud-typography-body2-size: .8125rem;    --mud-typography-body2-weight: 400; --mud-typography-body2-lineheight: 1.5; --mud-typography-body2-letterspacing: .01071em;
+  --mud-typography-caption-size: .75rem;    --mud-typography-caption-weight: 400; --mud-typography-caption-lineheight: 1.5; --mud-typography-caption-letterspacing: .03333em;
+
+  --mud-typography-button-size: .8125rem; --mud-typography-button-weight: 600; --mud-typography-button-lineheight: 1.75; --mud-typography-button-letterspacing: 0.04em;
+  --mud-typography-button-text-transform: uppercase;
+
+  /* Overline keeps its 0.08em tracking but drops Material's uppercase. */
+  --mud-typography-overline-size: .6875rem; --mud-typography-overline-weight: 600; --mud-typography-overline-lineheight: 2; --mud-typography-overline-letterspacing: 0.08em;
+  --mud-typography-overline-text-transform: none;
+}
+
+/* Elevations 0-24 are MudBlazor's stock Material shadows, unmodified — take them from the
+   library rather than pinning them here. Elevation 25 is the one addition:
+   0 5px 5px -3px rgba(0,0,0,.06), 0 8px 10px 1px rgba(0,0,0,.042), 0 3px 14px 2px rgba(0,0,0,.036) */

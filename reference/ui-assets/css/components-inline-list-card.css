@@ -1,0 +1,114 @@
+/* Session list card, recovered from an inline <style> block on /sessions.
+
+   This is NOT in components.css. The console ships roughly 44 KB of bespoke CSS in inline
+   <style> tags that Blazor emits per component instance — 13 unique blocks repeated up to
+   127 times each on a full session list, 1.7 MB inline in total. components.css is only
+   part of the stylesheet; anything rebuilt from it alone will be missing the session card,
+   the compact stat rows, the repo sidebar, the setup progress card and the empty states.
+   The remaining blocks are listed in ../README.md with the snippet that extracts them. */
+
+.list-card {
+    background: var(--mud-palette-background);
+    border-radius: 6px;
+    padding: 8px;
+    cursor: pointer;
+    transition: background-color 0.15s ease;
+    /* 1px border reserved (transparent) so the light-mode outline below adds no layout shift;
+       left stays the 3px selection-accent slot. Dark mode keeps borderless cards. */
+    border: 1px solid transparent;
+    border-left: 3px solid transparent;
+}
+
+/* Light mode: Background == Surface == white, so cards are white-on-white. Give them a
+   subtle outline for separation. Left edge stays the selection-accent slot. */
+:root[data-kcap-theme="light"] .list-card {
+    border-top-color: var(--mud-palette-lines-default);
+    border-right-color: var(--mud-palette-lines-default);
+    border-bottom-color: var(--mud-palette-lines-default);
+}
+
+/* AI-2097 AUTO TWIN — absence of data-kcap-theme means "never chose", so the light arm above
+   misses every unchosen visitor whose system is light. Edit both or neither. */
+@media (prefers-color-scheme: light) {
+    :root:not([data-kcap-theme]) .list-card {
+        border-top-color: var(--mud-palette-lines-default);
+        border-right-color: var(--mud-palette-lines-default);
+        border-bottom-color: var(--mud-palette-lines-default);
+    }
+}
+
+.list-card:hover { background: var(--mud-palette-background-gray); }
+
+.list-card.selected {
+    background: var(--mud-palette-surface);
+    border-left: 3px solid var(--mud-palette-primary);
+}
+
+.list-card-header { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+
+.status-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.status-dot.active        { background-color: var(--mud-palette-success); }
+.status-dot.ended         { background-color: var(--mud-palette-text-disabled); }
+.status-dot.agent-running { background-color: var(--mud-palette-success); }
+.status-dot.agent-waiting { background-color: var(--mud-palette-warning); }
+.status-dot.agent-failed  { background-color: var(--mud-palette-error); }
+.status-dot.dot-pulse      { animation: lc-dot-pulse 2s infinite; }
+.status-dot.dot-pulse-fast { animation: lc-dot-pulse 1s infinite; }
+
+@keyframes lc-dot-pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.4; }
+}
+
+.lc-chip {
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1;
+    min-width: 18px;
+    height: 18px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 9px;
+    flex-shrink: 0;
+}
+.lc-chip-attention { background-color: var(--mud-palette-warning); color: var(--mud-palette-warning-contrasttext, #000); }
+.lc-chip-waiting   { border: 1px solid var(--mud-palette-info); color: var(--mud-palette-info); }
+.lc-chip-failed    { background-color: var(--mud-palette-error); color: var(--mud-palette-error-text, #fff); padding: 0 8px; font-size: 11px; max-width: 140px; min-width: 0; }
+
+.lc-chip-workitem > span { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.lc-chip-workitem:hover  { text-decoration: underline; }
+
+.lc-disconnected { font-size: 10px; color: var(--mud-palette-error); font-weight: 600; flex-shrink: 0; }
+
+.lc-visibility { display: inline-flex; align-items: center; flex-shrink: 0; color: var(--mud-palette-text-secondary); }
+
+.list-card-title {
+    font-size: 0.85rem;
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+}
+
+.list-card-repo {
+    font-size: 0.75rem;
+    margin-bottom: 4px;
+    margin-left: 14px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--mud-palette-text-secondary);
+}
+
+.list-card-pr        { color: var(--mud-palette-primary); text-decoration: none; }
+.list-card-pr:hover  { text-decoration: underline; }
+
+.list-card-avatar {
+    width: 20px; height: 20px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    margin-left: auto;
+    opacity: 0.8;
+}

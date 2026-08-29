@@ -1,0 +1,222 @@
+/* Dark theme, resolved on :root the same way as tokens.css.
+
+   Dark is a re-palette, not an inversion — the brand hue flips rather than darkens.
+   Primary goes wine -> lavender (99,27,58 becomes 222,217,255) and takes near-black text;
+   success goes teal -> mint; warning goes olive -> yellow. Anything that recolours dark by
+   filtering or by lightening the light palette will be wrong. Only the tokens that differ
+   from tokens.css are listed; the rest carry over unchanged.
+
+   `data-kcap-theme` is present only when the user has chosen. Its absence follows
+   prefers-color-scheme, so this delta has a system-dark twin: CSS cannot share a
+   selector across a media boundary, and the two arms must stay identical. */
+:root[data-kcap-theme="dark"] {
+  --mud-native-html-color-scheme: dark;
+
+  /* brand */
+  --mud-palette-primary: rgba(222,217,255,1);
+  --mud-palette-primary-rgb: 222,217,255;
+  --mud-palette-primary-darken: rgb(193,184,255);
+  --mud-palette-primary-lighten: rgb(255,255,255);
+  --mud-palette-primary-hover: rgba(222,217,255,0.058823529411764705);
+  --mud-palette-primary-text: rgba(8,11,13,1);
+  --mud-palette-tertiary: rgba(219,171,192,1);
+  --mud-palette-tertiary-rgb: 219,171,192;
+  --mud-palette-tertiary-darken: rgb(206,141,169);
+  --mud-palette-tertiary-lighten: rgb(231,198,212);
+  --mud-palette-tertiary-hover: rgba(219,171,192,0.058823529411764705);
+  /* secondary is the one brand colour that does not move: rgba(141,95,255,1) in both themes */
+
+  /* status */
+  --mud-palette-success: rgba(100,237,187,1);
+  --mud-palette-success-rgb: 100,237,187;
+  --mud-palette-success-darken: rgb(68,233,172);
+  --mud-palette-success-lighten: rgb(136,241,203);
+  --mud-palette-success-hover: rgba(100,237,187,0.058823529411764705);
+  --mud-palette-success-text: rgba(8,11,13,1);
+  --mud-palette-warning: rgba(255,237,78,1);
+  --mud-palette-warning-rgb: 255,237,78;
+  --mud-palette-warning-darken: rgb(255,234,41);
+  --mud-palette-warning-lighten: rgb(255,241,112);
+  --mud-palette-warning-hover: rgba(255,237,78,0.058823529411764705);
+  --mud-palette-warning-text: rgba(8,11,13,1);
+  --mud-palette-error: rgba(255,74,128,1);
+  --mud-palette-error-rgb: 255,74,128;
+  --mud-palette-error-darken: rgb(255,41,105);
+  --mud-palette-error-lighten: rgb(255,112,155);
+  --mud-palette-error-hover: rgba(255,74,128,0.058823529411764705);
+  --mud-palette-info: rgba(71,155,255,1);
+  --mud-palette-info-rgb: 71,155,255;
+  --mud-palette-info-darken: rgb(36,134,255);
+  --mud-palette-info-lighten: rgb(112,176,255);
+  --mud-palette-info-hover: rgba(71,155,255,0.058823529411764705);
+  --mud-palette-dark: rgba(39,39,47,1);
+  --mud-palette-dark-rgb: 39,39,47;
+  --mud-palette-dark-darken: rgb(23,23,28);
+  --mud-palette-dark-lighten: rgb(56,56,67);
+  --mud-palette-dark-hover: rgba(39,39,47,0.058823529411764705);
+
+  /* surfaces — three steps: page 08/0b/0d, surface & chrome 1e/25/28, raised 27/27/2f */
+  --mud-palette-background: rgba(8,11,13,1);
+  --mud-palette-background-gray: rgba(22,28,30,1);
+  --mud-palette-surface: rgba(30,37,40,1);
+  --mud-palette-surface-rgb: 30,37,40;
+  --mud-palette-appbar-background: rgba(30,37,40,1);
+  --mud-palette-appbar-text: rgba(184,185,193,1);
+  --mud-palette-drawer-background: rgba(30,37,40,1);
+  --mud-palette-drawer-text: rgba(184,185,193,1);
+  --mud-palette-drawer-icon: rgba(184,185,193,1);
+  --mud-palette-black: rgba(39,39,47,1);
+  --kcap-assistant-bubble-bg: rgba(39,39,47,1);
+
+  /* text */
+  --mud-palette-text-primary: rgba(255,255,255,1);
+  --mud-palette-text-primary-rgb: 255,255,255;
+  --mud-palette-text-secondary: rgba(167,154,184,1);
+  --mud-palette-text-secondary-rgb: 167,154,184;
+  --mud-palette-text-disabled: rgba(184,185,193,0.2);
+  --mud-palette-text-disabled-rgb: 184,185,193;
+
+  /* lines, dividers, tables, greys */
+  --mud-palette-divider: rgba(30,37,40,1);
+  --mud-palette-divider-rgb: 30,37,40;
+  --mud-palette-divider-light: rgba(255,255,255,0.058823529411764705);
+  --mud-palette-lines-default: rgba(38,46,49,1);
+  --mud-palette-lines-inputs: rgba(255,255,255,0.2980392156862745);
+  --mud-palette-table-lines: rgba(38,46,49,1);
+  --mud-palette-table-striped: rgba(255,255,255,0.2);
+  --mud-palette-gray-light: #262e31;
+  --mud-palette-gray-lighter: #1e2528;
+
+  /* action, overlay, ripple, skeleton */
+  --mud-palette-action-default: rgba(184,185,193,1);
+  --mud-palette-action-default-hover: rgba(184,185,193,0.058823529411764705);
+  --mud-palette-action-disabled: rgba(184,185,193,0.30196078431372547);
+  --mud-palette-action-disabled-background: rgba(30,37,40,0.30196078431372547);
+  --mud-palette-overlay-light: #1e252880;
+  --mud-palette-skeleton: rgba(255,255,255,0.10980392156862745);
+  --mud-ripple-color: rgba(255,255,255,1);
+
+  /* phase taxonomy — same hues, lifted for contrast on near-black */
+  --phase-spec: #f59e0b;
+  --phase-implementation: #a78bfa;
+  --phase-review: #2dd4bf;
+  --phase-debug: #ec4899;
+  --phase-chore: #94a3b8;
+  --phase-neutral: rgba(167,154,184,1);
+
+  /* work-tracker lanes and milestone states */
+  --wt-lane-commit: #94a3b8;
+  --wt-lane-issue: #8b7cf6;
+  --wt-lane-pr: #3f8cfd;
+  --wt-ms-idle: rgba(167,154,184,1);
+  --wt-ms-merged: #34d399;
+  --wt-ms-closed: #34d399;
+  --wt-ms-reopened: #fbbf24;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-kcap-theme]) {
+    --mud-native-html-color-scheme: dark;
+
+    /* brand */
+    --mud-palette-primary: rgba(222,217,255,1);
+    --mud-palette-primary-rgb: 222,217,255;
+    --mud-palette-primary-darken: rgb(193,184,255);
+    --mud-palette-primary-lighten: rgb(255,255,255);
+    --mud-palette-primary-hover: rgba(222,217,255,0.058823529411764705);
+    --mud-palette-primary-text: rgba(8,11,13,1);
+    --mud-palette-tertiary: rgba(219,171,192,1);
+    --mud-palette-tertiary-rgb: 219,171,192;
+    --mud-palette-tertiary-darken: rgb(206,141,169);
+    --mud-palette-tertiary-lighten: rgb(231,198,212);
+    --mud-palette-tertiary-hover: rgba(219,171,192,0.058823529411764705);
+    /* secondary is the one brand colour that does not move: rgba(141,95,255,1) in both themes */
+
+    /* status */
+    --mud-palette-success: rgba(100,237,187,1);
+    --mud-palette-success-rgb: 100,237,187;
+    --mud-palette-success-darken: rgb(68,233,172);
+    --mud-palette-success-lighten: rgb(136,241,203);
+    --mud-palette-success-hover: rgba(100,237,187,0.058823529411764705);
+    --mud-palette-success-text: rgba(8,11,13,1);
+    --mud-palette-warning: rgba(255,237,78,1);
+    --mud-palette-warning-rgb: 255,237,78;
+    --mud-palette-warning-darken: rgb(255,234,41);
+    --mud-palette-warning-lighten: rgb(255,241,112);
+    --mud-palette-warning-hover: rgba(255,237,78,0.058823529411764705);
+    --mud-palette-warning-text: rgba(8,11,13,1);
+    --mud-palette-error: rgba(255,74,128,1);
+    --mud-palette-error-rgb: 255,74,128;
+    --mud-palette-error-darken: rgb(255,41,105);
+    --mud-palette-error-lighten: rgb(255,112,155);
+    --mud-palette-error-hover: rgba(255,74,128,0.058823529411764705);
+    --mud-palette-info: rgba(71,155,255,1);
+    --mud-palette-info-rgb: 71,155,255;
+    --mud-palette-info-darken: rgb(36,134,255);
+    --mud-palette-info-lighten: rgb(112,176,255);
+    --mud-palette-info-hover: rgba(71,155,255,0.058823529411764705);
+    --mud-palette-dark: rgba(39,39,47,1);
+    --mud-palette-dark-rgb: 39,39,47;
+    --mud-palette-dark-darken: rgb(23,23,28);
+    --mud-palette-dark-lighten: rgb(56,56,67);
+    --mud-palette-dark-hover: rgba(39,39,47,0.058823529411764705);
+
+    /* surfaces — three steps: page 08/0b/0d, surface & chrome 1e/25/28, raised 27/27/2f */
+    --mud-palette-background: rgba(8,11,13,1);
+    --mud-palette-background-gray: rgba(22,28,30,1);
+    --mud-palette-surface: rgba(30,37,40,1);
+    --mud-palette-surface-rgb: 30,37,40;
+    --mud-palette-appbar-background: rgba(30,37,40,1);
+    --mud-palette-appbar-text: rgba(184,185,193,1);
+    --mud-palette-drawer-background: rgba(30,37,40,1);
+    --mud-palette-drawer-text: rgba(184,185,193,1);
+    --mud-palette-drawer-icon: rgba(184,185,193,1);
+    --mud-palette-black: rgba(39,39,47,1);
+    --kcap-assistant-bubble-bg: rgba(39,39,47,1);
+
+    /* text */
+    --mud-palette-text-primary: rgba(255,255,255,1);
+    --mud-palette-text-primary-rgb: 255,255,255;
+    --mud-palette-text-secondary: rgba(167,154,184,1);
+    --mud-palette-text-secondary-rgb: 167,154,184;
+    --mud-palette-text-disabled: rgba(184,185,193,0.2);
+    --mud-palette-text-disabled-rgb: 184,185,193;
+
+    /* lines, dividers, tables, greys */
+    --mud-palette-divider: rgba(30,37,40,1);
+    --mud-palette-divider-rgb: 30,37,40;
+    --mud-palette-divider-light: rgba(255,255,255,0.058823529411764705);
+    --mud-palette-lines-default: rgba(38,46,49,1);
+    --mud-palette-lines-inputs: rgba(255,255,255,0.2980392156862745);
+    --mud-palette-table-lines: rgba(38,46,49,1);
+    --mud-palette-table-striped: rgba(255,255,255,0.2);
+    --mud-palette-gray-light: #262e31;
+    --mud-palette-gray-lighter: #1e2528;
+
+    /* action, overlay, ripple, skeleton */
+    --mud-palette-action-default: rgba(184,185,193,1);
+    --mud-palette-action-default-hover: rgba(184,185,193,0.058823529411764705);
+    --mud-palette-action-disabled: rgba(184,185,193,0.30196078431372547);
+    --mud-palette-action-disabled-background: rgba(30,37,40,0.30196078431372547);
+    --mud-palette-overlay-light: #1e252880;
+    --mud-palette-skeleton: rgba(255,255,255,0.10980392156862745);
+    --mud-ripple-color: rgba(255,255,255,1);
+
+    /* phase taxonomy — same hues, lifted for contrast on near-black */
+    --phase-spec: #f59e0b;
+    --phase-implementation: #a78bfa;
+    --phase-review: #2dd4bf;
+    --phase-debug: #ec4899;
+    --phase-chore: #94a3b8;
+    --phase-neutral: rgba(167,154,184,1);
+
+    /* work-tracker lanes and milestone states */
+    --wt-lane-commit: #94a3b8;
+    --wt-lane-issue: #8b7cf6;
+    --wt-lane-pr: #3f8cfd;
+    --wt-ms-idle: rgba(167,154,184,1);
+    --wt-ms-merged: #34d399;
+    --wt-ms-closed: #34d399;
+    --wt-ms-reopened: #fbbf24;
+  }
+}
