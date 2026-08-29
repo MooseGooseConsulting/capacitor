@@ -19,3 +19,7 @@ public interface ISessionRepository {
     Task<SessionHeaderRecord?> GetSessionAsync(string sessionId, CancellationToken ct = default);
     Task UpdateSessionAsync(SessionHeaderRecord session, CancellationToken ct = default);
 }
+
+public interface ITranscriptIngest {
+    Task<int> IngestAsync(IReadOnlyList<SessionEventRecord> events, string? ownerUserId = null, CancellationToken ct = default);
+}
