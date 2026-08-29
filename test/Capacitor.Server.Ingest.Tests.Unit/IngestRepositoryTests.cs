@@ -202,4 +202,39 @@ public sealed class IngestRepositoryTests : IDisposable {
         await Assert.That(second.Vendor).IsEqualTo("claude");
         await Assert.That(second.Visibility).IsEqualTo("private");
     }
+
+    [Test]
+    public async Task AppendEvents_maps_item_id_and_token_columns_when_present() {
+        var sessionId = "sess-envelope-fields";
+        await _eventStore.AppendEventsAsync([
+            new() {
+                SessionId = sessionId,
+                LineNumber = 0,
+                EventType = "Raw",
+                Vendor = "codex",
+                Timestamp = DateTimeOffset.UtcNow,
+                ItemId = "item-42",
+                ReasoningTokens = 128,
+                ContextUsedTokens = 900,
+                ContextWindowTokens = 128000
+            },
+            new() {
+                SessionId = sessionId,
+                LineNumber = 1,
+                EventType = "Raw",
+                Vendor = "codex",
+                Timestamp = DateTimeOffset.UtcNow
+            }
+        ]);
+
+        var stored = await _eventStore.GetEventsAsync(sessionId);
+        await Assert.That(stored[0].ItemId).IsEqualTo("item-42");
+        await Assert.That(stored[0].ReasoningTokens).IsEqualTo(128);
+        await Assert.That(stored[0].ContextUsedTokens).IsEqualTo(900);
+        await Assert.That(stored[0].ContextWindowTokens).IsEqualTo(128000);
+        await Assert.That(stored[1].ItemId).IsNull();
+        await Assert.That(stored[1].ReasoningTokens).IsNull();
+        await Assert.That(stored[1].ContextUsedTokens).IsNull();
+        await Assert.That(stored[1].ContextWindowTokens).IsNull();
+    }
 }
