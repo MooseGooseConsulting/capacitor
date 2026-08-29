@@ -1,67 +1,94 @@
+using System.Data;
 using System.Globalization;
-using System.Text.RegularExpressions;
 using Microsoft.Data.Sqlite;
-using Capacitor.Server.Ingest;
 
 namespace Capacitor.Server.Analytics;
 
 public class SessionRollupProjector {
     private readonly SqliteConnection _connection;
-    private readonly ISessionRepository _sessionRepo;
 
-    public SessionRollupProjector(SqliteConnection connection, ISessionRepository sessionRepo) {
+    public SessionRollupProjector(SqliteConnection connection) {
         _connection = connection;
-        _sessionRepo = sessionRepo;
     }
 
     public async Task ProjectSessionRollupAsync(string sessionId, CancellationToken ct = default) {
-        var existing = await _sessionRepo.GetSessionAsync(sessionId, ct);
-        if (existing == null) return;
+        using var tx = _connection.BeginTransaction(IsolationLevel.Serializable);
 
         using var cmd = _connection.CreateCommand();
+        cmd.Transaction = tx;
         cmd.CommandText = @"
-            SELECT
-                COUNT(*) AS event_count,
-                SUM(CASE WHEN tool_name IS NOT NULL THEN 1 ELSE 0 END) AS tool_count,
-                SUM(input_tokens + output_tokens + cache_read_tokens + cache_write_tokens) AS total_tokens,
-                SUM(cost_usd) AS total_cost_usd,
-                MIN(timestamp) AS first_event,
-                MAX(timestamp) AS last_event
+            SELECT timestamp, tool_name,
+                   input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+                   cost_usd
             FROM session_events
             WHERE session_id = $session_id;";
         cmd.Parameters.AddWithValue("$session_id", sessionId);
 
-        using var reader = await cmd.ExecuteReaderAsync(ct);
-        if (await reader.ReadAsync(ct)) {
-            var eventCount = reader.IsDBNull(0) ? 0 : reader.GetInt32(0);
-            var toolCount = reader.IsDBNull(1) ? 0 : reader.GetInt32(1);
-            var totalTokens = reader.IsDBNull(2) ? 0 : reader.GetInt64(2);
-            var totalCost = reader.IsDBNull(3) ? 0m : reader.GetDecimal(3);
-            var firstEventStr = reader.IsDBNull(4) ? null : reader.GetString(4);
-            var lastEventStr = reader.IsDBNull(5) ? null : reader.GetString(5);
+        long eventCount = 0;
+        long toolCount = 0;
+        long totalTokens = 0;
+        decimal totalCost = 0m;
+        DateTimeOffset? first = null;
+        DateTimeOffset? last = null;
 
-            decimal durationMin = 0m;
-            DateTimeOffset? lastEventAt = null;
+        using (var reader = await cmd.ExecuteReaderAsync(ct)) {
+            while (await reader.ReadAsync(ct)) {
+                eventCount++;
+                if (!reader.IsDBNull(1)) {
+                    toolCount++;
+                }
 
-            if (firstEventStr != null && lastEventStr != null) {
-                var first = DateTimeOffset.Parse(firstEventStr, CultureInfo.InvariantCulture);
-                var last = DateTimeOffset.Parse(lastEventStr, CultureInfo.InvariantCulture);
-                lastEventAt = last;
-                durationMin = (decimal)Math.Round((last - first).TotalMinutes, 2);
+                totalTokens += reader.GetInt64(2) + reader.GetInt64(3)
+                    + reader.GetInt64(4) + reader.GetInt64(5);
+                totalCost += reader.GetDecimal(6);
+
+                var ts = DateTimeOffset.Parse(reader.GetString(0), CultureInfo.InvariantCulture);
+                if (first is null || ts < first) {
+                    first = ts;
+                }
+
+                if (last is null || ts > last) {
+                    last = ts;
+                }
             }
-
-            var updated = existing with {
-                EventCount = eventCount,
-                ToolCount = toolCount,
-                TotalTokens = totalTokens,
-                TotalCostUsd = totalCost,
-                DurationMin = durationMin,
-                LastEventAt = lastEventAt
-            };
-
-            await _sessionRepo.UpdateSessionAsync(updated, ct);
         }
+
+        decimal durationMin = 0m;
+        if (first is not null && last is not null) {
+            durationMin = (decimal)Math.Round((last.Value - first.Value).TotalMinutes, 2);
+        }
+
+        using var update = _connection.CreateCommand();
+        update.Transaction = tx;
+        // Only rollup columns, and only if this snapshot is at least as complete
+        // as whatever already landed — a delayed projector must not clobber a
+        // newer aggregate or rewrite status/title/visibility.
+        update.CommandText = @"
+            UPDATE sessions SET
+                event_count = $event_count,
+                tool_count = $tool_count,
+                total_tokens = $total_tokens,
+                total_cost_usd = $total_cost_usd,
+                duration_min = $duration_min,
+                last_event_at = $last_event_at
+            WHERE session_id = $session_id
+              AND event_count <= $event_count;";
+        update.Parameters.AddWithValue("$session_id", sessionId);
+        update.Parameters.AddWithValue("$event_count", SaturateToInt(eventCount));
+        update.Parameters.AddWithValue("$tool_count", SaturateToInt(toolCount));
+        update.Parameters.AddWithValue("$total_tokens", totalTokens);
+        update.Parameters.AddWithValue("$total_cost_usd", totalCost);
+        update.Parameters.AddWithValue("$duration_min", durationMin);
+        update.Parameters.AddWithValue(
+            "$last_event_at",
+            last is null ? DBNull.Value : last.Value.ToString("o", CultureInfo.InvariantCulture));
+
+        await update.ExecuteNonQueryAsync(ct);
+        tx.Commit();
     }
+
+    private static int SaturateToInt(long value) =>
+        value > int.MaxValue ? int.MaxValue : (int)value;
 }
 
 public class SqliteAnalyticsService {
@@ -76,17 +103,6 @@ public class SqliteAnalyticsService {
         "v_an_prs", "v_an_repositories"
     };
 
-    private static readonly Regex CteNamePattern = new(
-        @"\b([A-Za-z_][A-Za-z0-9_]*)\s+AS\s*\(",
-        RegexOptions.IgnoreCase | RegexOptions.Compiled);
-
-    // Captures every FROM/JOIN table reference plus its alias (if any), skipping
-    // over keywords (WHERE, ON, GROUP, ...) that can legally follow a bare
-    // reference so they are never mistaken for an alias.
-    private static readonly Regex TableRefPattern = new(
-        @"\b(?<kw>FROM|JOIN)\s+(?<view>[A-Za-z_][A-Za-z0-9_]*)(?:\s+(?:AS\s+)?(?<alias>(?!(?:WHERE|ON|GROUP|ORDER|LEFT|INNER|RIGHT|FULL|CROSS|JOIN|UNION|LIMIT|HAVING|SET|WHEN|FROM)\b)[A-Za-z_][A-Za-z0-9_]*))?",
-        RegexOptions.IgnoreCase | RegexOptions.Compiled);
-
     private readonly SqliteConnection _connection;
 
     public SqliteAnalyticsService(SqliteConnection connection) {
@@ -97,32 +113,7 @@ public class SqliteAnalyticsService {
         string sql, string scope, int maxRows = DefaultMaxRows, CancellationToken ct = default) {
         ArgumentException.ThrowIfNullOrWhiteSpace(scope);
 
-        var trimmed = sql.Trim();
-        var trimmedUpper = trimmed.ToUpperInvariant();
-        if (!trimmedUpper.StartsWith("SELECT", StringComparison.Ordinal) &&
-            !trimmedUpper.StartsWith("WITH", StringComparison.Ordinal)) {
-            throw new InvalidOperationException("Governed analytics query must be a read-only SELECT statement.");
-        }
-
-        // CTE names shadow the view they read from -- exempt them from the
-        // allowlist, but never rewrite them: the view underneath was already
-        // scoped when it was matched inside the CTE body.
-        var cteNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (Match m in CteNamePattern.Matches(trimmed)) {
-            cteNames.Add(m.Groups[1].Value);
-        }
-
-        var scopedSql = TableRefPattern.Replace(trimmed, m => {
-            var view = m.Groups["view"].Value;
-            if (!GovernedViews.Contains(view)) {
-                if (cteNames.Contains(view)) return m.Value;
-                throw new InvalidOperationException(
-                    $"Governed analytics query referenced a non-governed table or view: {view}");
-            }
-
-            var alias = m.Groups["alias"].Success ? m.Groups["alias"].Value : view;
-            return $"{m.Groups["kw"].Value} (SELECT * FROM {view} WHERE repo_hash = $scope OR $scope = 'global') {alias}";
-        });
+        var scopedSql = GovernedSql.Rewrite(sql, GovernedViews);
 
         var results = new List<Dictionary<string, object?>>();
         using var cmd = _connection.CreateCommand();
@@ -135,8 +126,14 @@ public class SqliteAnalyticsService {
             for (var i = 0; i < reader.FieldCount; i++) {
                 var name = reader.GetName(i);
                 var val = reader.IsDBNull(i) ? null : reader.GetValue(i);
-                row[name] = val;
+                if (!row.TryAdd(name, val)) {
+                    var n = 2;
+                    while (!row.TryAdd($"{name}_{n}", val)) {
+                        n++;
+                    }
+                }
             }
+
             results.Add(row);
         }
 
