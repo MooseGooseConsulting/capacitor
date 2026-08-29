@@ -7,7 +7,8 @@ namespace Capacitor.Server.Ingest;
 public class SqliteEventStoreRepository : IEventStoreRepository {
     private const string EventColumns = @"
         session_id, agent_id, line_number, logical_seq, event_id, event_type, vendor, model,
-        timestamp, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd,
+        timestamp, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+        reasoning_tokens, context_used_tokens, context_window_tokens, cost_usd, item_id,
         tool_server, tool_name, tool_input, tool_output, tool_exit_code, is_error, content, raw_payload";
 
     private readonly SqliteConnection _connection;
@@ -26,7 +27,8 @@ public class SqliteEventStoreRepository : IEventStoreRepository {
                 INSERT INTO session_events ({EventColumns})
                 VALUES (
                     $session_id, $agent_id, $line_number, $logical_seq, $event_id, $event_type, $vendor, $model,
-                    $timestamp, $input_tokens, $output_tokens, $cache_read_tokens, $cache_write_tokens, $cost_usd,
+                    $timestamp, $input_tokens, $output_tokens, $cache_read_tokens, $cache_write_tokens,
+                    $reasoning_tokens, $context_used_tokens, $context_window_tokens, $cost_usd, $item_id,
                     $tool_server, $tool_name, $tool_input, $tool_output, $tool_exit_code, $is_error, $content, $raw_payload
                 )
                 ON CONFLICT(session_id, agent_id, line_number) DO NOTHING;
@@ -50,7 +52,11 @@ public class SqliteEventStoreRepository : IEventStoreRepository {
                 cmd.Parameters.AddWithValue("$output_tokens", ev.OutputTokens);
                 cmd.Parameters.AddWithValue("$cache_read_tokens", ev.CacheReadTokens);
                 cmd.Parameters.AddWithValue("$cache_write_tokens", ev.CacheWriteTokens);
+                cmd.Parameters.AddWithValue("$reasoning_tokens", (object?)ev.ReasoningTokens ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$context_used_tokens", (object?)ev.ContextUsedTokens ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$context_window_tokens", (object?)ev.ContextWindowTokens ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("$cost_usd", ev.CostUsd);
+                cmd.Parameters.AddWithValue("$item_id", (object?)ev.ItemId ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("$tool_server", (object?)ev.ToolServer ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("$tool_name", (object?)ev.ToolName ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("$tool_input", (object?)ev.ToolInput ?? DBNull.Value);
@@ -124,14 +130,18 @@ public class SqliteEventStoreRepository : IEventStoreRepository {
         OutputTokens = reader.GetInt64(10),
         CacheReadTokens = reader.GetInt64(11),
         CacheWriteTokens = reader.GetInt64(12),
-        CostUsd = reader.GetDecimal(13),
-        ToolServer = reader.IsDBNull(14) ? null : reader.GetString(14),
-        ToolName = reader.IsDBNull(15) ? null : reader.GetString(15),
-        ToolInput = reader.IsDBNull(16) ? null : reader.GetString(16),
-        ToolOutput = reader.IsDBNull(17) ? null : reader.GetString(17),
-        ToolExitCode = reader.IsDBNull(18) ? null : reader.GetInt32(18),
-        IsError = reader.GetInt32(19) != 0,
-        Content = reader.IsDBNull(20) ? null : reader.GetString(20),
-        RawPayload = reader.IsDBNull(21) ? null : reader.GetString(21)
+        ReasoningTokens = reader.IsDBNull(13) ? null : reader.GetInt64(13),
+        ContextUsedTokens = reader.IsDBNull(14) ? null : reader.GetInt64(14),
+        ContextWindowTokens = reader.IsDBNull(15) ? null : reader.GetInt64(15),
+        CostUsd = reader.GetDecimal(16),
+        ItemId = reader.IsDBNull(17) ? null : reader.GetString(17),
+        ToolServer = reader.IsDBNull(18) ? null : reader.GetString(18),
+        ToolName = reader.IsDBNull(19) ? null : reader.GetString(19),
+        ToolInput = reader.IsDBNull(20) ? null : reader.GetString(20),
+        ToolOutput = reader.IsDBNull(21) ? null : reader.GetString(21),
+        ToolExitCode = reader.IsDBNull(22) ? null : reader.GetInt32(22),
+        IsError = reader.GetInt32(23) != 0,
+        Content = reader.IsDBNull(24) ? null : reader.GetString(24),
+        RawPayload = reader.IsDBNull(25) ? null : reader.GetString(25)
     };
 }
