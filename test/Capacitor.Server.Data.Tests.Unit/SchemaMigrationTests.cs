@@ -36,6 +36,10 @@ public class SchemaMigrationTests {
         await Assert.That(tables).Contains("v_an_sessions");
         await Assert.That(tables).Contains("v_an_token_usage_by_model");
         await Assert.That(tables).Contains("v_an_tool_usage");
+
+        var toolUsageColumns = await ListColumnNamesAsync(connection, "v_an_tool_usage");
+        await Assert.That(toolUsageColumns).Contains("session_id");
+        await Assert.That(toolUsageColumns).Contains("errors");
     }
 
     [Test]

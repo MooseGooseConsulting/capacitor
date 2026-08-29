@@ -51,15 +51,15 @@ DROP VIEW IF EXISTS v_an_tool_usage;
 CREATE VIEW v_an_tool_usage AS
 SELECT
     s.repo_hash,
+    e.session_id,
     e.vendor,
     e.tool_name,
     COUNT(*) AS invocation_count,
-    SUM(CASE WHEN e.is_error THEN 1 ELSE 0 END) AS error_count,
-    ROUND(SUM(CASE WHEN e.is_error THEN 1.0 ELSE 0.0 END) / COUNT(*), 4) AS error_rate
+    SUM(CASE WHEN e.is_error THEN 1 ELSE 0 END) AS errors
 FROM session_events e
 JOIN sessions s ON e.session_id = s.session_id
 WHERE e.tool_name IS NOT NULL
-GROUP BY s.repo_hash, e.vendor, e.tool_name;
+GROUP BY s.repo_hash, e.session_id, e.vendor, e.tool_name;
 
 DROP VIEW IF EXISTS v_an_eval_scores;
 CREATE VIEW v_an_eval_scores AS
