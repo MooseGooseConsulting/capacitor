@@ -19,9 +19,11 @@ public class ClaudeCodeNormalizer : INormalizer {
         try {
             using var doc = JsonDocument.Parse(rawLine);
             var root = doc.RootElement;
+            if (root.Bool("isSidechain") == true) return [];
             if (root.Str("timestamp") is { } tsStr && DateTimeOffset.TryParse(tsStr, out var parsedTs)) timestamp = parsedTs;
 
             return root.Str("type") switch {
+                "user" when root.Bool("isMeta") == true => [],
                 "user" when root.Obj("message") is { } m => NormalizeUser(sessionId, agentId, lineNumber, rawLine, timestamp, m),
                 "assistant" when root.Obj("message") is { } m => NormalizeAssistant(sessionId, agentId, lineNumber, rawLine, timestamp, m),
                 _ => [Frame(sessionId, agentId, lineNumber, rawLine, timestamp, "RawMessage")],
