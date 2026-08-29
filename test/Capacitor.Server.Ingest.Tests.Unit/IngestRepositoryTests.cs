@@ -70,12 +70,19 @@ public sealed class IngestRepositoryTests : IDisposable {
         await Assert.That(parentMark).IsEqualTo(1);
 
         var childMark = await _watermarks.GetLastLineNumberAsync(sessionId, "sub-1");
-        await Assert.That(childMark).IsEqualTo(4);
+        await Assert.That(childMark).IsEqualTo(0);
+
+        await _ingest.IngestAsync([
+            new() { SessionId = sessionId, AgentId = "sub-1", LineNumber = 1, EventType = "Raw", Vendor = "claude", Timestamp = DateTimeOffset.UtcNow, RawPayload = "child-1" },
+            new() { SessionId = sessionId, AgentId = "sub-1", LineNumber = 2, EventType = "Raw", Vendor = "claude", Timestamp = DateTimeOffset.UtcNow, RawPayload = "child-2" },
+            new() { SessionId = sessionId, AgentId = "sub-1", LineNumber = 3, EventType = "Raw", Vendor = "claude", Timestamp = DateTimeOffset.UtcNow, RawPayload = "child-3" }
+        ]);
+        await Assert.That(await _watermarks.GetLastLineNumberAsync(sessionId, "sub-1")).IsEqualTo(4);
 
         await _ingest.IngestAsync(events);
         var parentAfterReplay = await _watermarks.GetLastLineNumberAsync(sessionId, "");
         await Assert.That(parentAfterReplay).IsEqualTo(1);
-        await Assert.That(await _eventStore.GetEventCountAsync(sessionId)).IsEqualTo(4);
+        await Assert.That(await _eventStore.GetEventCountAsync(sessionId)).IsEqualTo(7);
     }
 
     [Test]
