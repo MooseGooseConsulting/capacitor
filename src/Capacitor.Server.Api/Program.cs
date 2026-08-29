@@ -14,7 +14,16 @@ using Capacitor.Server.Api;
 var builder = WebApplication.CreateBuilder(args);
 
 var dbProvider = builder.Configuration["Database:Provider"] ?? "Sqlite";
+if (string.Equals(dbProvider, "PostgreSQL", StringComparison.OrdinalIgnoreCase)) {
+    dbProvider = "Postgres";
+}
+
 var isPostgres = string.Equals(dbProvider, "Postgres", StringComparison.OrdinalIgnoreCase);
+var isSqlite = string.Equals(dbProvider, "Sqlite", StringComparison.OrdinalIgnoreCase);
+if (!isPostgres && !isSqlite) {
+    throw new InvalidOperationException($"Database:Provider '{dbProvider}' is not supported. Use Sqlite or Postgres.");
+}
+
 var connString = builder.Configuration["Database:ConnectionString"];
 if (string.IsNullOrWhiteSpace(connString)) {
     var dbPath = builder.Configuration["Database:Path"] ?? "capacitor.db";
@@ -200,6 +209,13 @@ app.MapGet("/watermarks", async (
 app.MapPost("/api/machines/enroll", async (
     [FromBody] MachineEnrollmentRequest request,
     IMachineRepository machines) => {
+    if (string.IsNullOrWhiteSpace(request.Hostname) || request.Hostname.Length > 128
+        || string.IsNullOrWhiteSpace(request.Os) || request.Os.Length > 32
+        || string.IsNullOrWhiteSpace(request.Arch) || request.Arch.Length > 32
+        || request.MachineId is { Length: > 64 }) {
+        return Results.BadRequest(new { detail = "hostname, os, and arch are required; field lengths must fit the machines table." });
+    }
+
     var machineId = string.IsNullOrWhiteSpace(request.MachineId)
         ? Guid.NewGuid().ToString("N")
         : request.MachineId;

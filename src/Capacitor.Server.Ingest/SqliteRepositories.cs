@@ -240,17 +240,21 @@ public class SqliteSessionRepository : ISessionRepository {
             using var cmd = _connection.CreateCommand();
             cmd.CommandText = @"
                 UPDATE sessions SET
-                    last_event_at = COALESCE($last_event_at, last_event_at),
-                    duration_min = $duration_min,
-                    event_count = $event_count,
-                    tool_count = $tool_count,
-                    total_tokens = $total_tokens,
-                    total_cost_usd = $total_cost_usd
+                    last_event_at = CASE
+                        WHEN $last_event_at IS NULL THEN last_event_at
+                        WHEN last_event_at IS NULL OR $last_event_at > last_event_at THEN $last_event_at
+                        ELSE last_event_at
+                    END,
+                    duration_min = CASE WHEN $duration_min > duration_min THEN $duration_min ELSE duration_min END,
+                    event_count = CASE WHEN $event_count > event_count THEN $event_count ELSE event_count END,
+                    tool_count = CASE WHEN $tool_count > tool_count THEN $tool_count ELSE tool_count END,
+                    total_tokens = CASE WHEN $total_tokens > total_tokens THEN $total_tokens ELSE total_tokens END,
+                    total_cost_usd = CASE WHEN $total_cost_usd > total_cost_usd THEN $total_cost_usd ELSE total_cost_usd END
                 WHERE session_id = $session_id;
             ";
 
             cmd.Parameters.AddWithValue("$session_id", sessionId);
-            cmd.Parameters.AddWithValue("$last_event_at", lastEventAt.HasValue ? lastEventAt.Value.ToString("o", CultureInfo.InvariantCulture) : (object)DBNull.Value);
+            cmd.Parameters.AddWithValue("$last_event_at", lastEventAt.HasValue ? EventTimestamp.ToUtcString(lastEventAt.Value) : (object)DBNull.Value);
             cmd.Parameters.AddWithValue("$duration_min", durationMin);
             cmd.Parameters.AddWithValue("$event_count", eventCount);
             cmd.Parameters.AddWithValue("$tool_count", toolCount);

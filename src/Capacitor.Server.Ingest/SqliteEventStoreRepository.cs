@@ -50,7 +50,7 @@ public class SqliteEventStoreRepository : IEventStoreRepository {
                 cmd.Parameters.AddWithValue("$event_type", ev.EventType);
                 cmd.Parameters.AddWithValue("$vendor", ev.Vendor);
                 cmd.Parameters.AddWithValue("$model", (object?)ev.Model ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("$timestamp", ev.Timestamp.ToString("o", CultureInfo.InvariantCulture));
+                cmd.Parameters.AddWithValue("$timestamp", EventTimestamp.ToUtcString(ev.Timestamp));
                 cmd.Parameters.AddWithValue("$input_tokens", ev.InputTokens);
                 cmd.Parameters.AddWithValue("$output_tokens", ev.OutputTokens);
                 cmd.Parameters.AddWithValue("$cache_read_tokens", ev.CacheReadTokens);

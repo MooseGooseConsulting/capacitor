@@ -230,17 +230,21 @@ public class PostgresSessionRepository : ISessionRepository {
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = @"
             UPDATE sessions SET
-                last_event_at = COALESCE($2, last_event_at),
-                duration_min = $3,
-                event_count = $4,
-                tool_count = $5,
-                total_tokens = $6,
-                total_cost_usd = $7
+                last_event_at = CASE
+                    WHEN $2 IS NULL THEN last_event_at
+                    WHEN last_event_at IS NULL OR $2 > last_event_at THEN $2
+                    ELSE last_event_at
+                END,
+                duration_min = GREATEST(duration_min, $3),
+                event_count = GREATEST(event_count, $4),
+                tool_count = GREATEST(tool_count, $5),
+                total_tokens = GREATEST(total_tokens, $6),
+                total_cost_usd = GREATEST(total_cost_usd, $7)
             WHERE session_id = $1;
         ";
 
         cmd.Parameters.AddWithValue(sessionId);
-        cmd.Parameters.AddWithValue(lastEventAt.HasValue ? lastEventAt.Value.ToString("o", CultureInfo.InvariantCulture) : (object)DBNull.Value);
+        cmd.Parameters.AddWithValue(lastEventAt.HasValue ? EventTimestamp.ToUtcString(lastEventAt.Value) : (object)DBNull.Value);
         cmd.Parameters.AddWithValue(durationMin);
         cmd.Parameters.AddWithValue(eventCount);
         cmd.Parameters.AddWithValue(toolCount);

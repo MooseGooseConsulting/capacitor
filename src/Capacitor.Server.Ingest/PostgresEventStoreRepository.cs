@@ -45,7 +45,7 @@ public class PostgresEventStoreRepository : IEventStoreRepository {
             cmd.Parameters.AddWithValue(ev.EventType);
             cmd.Parameters.AddWithValue(ev.Vendor);
             cmd.Parameters.AddWithValue((object?)ev.Model ?? DBNull.Value);
-            cmd.Parameters.AddWithValue(ev.Timestamp.ToString("o", CultureInfo.InvariantCulture));
+            cmd.Parameters.AddWithValue(EventTimestamp.ToUtcString(ev.Timestamp));
             cmd.Parameters.AddWithValue(ev.InputTokens);
             cmd.Parameters.AddWithValue(ev.OutputTokens);
             cmd.Parameters.AddWithValue(ev.CacheReadTokens);

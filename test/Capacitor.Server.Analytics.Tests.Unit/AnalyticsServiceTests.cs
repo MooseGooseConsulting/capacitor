@@ -69,6 +69,26 @@ public sealed class AnalyticsServiceTests : IDisposable {
     }
 
     [Test]
+    public async Task SessionRollupProjector_orders_offset_timestamps_by_utc_instant() {
+        var sessionId = "sess-offset-order";
+        await _sessions.GetOrCreatePlaceholderAsync(sessionId, "claude", "dev-user");
+
+        var earlierUtc = new DateTimeOffset(2026, 8, 30, 0, 0, 0, TimeSpan.Zero);
+        var laterLocal = new DateTimeOffset(2026, 8, 29, 23, 30, 0, TimeSpan.FromHours(-5));
+        var events = new List<SessionEventRecord> {
+            new() { SessionId = sessionId, LineNumber = 1, EventType = "UserMessage", Vendor = "claude", Timestamp = laterLocal, Content = "later" },
+            new() { SessionId = sessionId, LineNumber = 2, EventType = "UserMessage", Vendor = "claude", Timestamp = earlierUtc, Content = "earlier" }
+        };
+        await _eventStore.AppendEventsAsync(events);
+
+        await _projector.ProjectSessionRollupAsync(sessionId);
+
+        var session = await _sessions.GetSessionAsync(sessionId);
+        await Assert.That(session!.LastEventAt).IsEqualTo(laterLocal.ToUniversalTime());
+        await Assert.That(session.DurationMin).IsEqualTo(270m);
+    }
+
+    [Test]
     public async Task GovernedAnalytics_queries_views_successfully() {
         var sessionId = "sess-views-1";
         await _sessions.GetOrCreatePlaceholderAsync(sessionId, "claude", "dev-user");

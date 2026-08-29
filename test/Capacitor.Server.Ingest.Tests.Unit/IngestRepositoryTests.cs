@@ -215,6 +215,22 @@ public sealed class IngestRepositoryTests : IDisposable {
     }
 
     [Test]
+    public async Task UpdateRollup_does_not_regress_when_a_stale_projection_writes_later() {
+        var sessionId = "sess-rollup-monotonic";
+        await _sessions.GetOrCreatePlaceholderAsync(sessionId, "claude", "user-1");
+        await _sessions.UpdateRollupAsync(sessionId, 5, 2, 1000, 0.5m, 12m, DateTimeOffset.UtcNow);
+
+        await _sessions.UpdateRollupAsync(sessionId, 1, 0, 10, 0.01m, 1m, DateTimeOffset.UtcNow.AddMinutes(-10));
+
+        var retrieved = await _sessions.GetSessionAsync(sessionId);
+        await Assert.That(retrieved!.EventCount).IsEqualTo(5);
+        await Assert.That(retrieved.ToolCount).IsEqualTo(2);
+        await Assert.That(retrieved.TotalTokens).IsEqualTo(1000);
+        await Assert.That(retrieved.TotalCostUsd).IsEqualTo(0.5m);
+        await Assert.That(retrieved.DurationMin).IsEqualTo(12m);
+    }
+
+    [Test]
     public async Task Heartbeat_rejects_a_token_no_enrollment_issued() {
         var resolved = await _machines.HeartbeatAsync(MachineTokenHasher.Hash("never-enrolled"), DateTimeOffset.UtcNow);
 
