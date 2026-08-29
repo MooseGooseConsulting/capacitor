@@ -9,15 +9,34 @@ public static class SqliteDatabaseInitializer {
         }
 
         var schemaSql = await GetEmbeddedMigrationAsync("001_initial_schema.sql", ct);
-        using (var cmd = connection.CreateCommand()) {
-            cmd.CommandText = schemaSql;
-            await cmd.ExecuteNonQueryAsync(ct);
-        }
-
         var viewsSql = await GetEmbeddedMigrationAsync("002_analytics_views.sql", ct);
-        using (var cmd = connection.CreateCommand()) {
-            cmd.CommandText = viewsSql;
-            await cmd.ExecuteNonQueryAsync(ct);
+        await InitializeAsync(connection, schemaSql, viewsSql, ct);
+    }
+
+    internal static async Task InitializeAsync(
+        SqliteConnection connection,
+        string schemaSql,
+        string viewsSql,
+        CancellationToken ct = default) {
+        using var transaction = connection.BeginTransaction();
+        try {
+            using (var cmd = connection.CreateCommand()) {
+                cmd.Transaction = transaction;
+                cmd.CommandText = schemaSql;
+                await cmd.ExecuteNonQueryAsync(ct);
+            }
+
+            using (var cmd = connection.CreateCommand()) {
+                cmd.Transaction = transaction;
+                cmd.CommandText = viewsSql;
+                await cmd.ExecuteNonQueryAsync(ct);
+            }
+
+            await transaction.CommitAsync(ct);
+        }
+        catch {
+            await transaction.RollbackAsync(ct);
+            throw;
         }
     }
 

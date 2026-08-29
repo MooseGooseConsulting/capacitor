@@ -46,8 +46,20 @@ public record SessionEventRecord {
     [JsonPropertyName("cache_write_tokens")]
     public long CacheWriteTokens { get; init; }
 
+    [JsonPropertyName("reasoning_tokens")]
+    public long? ReasoningTokens { get; init; }
+
+    [JsonPropertyName("context_used_tokens")]
+    public long? ContextUsedTokens { get; init; }
+
+    [JsonPropertyName("context_window_tokens")]
+    public long? ContextWindowTokens { get; init; }
+
     [JsonPropertyName("cost_usd")]
     public decimal CostUsd { get; init; }
+
+    [JsonPropertyName("item_id")]
+    public string? ItemId { get; init; }
 
     [JsonPropertyName("tool_server")]
     public string? ToolServer { get; init; }

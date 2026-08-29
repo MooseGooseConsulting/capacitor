@@ -28,6 +28,12 @@ public record SessionHeaderRecord {
     [JsonPropertyName("visibility")]
     public string Visibility { get; init; } = "project";
 
+    [JsonPropertyName("hidden_reason")]
+    public string? HiddenReason { get; init; }
+
+    [JsonPropertyName("disposition")]
+    public string? Disposition { get; init; }
+
     [JsonPropertyName("owner_user_id")]
     public required string OwnerUserId { get; init; }
 
