@@ -17,9 +17,21 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: read
+
+env:
+  # Keep NuGet/npm/CLI state in the job temp dir, not the persistent runner home.
+  DOTNET_CLI_HOME: ${{ runner.temp }}/dotnet-cli
+  NUGET_PACKAGES: ${{ runner.temp }}/nuget
+  npm_config_cache: ${{ runner.temp }}/npm
+
 jobs:
   build-and-test:
     name: Build and test (${{ matrix.name }})
+    # Persistent runner: no ephemeral isolation. Same-repo trusted PRs and pushes
+    # only; fork and outside-collaborator trees do not execute on this host.
+    if: github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association))
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -36,6 +48,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v6
@@ -49,6 +63,7 @@ jobs:
           cache-dependency-path: Directory.Packages.props
 
       - name: Setup Node.js
+        # Runner-bundled JS is not on PATH; wrapper tests need a real node.
         uses: actions/setup-node@v7
         with:
           node-version: '24'
@@ -100,14 +115,18 @@ jobs:
 
   lint-linear-ids:
     name: No Linear issue IDs in C# source
+    if: github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association))
     runs-on: [self-hosted, moosegoose-build]
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - name: Check for Linear issue ID tokens in src/**/*.cs and test/**/*.cs
         run: bash scripts/check-linear-ids.sh
 
   aot-check:
     name: AOT publish check
+    if: github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association))
     runs-on: [self-hosted, moosegoose-build]
     strategy:
       fail-fast: false
@@ -118,6 +137,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v6
