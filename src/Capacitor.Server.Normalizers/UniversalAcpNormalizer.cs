@@ -16,8 +16,7 @@ public class UniversalAcpNormalizer : INormalizer {
 
     public bool CanNormalize(string vendor) => SupportedVendors.Contains(vendor);
 
-    public IReadOnlyList<SessionEventRecord> NormalizeLine(string vendor, string sessionId, string? agentId, int lineNumber, string rawLine, out bool failed) {
-        failed = false;
+    public IReadOnlyList<SessionEventRecord> NormalizeLine(string vendor, string sessionId, string? agentId, int lineNumber, string rawLine) {
         var timestamp = DateTimeOffset.UtcNow;
 
         try {
@@ -32,7 +31,6 @@ public class UniversalAcpNormalizer : INormalizer {
 
             return NormalizeAcpUpdate(vendor, sessionId, agentId, lineNumber, rawLine, timestamp, root);
         } catch (JsonException) {
-            failed = true;
             return [Frame(vendor, sessionId, agentId, lineNumber, rawLine, timestamp, "AcpFrame", content: rawLine)];
         }
     }
@@ -43,18 +41,68 @@ public class UniversalAcpNormalizer : INormalizer {
         if (root.Str("type") != "message" || root.Obj("message") is not { } message)
             return [Frame(vendor, sessionId, agentId, lineNumber, rawLine, timestamp, "AcpFrame")];
 
-        var eventType = message.Str("role") switch {
-            "user" => "UserMessage",
-            "assistant" => "AssistantTurn",
-            _ => "RawMessage",
+        return message.Str("role") switch {
+            "user" => [
+                Frame(vendor, sessionId, agentId, lineNumber, rawLine, timestamp, "UserMessage",
+                    content: message.Str("content") ?? (message.Arr("content") is { } blocks ? JoinTextBlocks(blocks) : null),
+                    model: message.Str("model"))
+            ],
+            "assistant" => NormalizePiAssistant(vendor, sessionId, agentId, lineNumber, rawLine, timestamp, message),
+            "toolResult" when message.Str("toolCallId") is { Length: > 0 } => [
+                Frame(vendor, sessionId, agentId, lineNumber, rawLine, timestamp, "ToolResult",
+                    toolOutput: PiToolResultText(message), isError: message.Bool("isError") == true)
+            ],
+            "bashExecution" when message.Str("command") is { Length: > 0 } command => [
+                Frame(vendor, sessionId, agentId, lineNumber, rawLine, timestamp, "ToolCall",
+                    toolName: "bash", toolInput: command)
+            ],
+            _ => [Frame(vendor, sessionId, agentId, lineNumber, rawLine, timestamp, "RawMessage")],
         };
-        var content = message.Str("content") ?? (message.Arr("content") is { } blocks ? JoinTextBlocks(blocks) : null);
-        var usage = message.Obj("usage");
-
-        return [Frame(vendor, sessionId, agentId, lineNumber, rawLine, timestamp, eventType,
-            content: content, model: message.Str("model"),
-            inputTokens: usage?.Num("input") ?? 0, outputTokens: usage?.Num("output") ?? 0)];
     }
+
+    static List<SessionEventRecord> NormalizePiAssistant(string vendor, string sessionId, string? agentId, int lineNumber, string rawLine, DateTimeOffset timestamp, JsonElement message) {
+        var model = message.Str("model");
+        var usage = message.Obj("usage");
+        var inputTokens = usage?.Num("input") ?? 0;
+        var outputTokens = usage?.Num("output") ?? 0;
+        var result = new List<SessionEventRecord>();
+        var usageAttached = false;
+
+        SessionEventRecord Emit(string eventType, string? content = null, string? toolName = null, string? toolInput = null) {
+            var record = Frame(vendor, sessionId, agentId, lineNumber, rawLine, timestamp, eventType,
+                content: content, toolName: toolName, toolInput: toolInput, model: model,
+                inputTokens: usageAttached ? 0 : inputTokens,
+                outputTokens: usageAttached ? 0 : outputTokens);
+            usageAttached = true;
+            return record;
+        }
+
+        if (message.Arr("content") is { } blocks) {
+            foreach (var block in blocks.EnumerateArray()) {
+                switch (block.Str("type")) {
+                    case "text":
+                        if (block.Str("text") is { } text) result.Add(Emit("AssistantTurn", content: text));
+                        break;
+                    case "thinking":
+                        if (block.Str("thinking") is { } thinking) result.Add(Emit("AssistantThinking", content: thinking));
+                        break;
+                    case "toolCall":
+                        result.Add(Emit("ToolCall",
+                            toolName: block.Str("name"),
+                            toolInput: block.Obj("arguments")?.GetRawText()));
+                        break;
+                }
+            }
+        } else if (message.Str("content") is { } scalar) {
+            result.Add(Emit("AssistantTurn", content: scalar));
+        }
+
+        if (result.Count == 0) result.Add(Emit("AssistantTurn"));
+        return result;
+    }
+
+    static string? PiToolResultText(JsonElement message) =>
+        message.Str("content") ?? (message.Arr("content") is { } blocks ? JoinTextBlocks(blocks) : null);
 
     // Gemini transcript record: user turns are {"type":"user","content":[{text}]}; assistant
     // turns are {"type":"gemini","content":string,"tokens":{input,output},"model":..,"toolCalls":[...]}.
@@ -78,7 +126,9 @@ public class UniversalAcpNormalizer : INormalizer {
                 if (root.Arr("toolCalls") is { } toolCalls)
                     foreach (var call in toolCalls.EnumerateArray())
                         result.Add(Frame(vendor, sessionId, agentId, lineNumber, rawLine, timestamp, "ToolCall",
-                            toolName: call.Str("name"), toolInput: call.Obj("args")?.GetRawText(), model: model));
+                            toolName: call.Str("name"), toolInput: call.Obj("args")?.GetRawText(), model: model,
+                            inputTokens: result.Count == 0 ? inputTokens : 0,
+                            outputTokens: result.Count == 0 ? outputTokens : 0));
 
                 if (result.Count == 0)
                     result.Add(Frame(vendor, sessionId, agentId, lineNumber, rawLine, timestamp, "AssistantTurn",
@@ -103,10 +153,12 @@ public class UniversalAcpNormalizer : INormalizer {
             "tool_call" => [Frame(vendor, sessionId, agentId, lineNumber, rawLine, timestamp, "ToolCall",
                 toolName: update.Str("title") ?? update.Str("kind"),
                 toolInput: update.Obj("rawInput")?.GetRawText())],
-            // Non-terminal status (pending/in_progress) says nothing new — no result yet.
-            "tool_call_update" when update.Str("status") is "completed" or "failed" =>
+            // Terminal status with no payload only updates correlation — emit a result when
+            // content or rawOutput is present. Non-terminal status is the default AcpFrame path.
+            "tool_call_update" when (update.Str("status") is "completed" or "failed") && ToolResultText(update) is { } output =>
                 [Frame(vendor, sessionId, agentId, lineNumber, rawLine, timestamp, "ToolResult",
-                    toolOutput: ToolResultText(update), isError: update.Str("status") == "failed")],
+                    toolOutput: output, isError: update.Str("status") == "failed")],
+            "tool_call_update" when update.Str("status") is "completed" or "failed" => [],
             _ => [Frame(vendor, sessionId, agentId, lineNumber, rawLine, timestamp, "AcpFrame")],
         };
     }

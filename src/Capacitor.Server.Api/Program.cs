@@ -41,47 +41,49 @@ if (isPostgres) {
     builder.Services.AddSingleton<ISessionWatermarkRepository, PostgresWatermarkRepository>();
     builder.Services.AddSingleton<ISessionRepository, PostgresSessionRepository>();
     builder.Services.AddSingleton<IMachineRepository, PostgresMachineRepository>();
+    builder.Services.AddSingleton(sp => new SessionRollupProjector(
+        sp.GetRequiredService<IEventStoreRepository>(),
+        sp.GetRequiredService<ISessionRepository>()));
 } else {
     var sqliteConn = new SqliteConnection(connString);
-    sqliteConn.Open();
+    await sqliteConn.OpenAsync();
     await SqliteDatabaseInitializer.InitializeAsync(sqliteConn);
 
     builder.Services.AddSingleton(sqliteConn);
-    // Every repository/service below shares this one connection; SqliteGate serializes access to
-    // it so two concurrent requests never run commands on it at the same time (Microsoft.Data.Sqlite
-    // connections aren't thread-safe). One singleton instance for the whole app — DI hands the same
-    // gate to every repository, which is what makes the serialization apply across all of them.
     builder.Services.AddSingleton<SqliteGate>();
     builder.Services.AddSingleton<IEventStoreRepository, SqliteEventStoreRepository>();
     builder.Services.AddSingleton<ISessionWatermarkRepository, SqliteWatermarkRepository>();
     builder.Services.AddSingleton<ISessionRepository, SqliteSessionRepository>();
     builder.Services.AddSingleton<IMachineRepository, SqliteMachineRepository>();
     builder.Services.AddSingleton<SqliteAnalyticsService>();
+    builder.Services.AddSingleton(sp => new SessionRollupProjector(sp.GetRequiredService<SqliteConnection>()));
 }
 
+builder.Services.AddSingleton<ITranscriptIngest, TranscriptIngestEngine>();
 builder.Services.AddSingleton<NormalizerRouter>();
-builder.Services.AddSingleton<SessionRollupProjector>();
 
 var app = builder.Build();
 
-// Health Check
-app.MapGet("/health", () => Results.Ok(new { status = "healthy", provider = dbProvider, time = DateTimeOffset.UtcNow }));
+if (isSqlite) {
+    app.Use(async (context, next) => {
+        var gate = context.RequestServices.GetRequiredService<SqliteGate>();
+        await gate.RunAsync(() => next(), context.RequestAborted);
+    });
+}
 
-// Ingestion Hooks
+app.MapGet("/health", () => Results.Ok(new { status = "healthy", provider = dbProvider, time = DateTimeOffset.UtcNow }));
 
 async Task<IResult> HandleSessionStart(string vendor, ApiSessionStartPayload payload, ISessionRepository sessions) {
     var sessionId = IdCanonicalizer.Canonicalize(payload.SessionId);
     var existed = await sessions.GetSessionAsync(sessionId) != null;
     var session = await sessions.GetOrCreatePlaceholderAsync(sessionId, vendor, payload.UserId, payload.DefaultVisibility);
 
-    // A transcript batch can create an anonymous placeholder before session-start arrives;
-    // GetOrCreatePlaceholderAsync's short-circuit on an existing row would otherwise drop the
-    // real owner this hook carries on the floor.
-    if (existed && payload.UserId is { Length: > 0 } ownerUserId && session.OwnerUserId != ownerUserId) {
-        await sessions.UpdateSessionAsync(session with { OwnerUserId = ownerUserId });
+    if (existed && (payload.UserId is { Length: > 0 } || payload.DefaultVisibility is { Length: > 0 })) {
+        await sessions.PatchSessionStartAsync(sessionId, payload.UserId, payload.DefaultVisibility);
+        session = await sessions.GetSessionAsync(sessionId) ?? session;
     }
 
-    return Results.Ok(new { status = "started", session_id = sessionId });
+    return Results.Ok(new { status = "started", session_id = session.SessionId });
 }
 
 async Task<IResult> HandleSessionEnd(string vendor, ApiSessionEndPayload payload, ISessionRepository sessions, SessionRollupProjector projector) {
@@ -113,7 +115,7 @@ app.MapPost("/hooks/session-end", ([FromBody] ApiSessionEndPayload payload, ISes
 
 // Fail-closed clients (SessionImporter, WatchCommand) must see a 2xx before streaming a
 // subagent's content — this endpoint's whole job is to be that ACK. Unqualified, matching what
-// every harness posts (reference/SURFACE.md §4).
+// every harness posts.
 app.MapPost("/hooks/subagent-start", async ([FromBody] JsonElement payload, ISessionRepository sessions) => {
     var sessionId = IdCanonicalizer.Canonicalize(payload.Str("session_id"));
     if (sessionId.Length > 0) await sessions.GetOrCreatePlaceholderAsync(sessionId, "claude");
@@ -125,17 +127,21 @@ app.MapPost("/hooks/subagent-stop", ([FromBody] JsonElement payload) => Results.
 app.MapPost("/hooks/transcript", async (
     [FromBody] TranscriptBatch batch,
     ISessionRepository sessions,
-    IEventStoreRepository eventStore,
+    ISessionWatermarkRepository watermarks,
+    ITranscriptIngest ingest,
     NormalizerRouter router,
     SessionRollupProjector projector) => {
     var sessionId = IdCanonicalizer.Canonicalize(batch.SessionId);
     var vendor = batch.Vendor ?? "claude";
 
-    // A short line_numbers array used to fall back to a per-batch `i + 1`, which can collide
-    // with an explicit number elsewhere in the SAME batch — the event store's upsert then
-    // silently drops whichever insert lost the race. Reject the request instead of guessing.
-    if (batch.LineNumbers != null && batch.LineNumbers.Length != batch.Lines.Length) {
-        return Results.BadRequest(new { detail = "line_numbers, when present, must have the same length as lines." });
+    if (batch.LineNumbers != null) {
+        if (batch.LineNumbers.Length != batch.Lines.Length) {
+            return Results.BadRequest(new { detail = "line_numbers, when present, must have the same length as lines." });
+        }
+
+        if (batch.LineNumbers.Distinct().Count() != batch.LineNumbers.Length) {
+            return Results.BadRequest(new { detail = "line_numbers must not contain duplicates." });
+        }
     }
 
     await sessions.GetOrCreatePlaceholderAsync(sessionId, vendor);
@@ -164,13 +170,13 @@ app.MapPost("/hooks/transcript", async (
         }
     }
 
-    await eventStore.AppendEventsAndAdvanceWatermarkAsync(events, sessionId, agentId, highestLine);
     if (events.Count > 0) {
+        await ingest.IngestAsync(events);
         await projector.ProjectSessionRollupAsync(sessionId);
+    } else if (batch.Lines.Length > 0) {
+        await watermarks.UpdateWatermarkAsync(sessionId, agentId, highestLine);
     }
 
-    // Strict callers want a non-2xx signal when any line silently fell back to a bare content
-    // record instead of throwing — otherwise a fail-closed importer proceeds over dropped data.
     if (batch.Strict && failedCount > 0) {
         return Results.UnprocessableEntity(new { status = "partial", count = events.Count, failed = failedCount, highest_line = highestLine });
     }
@@ -203,7 +209,6 @@ app.MapGet("/watermarks", async (
     return Results.Ok(new { session_id = sessionId, agent_id = canonicalAgent, last_line_number = line });
 });
 
-// Fleet Node Enrollment & Heartbeat
 app.MapPost("/api/machines/enroll", async (
     [FromBody] MachineEnrollmentRequest request,
     IMachineRepository machines) => {
@@ -246,7 +251,6 @@ app.MapPost("/api/machines/heartbeat", async (
     });
 });
 
-// Evals & Catalog
 app.MapGet("/api/eval/catalog", () => Results.Ok(EvalCatalogDefinition.GetCatalog()));
 
 // The CLI/daemon fetch this FIRST (EvalService.RunAsync) and abort the whole run on anything
@@ -344,54 +348,55 @@ app.MapPost("/api/sessions/{id}/evals/v3", async (
     return Results.Ok(new { status = "saved", eval_run_id = payload.EvalRunId, session_id = sessionId });
 });
 
-// Analytics Views — SqliteAnalyticsService reads the v_an_* views directly off the Sqlite
-// connection, which the Postgres provider never opens.
 if (isPostgres) {
     app.MapGet("/api/analytics/schema", () => Results.Problem("Analytics views are not yet available under Database:Provider=Postgres.", statusCode: 501));
     app.MapPost("/api/analytics/query", () => Results.Problem("Analytics queries are not yet available under Database:Provider=Postgres.", statusCode: 501));
 } else {
-    app.MapGet("/api/analytics/schema", async (SqliteConnection conn, SqliteGate gate) => {
-        var text = await gate.RunAsync(async () => {
-            var sb = new StringBuilder();
-            sb.AppendLine("# Capacitor analytics views");
-            sb.AppendLine();
-            sb.AppendLine("Only single-statement SELECT queries over these v_an_* views are permitted.");
-            sb.AppendLine("Every view carries repo_hash — governed queries are scoped to the caller's repos.");
-            sb.AppendLine();
+app.MapGet("/api/analytics/schema", async (SqliteConnection conn) => {
+    var sb = new StringBuilder();
+    sb.AppendLine("# Capacitor analytics views");
+    sb.AppendLine();
+    sb.AppendLine("Only single-statement SELECT queries over these v_an_* views are permitted.");
+    sb.AppendLine("Every view carries repo_hash — governed queries are scoped to the caller's repos.");
+    sb.AppendLine();
 
-            using var cmd = conn.CreateCommand();
-            cmd.CommandText = "SELECT name, sql FROM sqlite_master WHERE type = 'view' AND name LIKE 'v_an_%' ORDER BY name;";
-            using var reader = await cmd.ExecuteReaderAsync();
-            while (await reader.ReadAsync()) {
-                var name = reader.GetString(0);
-                var viewSql = reader.IsDBNull(1) ? "" : reader.GetString(1);
-                sb.Append("## ").AppendLine(name);
-                sb.AppendLine("```sql");
-                sb.AppendLine(viewSql.Trim());
-                sb.AppendLine("```");
-                sb.AppendLine();
-            }
+    using var cmd = conn.CreateCommand();
+    cmd.CommandText = "SELECT name, sql FROM sqlite_master WHERE type = 'view' AND name LIKE 'v_an_%' ORDER BY name;";
+    using var reader = await cmd.ExecuteReaderAsync();
+    while (await reader.ReadAsync()) {
+        var name = reader.GetString(0);
+        var viewSql = reader.IsDBNull(1) ? "" : reader.GetString(1);
+        sb.Append("## ").AppendLine(name);
+        sb.AppendLine("```sql");
+        sb.AppendLine(viewSql.Trim());
+        sb.AppendLine("```");
+        sb.AppendLine();
+    }
 
-            sb.AppendLine("Example: SELECT vendor, model, total_cost_usd FROM v_an_token_usage_by_model;");
-            return sb.ToString();
-        });
+    sb.AppendLine("Example: SELECT vendor, model, total_cost_usd FROM v_an_token_usage_by_model;");
+    return Results.Ok(new { text = sb.ToString(), max_rows = SqliteAnalyticsService.DefaultMaxRows });
+});
 
-        return Results.Ok(new { text, max_rows = SqliteAnalyticsService.DefaultMaxRows });
-    });
-
-    app.MapPost("/api/analytics/query", async (
-        [FromBody] ApiAnalyticsQueryRequest request,
-        SqliteAnalyticsService analytics,
-        CancellationToken ct) => {
-        try {
-            var result = await analytics.ExecuteGovernedQueryAsync(request.Sql, request.Repos, request.MaxRows, ct);
-            return Results.Ok(new { rows = result.Rows, truncated = result.Truncated, max_rows = result.MaxRows });
-        } catch (InvalidOperationException ex) {
-            return Results.Problem(statusCode: 400, detail: ex.Message);
-        } catch (SqliteException ex) {
-            return Results.Problem(statusCode: 400, detail: ex.Message);
-        }
-    });
+app.MapPost("/api/analytics/query", async (
+    [FromBody] ApiAnalyticsQueryRequest request,
+    SqliteAnalyticsService analytics,
+    CancellationToken ct) => {
+    try {
+        var requested = request.MaxRows is int n && n > 0 ? n : SqliteAnalyticsService.DefaultMaxRows;
+        var cap = Math.Min(requested, SqliteAnalyticsService.DefaultMaxRows);
+        var scope = request.Repos is { Length: > 0 } && request.Repos[0] is { Length: > 0 } repo
+            ? repo
+            : "global";
+        var rows = await analytics.ExecuteGovernedQueryAsync(request.Sql, scope, cap + 1, ct);
+        var truncated = rows.Count > cap;
+        if (truncated) rows.RemoveAt(rows.Count - 1);
+        return Results.Ok(new { rows, truncated, max_rows = cap });
+    } catch (InvalidOperationException ex) {
+        return Results.Problem(statusCode: 400, detail: ex.Message);
+    } catch (SqliteException ex) {
+        return Results.Problem(statusCode: 400, detail: ex.Message);
+    }
+});
 }
 
 app.Run();

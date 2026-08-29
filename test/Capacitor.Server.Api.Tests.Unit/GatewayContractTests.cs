@@ -48,4 +48,40 @@ public class EvalContextComposerTests {
         await Assert.That(compaction.BytesSaved).IsGreaterThan(0);
         await Assert.That(compaction.ToolResultsTotal).IsEqualTo(1);
     }
+
+    [Test]
+    public async Task Compose_does_not_count_truncated_user_text_as_tool_results() {
+        var events = new List<SessionEventRecord> {
+            new() {
+                SessionId = "s",
+                LineNumber = 1,
+                EventType = "UserMessage",
+                Vendor = "claude",
+                Timestamp = DateTimeOffset.UtcNow,
+                Content = new string('a', 200)
+            }
+        };
+
+        var (_, compaction) = EvalContextComposer.Compose(events, thresholdBytes: 20);
+        await Assert.That(compaction.ToolResultsTruncated).IsEqualTo(0);
+        await Assert.That(compaction.BytesSaved).IsGreaterThan(0);
+    }
+
+    [Test]
+    public async Task Compose_does_not_split_multibyte_utf8_characters() {
+        // "é" is C3 A9. A 3-byte threshold can land on the trailing continuation.
+        var events = new List<SessionEventRecord> {
+            new() {
+                SessionId = "s",
+                LineNumber = 1,
+                EventType = "ToolResult",
+                Vendor = "claude",
+                Timestamp = DateTimeOffset.UtcNow,
+                ToolOutput = "aéé"
+            }
+        };
+
+        var (trace, _) = EvalContextComposer.Compose(events, thresholdBytes: 3);
+        await Assert.That(trace[0].Text).IsEqualTo("aé");
+    }
 }

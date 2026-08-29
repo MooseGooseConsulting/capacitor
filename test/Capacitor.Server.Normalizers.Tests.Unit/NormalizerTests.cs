@@ -89,6 +89,51 @@ public class NormalizerTests {
         await Assert.That(events[0].EventType).IsEqualTo("ToolCall");
         await Assert.That(events[0].ToolName).IsEqualTo("invoke_agent");
         await Assert.That(events[0].Vendor).IsEqualTo("gemini");
+        await Assert.That(events[0].InputTokens).IsEqualTo(5);
+        await Assert.That(events[0].OutputTokens).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task ClaudeCodeNormalizer_skips_meta_and_sidechain_rows() {
+        const string meta = """{"type":"user","isMeta":true,"message":{"content":"x"}}""";
+        const string sidechain = """{"type":"assistant","isSidechain":true,"message":{"content":[{"type":"text","text":"x"}]}}""";
+
+        await Assert.That(_router.Normalize("claude", "sess-1", "", 1, meta)).IsEmpty();
+        await Assert.That(_router.Normalize("claude", "sess-1", "", 2, sidechain)).IsEmpty();
+    }
+
+    [Test]
+    public async Task UniversalAcpNormalizer_normalizes_pi_tool_result() {
+        const string rawLine = """{"type":"message","message":{"role":"toolResult","toolCallId":"c1","content":[{"type":"text","text":"ok"}],"isError":false}}""";
+
+        var events = _router.Normalize("pi", "sess-3", "", 2, rawLine);
+
+        await Assert.That(events.Count).IsEqualTo(1);
+        await Assert.That(events[0].EventType).IsEqualTo("ToolResult");
+        await Assert.That(events[0].ToolOutput).IsEqualTo("ok");
+        await Assert.That(events[0].IsError).IsFalse();
+        await Assert.That(events[0].Vendor).IsEqualTo("pi");
+    }
+
+    [Test]
+    public async Task UniversalAcpNormalizer_skips_status_only_tool_call_update() {
+        const string rawLine = """{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"tool_call_update","status":"completed"}}}""";
+
+        var events = _router.Normalize("cursor", "sess-2", "", 2, rawLine);
+
+        await Assert.That(events).IsEmpty();
+    }
+
+    [Test]
+    public async Task AntigravityNormalizer_strips_user_request_envelope_and_keeps_created_at() {
+        const string rawLine = """{"type":"USER_INPUT","created_at":"2026-07-02T19:00:00Z","content":"<USER_REQUEST>hi</USER_REQUEST><ADDITIONAL_METADATA>x</ADDITIONAL_METADATA>"}""";
+
+        var events = _router.Normalize("antigravity", "sess-5", "", 0, rawLine);
+
+        await Assert.That(events.Count).IsEqualTo(1);
+        await Assert.That(events[0].EventType).IsEqualTo("UserMessage");
+        await Assert.That(events[0].Content).IsEqualTo("hi");
+        await Assert.That(events[0].Timestamp).IsEqualTo(DateTimeOffset.Parse("2026-07-02T19:00:00Z", System.Globalization.CultureInfo.InvariantCulture));
     }
 
     [Test]
@@ -134,14 +179,15 @@ public class NormalizerTests {
     }
 
     [Test]
-    public async Task Normalize_reports_failure_for_unparseable_lines() {
-        _router.Normalize("claude", "sess-4", "", 1, "not json", out var failed);
-        await Assert.That(failed).IsTrue();
-    }
+    public async Task ClaudeCodeNormalizer_marks_invalid_json_and_unrecognized_shapes_as_failed() {
+        _ = _router.Normalize("claude", "sess-1", "", 1, "not-json", out var jsonFailed);
+        await Assert.That(jsonFailed).IsTrue();
 
-    [Test]
-    public async Task Normalize_reports_no_failure_for_well_formed_lines() {
-        _router.Normalize("claude", "sess-5", "", 1, @"{""type"": ""user"", ""message"": ""hi""}", out var failed);
-        await Assert.That(failed).IsFalse();
+        _ = _router.Normalize("claude", "sess-1", "", 1, """{"type":"user","message":"plain"}""", out var shapeFailed);
+        await Assert.That(shapeFailed).IsTrue();
+
+        var ok = _router.Normalize("claude", "sess-1", "", 1, """{"type":"user","message":{"content":"hi"}}""", out var okFailed);
+        await Assert.That(okFailed).IsFalse();
+        await Assert.That(ok[0].EventType).IsEqualTo("UserMessage");
     }
 }

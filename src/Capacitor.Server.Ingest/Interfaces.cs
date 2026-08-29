@@ -12,12 +12,6 @@ public readonly record struct SessionRollupAggregate(
 
 public interface IEventStoreRepository {
     Task<int> AppendEventsAsync(IReadOnlyList<SessionEventRecord> events, CancellationToken ct = default);
-    Task<int> AppendEventsAndAdvanceWatermarkAsync(
-        IReadOnlyList<SessionEventRecord> events,
-        string sessionId,
-        string agentId,
-        int lastLineNumber,
-        CancellationToken ct = default);
     Task<IReadOnlyList<SessionEventRecord>> GetEventsAsync(string sessionId, string? agentId = null, int fromLine = 0, CancellationToken ct = default);
     Task<long> GetEventCountAsync(string sessionId, CancellationToken ct = default);
 
@@ -26,22 +20,21 @@ public interface IEventStoreRepository {
 }
 
 public interface ISessionWatermarkRepository {
-    // Null means no watermark row exists yet; 0 is a genuinely ingested line 0 — the two read
-    // as identical through an int, which the 200-vs-204 contract on GET /api/sessions/{id}/last-line
-    // needs told apart.
+    /// <summary>Null means no watermark row exists yet; 0 is a genuinely ingested line 0.</summary>
     Task<int?> GetLastLineNumberAsync(string sessionId, string agentId = "", CancellationToken ct = default);
     Task UpdateWatermarkAsync(string sessionId, string agentId, int lastLineNumber, long byteOffset = 0, CancellationToken ct = default);
 }
 
 public interface ISessionRepository {
-    Task<SessionHeaderRecord> GetOrCreatePlaceholderAsync(
-        string sessionId,
-        string vendor,
-        string? ownerUserId = null,
-        string? defaultVisibility = null,
-        CancellationToken ct = default);
+    Task<SessionHeaderRecord> GetOrCreatePlaceholderAsync(string sessionId, string vendor, string? ownerUserId = null, CancellationToken ct = default);
+    Task<SessionHeaderRecord> GetOrCreatePlaceholderAsync(string sessionId, string vendor, string? ownerUserId, string? defaultVisibility, CancellationToken ct = default);
     Task<SessionHeaderRecord?> GetSessionAsync(string sessionId, CancellationToken ct = default);
     Task UpdateSessionAsync(SessionHeaderRecord session, CancellationToken ct = default);
+
+    // Owner/visibility only. A concurrent session-end can commit completed between the
+    // session-start handler's read and this write; a full-row UpdateSessionAsync would
+    // resurrect the stale active status.
+    Task PatchSessionStartAsync(string sessionId, string? ownerUserId, string? defaultVisibility, CancellationToken ct = default);
 
     // Repository metadata only. Must not write status/ended_at/aggregates — a concurrent
     // session-end can commit completed between the transcript handler's read of the placeholder
@@ -72,6 +65,10 @@ public interface ISessionRepository {
         decimal durationMin,
         DateTimeOffset? lastEventAt,
         CancellationToken ct = default);
+}
+
+public interface ITranscriptIngest {
+    Task<int> IngestAsync(IReadOnlyList<SessionEventRecord> events, string? ownerUserId = null, CancellationToken ct = default);
 }
 
 public interface IMachineRepository {

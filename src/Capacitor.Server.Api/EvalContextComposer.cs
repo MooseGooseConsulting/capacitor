@@ -27,7 +27,7 @@ public static class EvalContextComposer {
             if (text != null) {
                 var compacted = Compact(text, threshold, out var saved);
                 if (saved > 0) {
-                    truncated++;
+                    if (e.EventType == "ToolResult") truncated++;
                     bytesSaved += saved;
                     text = compacted;
                 }
@@ -66,10 +66,26 @@ public static class EvalContextComposer {
         }
 
         var bytes = Encoding.UTF8.GetBytes(text);
-        var len = thresholdBytes;
-        while (len > 0 && (bytes[len - 1] & 0xC0) == 0x80) len--;
-        if (len > 0 && (bytes[len - 1] & 0x80) != 0 && (bytes[len - 1] & 0xC0) != 0xC0) len--;
+        var len = Utf8PrefixLength(bytes, thresholdBytes);
         bytesSaved = original - len;
         return Encoding.UTF8.GetString(bytes, 0, len);
+    }
+
+    static int Utf8PrefixLength(byte[] bytes, int max) {
+        var limit = Math.Min(max, bytes.Length);
+        var len = limit;
+        while (len > 0 && (bytes[len - 1] & 0xC0) == 0x80) len--;
+        if (len == 0) return 0;
+
+        var lead = bytes[len - 1];
+        var need = lead switch {
+            < 0x80 => 1,
+            < 0xE0 when (lead & 0xE0) == 0xC0 => 2,
+            < 0xF0 when (lead & 0xF0) == 0xE0 => 3,
+            < 0xF8 when (lead & 0xF8) == 0xF0 => 4,
+            _ => 0
+        };
+        if (need == 0 || len - 1 + need > limit) return len - 1;
+        return len - 1 + need;
     }
 }

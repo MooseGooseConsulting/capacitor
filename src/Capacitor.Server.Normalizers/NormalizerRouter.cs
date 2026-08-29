@@ -11,16 +11,18 @@ public class AntigravityNormalizer : INormalizer {
         string.Equals(vendor, "antigravity", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(vendor, "agy", StringComparison.OrdinalIgnoreCase);
 
-    public IReadOnlyList<SessionEventRecord> NormalizeLine(string vendor, string sessionId, string? agentId, int lineNumber, string rawLine, out bool failed) {
-        failed = false;
+    public IReadOnlyList<SessionEventRecord> NormalizeLine(string vendor, string sessionId, string? agentId, int lineNumber, string rawLine) {
         var timestamp = DateTimeOffset.UtcNow;
 
         try {
             using var doc = JsonDocument.Parse(rawLine);
             var root = doc.RootElement;
+            if (root.Str("created_at") is { } createdAt && DateTimeOffset.TryParse(createdAt, out var parsedTs))
+                timestamp = parsedTs;
 
             return root.Str("type") switch {
-                "USER_INPUT" => [Frame(sessionId, agentId, lineNumber, rawLine, timestamp, "UserMessage", content: root.Str("content"))],
+                "USER_INPUT" => [Frame(sessionId, agentId, lineNumber, rawLine, timestamp, "UserMessage",
+                    content: StripUserRequest(root.Str("content")))],
                 "PLANNER_RESPONSE" => NormalizePlannerResponse(sessionId, agentId, lineNumber, rawLine, timestamp, root),
                 // The transcript's own result step for a completed tool call — content is the
                 // tool's output, status ("DONE"/"ERROR") flags failure.
@@ -33,7 +35,6 @@ public class AntigravityNormalizer : INormalizer {
                 _ => [Frame(sessionId, agentId, lineNumber, rawLine, timestamp, "PlannerStep")],
             };
         } catch (JsonException) {
-            failed = true;
             return [Frame(sessionId, agentId, lineNumber, rawLine, timestamp, "PlannerStep", content: rawLine)];
         }
     }
@@ -88,6 +89,17 @@ public class AntigravityNormalizer : INormalizer {
             Content = content,
             RawPayload = rawLine
         };
+
+    static string? StripUserRequest(string? content) {
+        if (content is null) return null;
+        const string open = "<USER_REQUEST>", close = "</USER_REQUEST>";
+        var start = content.IndexOf(open, StringComparison.Ordinal);
+        if (start < 0) return content;
+        start += open.Length;
+        var end = content.IndexOf(close, start, StringComparison.Ordinal);
+        var inner = (end < 0 ? content[start..] : content[start..end]).Trim();
+        return inner.Length > 0 ? inner : null;
+    }
 }
 
 public class NormalizerRouter {
@@ -116,6 +128,34 @@ public class NormalizerRouter {
         var normalizer = _normalizers.FirstOrDefault(n => n.CanNormalize(vendor))
                          ?? _normalizers.First(n => n.CanNormalize("acp"));
 
-        return normalizer.NormalizeLine(vendor, sessionId, agentId, lineNumber, rawLine, out failed);
+        var events = normalizer.NormalizeLine(vendor, sessionId, agentId, lineNumber, rawLine);
+        failed = LineFailed(vendor, rawLine, events);
+        return events;
     }
+
+    static bool LineFailed(string vendor, string rawLine, IReadOnlyList<SessionEventRecord> events) {
+        JsonDocument doc;
+        try {
+            doc = JsonDocument.Parse(rawLine);
+        } catch (JsonException) {
+            return true;
+        }
+
+        using (doc) {
+            if (!IsClaude(vendor)) return false;
+            if (events.Count == 0) return false;
+            if (events.Count != 1 || events[0].EventType != "RawMessage") return false;
+
+            var type = doc.RootElement.Str("type");
+            if (type is "user" or "assistant") {
+                return doc.RootElement.Obj("message") is null;
+            }
+
+            return true;
+        }
+    }
+
+    static bool IsClaude(string vendor) =>
+        string.Equals(vendor, "claude", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(vendor, "claude-code", StringComparison.OrdinalIgnoreCase);
 }

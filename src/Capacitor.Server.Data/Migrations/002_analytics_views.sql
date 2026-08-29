@@ -17,12 +17,14 @@ SELECT
     s.owner_user_id,
     s.event_count,
     s.last_event_at,
+    s.hidden_reason,
     s.previous_session_id,
     s.next_session_id,
     s.primary_phase,
     s.secondary_phase,
     s.classification_confidence,
     s.classification_source,
+    s.disposition,
     s.duration_min,
     s.total_tokens,
     s.total_cost_usd,
@@ -94,7 +96,8 @@ LEFT JOIN work_item_sessions ws ON w.work_item_id = ws.work_item_id
 GROUP BY w.repo_hash, w.work_item_id, w.title, w.issue_key, w.pr_number, w.status, w.created_at, w.updated_at;
 
 -- One row per session per model; kcap/skills/guided-tour depends on this exact grain.
-CREATE VIEW IF NOT EXISTS v_an_cost AS
+DROP VIEW IF EXISTS v_an_cost;
+CREATE VIEW v_an_cost AS
 SELECT
     s.repo_hash,
     e.session_id,
@@ -108,11 +111,14 @@ FROM session_events e
 JOIN sessions s ON e.session_id = s.session_id
 GROUP BY s.repo_hash, e.session_id, e.model;
 
-CREATE VIEW IF NOT EXISTS v_an_session_steps AS
+DROP VIEW IF EXISTS v_an_session_steps;
+CREATE VIEW v_an_session_steps AS
 SELECT
     s.repo_hash,
     e.session_id,
+    e.agent_id,
     e.line_number,
+    e.logical_seq,
     e.event_type,
     e.vendor,
     e.tool_name,
@@ -121,20 +127,37 @@ SELECT
 FROM session_events e
 JOIN sessions s ON e.session_id = s.session_id;
 
-CREATE VIEW IF NOT EXISTS v_an_prs AS
+DROP VIEW IF EXISTS v_an_prs;
+CREATE VIEW v_an_prs AS
 SELECT
     s.repo_hash,
     s.pr_number,
-    s.pr_title,
-    s.pr_url,
-    s.pr_head_ref,
+    (
+        SELECT s2.pr_title FROM sessions s2
+        WHERE s2.repo_hash IS s.repo_hash AND s2.pr_number = s.pr_number
+        ORDER BY s2.last_event_at DESC, s2.session_id DESC
+        LIMIT 1
+    ) AS pr_title,
+    (
+        SELECT s2.pr_url FROM sessions s2
+        WHERE s2.repo_hash IS s.repo_hash AND s2.pr_number = s.pr_number
+        ORDER BY s2.last_event_at DESC, s2.session_id DESC
+        LIMIT 1
+    ) AS pr_url,
+    (
+        SELECT s2.pr_head_ref FROM sessions s2
+        WHERE s2.repo_hash IS s.repo_hash AND s2.pr_number = s.pr_number
+        ORDER BY s2.last_event_at DESC, s2.session_id DESC
+        LIMIT 1
+    ) AS pr_head_ref,
     COUNT(DISTINCT s.session_id) AS session_count,
     MAX(s.last_event_at) AS last_session_at
 FROM sessions s
 WHERE s.pr_number IS NOT NULL
-GROUP BY s.repo_hash, s.pr_number, s.pr_title, s.pr_url, s.pr_head_ref;
+GROUP BY s.repo_hash, s.pr_number;
 
-CREATE VIEW IF NOT EXISTS v_an_repositories AS
+DROP VIEW IF EXISTS v_an_repositories;
+CREATE VIEW v_an_repositories AS
 SELECT
     s.repo_hash,
     s.repo_owner AS owner,

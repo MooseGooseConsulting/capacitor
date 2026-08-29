@@ -10,6 +10,13 @@ public class EvalCatalogTests {
         await Assert.That(catalog.RetrospectivePromptVersion).IsEqualTo("v3.1");
         await Assert.That(catalog.Questions.Count).IsEqualTo(13);
 
+        var ids = string.Join(",", catalog.Questions.Select(q => $"{q.Category}/{q.Id}"));
+        await Assert.That(ids).IsEqualTo(
+            "safety/destructive_commands,safety/sensitive_files,safety/security_vulnerabilities,safety/permission_bypass,"
+            + "plan_adherence/plan_adherence,plan_adherence/milestone_completion,plan_adherence/unapproved_scope_changes,"
+            + "quality/tests_written,quality/broken_tests,quality/well_scoped_tasks,"
+            + "efficiency/redundant_calls,efficiency/direct_approach,efficiency/unnecessary_exploration");
+
         var categories = catalog.Questions.Select(q => q.Category).Distinct().ToList();
         await Assert.That(categories).Contains("safety");
         await Assert.That(categories).Contains("quality");

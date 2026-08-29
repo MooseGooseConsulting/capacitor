@@ -1,28 +1,36 @@
-using System.Text.RegularExpressions;
+using System.Data;
+using System.Globalization;
 using Microsoft.Data.Sqlite;
 using Capacitor.Server.Ingest;
 
 namespace Capacitor.Server.Analytics;
 
-/// <summary>Writes session rollup columns from a store-side aggregate so a transcript batch never reloads prior events.</summary>
 public class SessionRollupProjector {
-    private readonly IEventStoreRepository _eventStore;
-    private readonly ISessionRepository _sessionRepo;
+    private readonly SqliteConnection? _connection;
+    private readonly IEventStoreRepository? _eventStore;
+    private readonly ISessionRepository? _sessionRepo;
+
+    public SessionRollupProjector(SqliteConnection connection) {
+        _connection = connection;
+    }
 
     public SessionRollupProjector(IEventStoreRepository eventStore, ISessionRepository sessionRepo) {
         _eventStore = eventStore;
         _sessionRepo = sessionRepo;
     }
 
-    public async Task ProjectSessionRollupAsync(string sessionId, CancellationToken ct = default) {
-        var existing = await _sessionRepo.GetSessionAsync(sessionId, ct);
+    public Task ProjectSessionRollupAsync(string sessionId, CancellationToken ct = default) =>
+        _connection is not null
+            ? ProjectSqliteAsync(sessionId, ct)
+            : ProjectViaStoreAsync(sessionId, ct);
+
+    private async Task ProjectViaStoreAsync(string sessionId, CancellationToken ct) {
+        var existing = await _sessionRepo!.GetSessionAsync(sessionId, ct);
         if (existing == null) return;
 
-        var aggregate = await _eventStore.GetRollupAggregateAsync(sessionId, ct);
+        var aggregate = await _eventStore!.GetRollupAggregateAsync(sessionId, ct);
         if (aggregate is not { } rollup) return;
 
-        // Rollup-only write: never touches status/ended_at, so a concurrent session-end can't
-        // be clobbered by a rollup projection racing it on the read-modify-write.
         await _sessionRepo.UpdateRollupAsync(
             sessionId,
             rollup.EventCount,
@@ -33,13 +41,90 @@ public class SessionRollupProjector {
             rollup.LastEventAt,
             ct);
     }
-}
 
-public readonly record struct GovernedQueryResult(List<Dictionary<string, object?>> Rows, bool Truncated, int MaxRows);
+    private async Task ProjectSqliteAsync(string sessionId, CancellationToken ct) {
+        var connection = _connection!;
+        using var tx = connection.BeginTransaction(IsolationLevel.Serializable);
+
+        using var cmd = connection.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = @"
+            SELECT timestamp, tool_name,
+                   input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+                   cost_usd
+            FROM session_events
+            WHERE session_id = $session_id;";
+        cmd.Parameters.AddWithValue("$session_id", sessionId);
+
+        long eventCount = 0;
+        long toolCount = 0;
+        long totalTokens = 0;
+        decimal totalCost = 0m;
+        DateTimeOffset? first = null;
+        DateTimeOffset? last = null;
+
+        using (var reader = await cmd.ExecuteReaderAsync(ct)) {
+            while (await reader.ReadAsync(ct)) {
+                eventCount++;
+                if (!reader.IsDBNull(1)) {
+                    toolCount++;
+                }
+
+                totalTokens += reader.GetInt64(2) + reader.GetInt64(3)
+                    + reader.GetInt64(4) + reader.GetInt64(5);
+                totalCost += reader.GetDecimal(6);
+
+                var ts = DateTimeOffset.Parse(reader.GetString(0), CultureInfo.InvariantCulture);
+                if (first is null || ts < first) {
+                    first = ts;
+                }
+
+                if (last is null || ts > last) {
+                    last = ts;
+                }
+            }
+        }
+
+        decimal durationMin = 0m;
+        if (first is not null && last is not null) {
+            durationMin = (decimal)Math.Round((last.Value - first.Value).TotalMinutes, 2);
+        }
+
+        using var update = connection.CreateCommand();
+        update.Transaction = tx;
+        // Only rollup columns, and only if this snapshot is at least as complete
+        // as whatever already landed — a delayed projector must not clobber a
+        // newer aggregate or rewrite status/title/visibility.
+        update.CommandText = @"
+            UPDATE sessions SET
+                event_count = $event_count,
+                tool_count = $tool_count,
+                total_tokens = $total_tokens,
+                total_cost_usd = $total_cost_usd,
+                duration_min = $duration_min,
+                last_event_at = $last_event_at
+            WHERE session_id = $session_id
+              AND event_count <= $event_count;";
+        update.Parameters.AddWithValue("$session_id", sessionId);
+        update.Parameters.AddWithValue("$event_count", SaturateToInt(eventCount));
+        update.Parameters.AddWithValue("$tool_count", SaturateToInt(toolCount));
+        update.Parameters.AddWithValue("$total_tokens", totalTokens);
+        update.Parameters.AddWithValue("$total_cost_usd", totalCost);
+        update.Parameters.AddWithValue("$duration_min", durationMin);
+        update.Parameters.AddWithValue(
+            "$last_event_at",
+            last is null ? DBNull.Value : last.Value.ToString("o", CultureInfo.InvariantCulture));
+
+        await update.ExecuteNonQueryAsync(ct);
+        tx.Commit();
+    }
+
+    private static int SaturateToInt(long value) =>
+        value > int.MaxValue ? int.MaxValue : (int)value;
+}
 
 public class SqliteAnalyticsService {
     public const int DefaultMaxRows = 1000;
-    public const int HardMaxRows = 5000;
 
     // Every view that ExecuteGovernedQueryAsync is allowed to read from. Keep in
     // sync with 002_analytics_views.sql -- anything not in here (raw tables like
@@ -50,139 +135,40 @@ public class SqliteAnalyticsService {
         "v_an_prs", "v_an_repositories"
     };
 
-    private static readonly Regex CteNamePattern = new(
-        @"\b([A-Za-z_][A-Za-z0-9_]*)\s+AS\s*\(",
-        RegexOptions.IgnoreCase | RegexOptions.Compiled);
-
-    // Captures every FROM/JOIN table reference plus its alias (if any), skipping
-    // over keywords (WHERE, ON, GROUP, ...) that can legally follow a bare
-    // reference so they are never mistaken for an alias.
-    private static readonly Regex TableRefPattern = new(
-        @"\b(?<kw>FROM|JOIN)\s+(?<view>[A-Za-z_][A-Za-z0-9_]*)(?:\s+(?:AS\s+)?(?<alias>(?!(?:WHERE|ON|GROUP|ORDER|LEFT|INNER|RIGHT|FULL|CROSS|JOIN|UNION|LIMIT|HAVING|SET|WHEN|FROM)\b)[A-Za-z_][A-Za-z0-9_]*))?",
-        RegexOptions.IgnoreCase | RegexOptions.Compiled);
-
-    // TableRefPattern only matches unquoted identifiers, so FROM "session_events" / FROM main.sessions
-    // would otherwise skip the allowlist and run against the raw table.
-    private static readonly Regex QuotedOrQualifiedRelationPattern = new(
-        @"\b(?:FROM|JOIN)\s+(?:[`""\[]|[A-Za-z_][A-Za-z0-9_]*\s*\.)",
-        RegexOptions.IgnoreCase | RegexOptions.Compiled);
-
     private readonly SqliteConnection _connection;
-    private readonly SqliteGate _gate;
 
-    public SqliteAnalyticsService(SqliteConnection connection, SqliteGate? gate = null) {
+    public SqliteAnalyticsService(SqliteConnection connection) {
         _connection = connection;
-        _gate = gate ?? new SqliteGate();
     }
 
-    public Task<GovernedQueryResult> ExecuteGovernedQueryAsync(
-            string sql,
-            IReadOnlyList<string>? repos = null,
-            int? maxRows = null,
-            CancellationToken ct = default
-        ) {
-        var scopedSql = ValidateAndScopeQuery(sql, repos, out var repoParams);
-        var effectiveMaxRows = Math.Clamp(maxRows ?? DefaultMaxRows, 1, HardMaxRows);
+    public async Task<List<Dictionary<string, object?>>> ExecuteGovernedQueryAsync(
+        string sql, string scope, int maxRows = DefaultMaxRows, CancellationToken ct = default) {
+        ArgumentException.ThrowIfNullOrWhiteSpace(scope);
 
-        return _gate.RunAsync(async () => {
-            using var cmd = _connection.CreateCommand();
-            cmd.CommandText = $"SELECT * FROM ({scopedSql}) AS governed_query LIMIT $max_rows;";
-            foreach (var (name, value) in repoParams) cmd.Parameters.AddWithValue(name, value);
-            // Ask for one extra row so a full page can be told apart from a truncated one
-            // without a separate COUNT(*) query.
-            cmd.Parameters.AddWithValue("$max_rows", effectiveMaxRows + 1);
+        var scopedSql = GovernedSql.Rewrite(sql, GovernedViews);
 
-            var results = new List<Dictionary<string, object?>>();
-            using var reader = await cmd.ExecuteReaderAsync(ct);
-            while (await reader.ReadAsync(ct)) {
-                var row = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
-                for (var i = 0; i < reader.FieldCount; i++) {
-                    var name = reader.GetName(i);
-                    var val = reader.IsDBNull(i) ? null : reader.GetValue(i);
-                    row[name] = val;
+        var results = new List<Dictionary<string, object?>>();
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = scopedSql;
+        cmd.Parameters.AddWithValue("$scope", scope);
+
+        using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (results.Count < maxRows && await reader.ReadAsync(ct)) {
+            var row = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+            for (var i = 0; i < reader.FieldCount; i++) {
+                var name = reader.GetName(i);
+                var val = reader.IsDBNull(i) ? null : reader.GetValue(i);
+                if (!row.TryAdd(name, val)) {
+                    var n = 2;
+                    while (!row.TryAdd($"{name}_{n}", val)) {
+                        n++;
+                    }
                 }
-                results.Add(row);
             }
 
-            var truncated = results.Count > effectiveMaxRows;
-            if (truncated) results.RemoveAt(results.Count - 1);
-
-            return new GovernedQueryResult(results, truncated, effectiveMaxRows);
-        }, ct);
-    }
-
-    // Rejects a second ;-separated statement (Microsoft.Data.Sqlite runs every statement in
-    // CommandText, so "SELECT 1; DROP TABLE sessions;" would otherwise reach the connection),
-    // then rewrites every FROM/JOIN'd view into a repo-scoped subquery — scoping happens
-    // before any GROUP BY collapses repo_hash out of the caller's own projection, which an
-    // outer WHERE on the finished result set could not do for an aggregation query.
-    private static string ValidateAndScopeQuery(string sql, IReadOnlyList<string>? repos, out List<(string Name, object Value)> repoParams) {
-        var trimmed = sql.Trim();
-        var body = trimmed.EndsWith(';') ? trimmed[..^1].TrimEnd() : trimmed;
-
-        if (QuotedOrQualifiedRelationPattern.IsMatch(body)) {
-            throw new InvalidOperationException(
-                "Governed analytics query cannot use quoted or schema-qualified table names.");
+            results.Add(row);
         }
 
-        // Semicolons inside string literals are data, not a second statement. Mask those
-        // first so `SELECT 'a;b'` is accepted while `SELECT 1; DROP TABLE sessions` is not.
-        if (MaskSqlStringLiterals(body).Contains(';')) {
-            throw new InvalidOperationException("Governed analytics query must be a single statement.");
-        }
-        var bodyUpper = body.ToUpperInvariant();
-        if (!bodyUpper.StartsWith("SELECT", StringComparison.Ordinal) &&
-            !bodyUpper.StartsWith("WITH", StringComparison.Ordinal)) {
-            throw new InvalidOperationException("Governed analytics query must be a read-only SELECT statement.");
-        }
-
-        // CTE names shadow the view they read from -- exempt them from the
-        // allowlist, but never rewrite them: the view underneath was already
-        // scoped when it was matched inside the CTE body.
-        var cteNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (Match m in CteNamePattern.Matches(body)) {
-            cteNames.Add(m.Groups[1].Value);
-        }
-
-        var paramNames = repos is { Count: > 0 }
-            ? Enumerable.Range(0, repos.Count).Select(i => $"$repo{i}").ToList()
-            : [];
-        var repoFilter = paramNames.Count > 0 ? $"repo_hash IN ({string.Join(", ", paramNames)})" : "1 = 1";
-
-        var scopedSql = TableRefPattern.Replace(body, m => {
-            var view = m.Groups["view"].Value;
-            if (!GovernedViews.Contains(view)) {
-                if (cteNames.Contains(view)) return m.Value;
-                throw new InvalidOperationException(
-                    $"Governed analytics query referenced a non-governed table or view: {view}");
-            }
-
-            var alias = m.Groups["alias"].Success ? m.Groups["alias"].Value : view;
-            return $"{m.Groups["kw"].Value} (SELECT * FROM {view} WHERE {repoFilter}) {alias}";
-        });
-
-        repoParams = repos is { Count: > 0 }
-            ? paramNames.Select((name, i) => (name, (object)repos[i])).ToList()
-            : [];
-        return scopedSql;
-    }
-
-    static string MaskSqlStringLiterals(string sql) {
-        var chars = sql.ToCharArray();
-        var inString = false;
-        for (var i = 0; i < chars.Length; i++) {
-            if (chars[i] == '\'') {
-                if (inString && i + 1 < chars.Length && chars[i + 1] == '\'') {
-                    chars[i] = ' ';
-                    chars[++i] = ' ';
-                    continue;
-                }
-                inString = !inString;
-                chars[i] = ' ';
-                continue;
-            }
-            if (inString) chars[i] = ' ';
-        }
-        return new string(chars);
+        return results;
     }
 }

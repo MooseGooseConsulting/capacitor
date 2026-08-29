@@ -15,5 +15,6 @@
     <ItemGroup>
         <InternalsVisibleTo Include="Capacitor.Server.Analytics.Tests.Unit" />
         <InternalsVisibleTo Include="Capacitor.Server.Api" />
+        <InternalsVisibleTo Include="Capacitor.Server.Api.Tests.Unit" />
     </ItemGroup>
 </Project>
