@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
@@ -363,14 +364,158 @@ app.MapPost("/api/mcp/sessions", async (
     ISessionRepository sessions,
     IEventStoreRepository eventStore) => {
     switch (request.Method) {
-        case "search_sessions":
-            return Results.Ok(new { results = Array.Empty<object>() });
-        case "get_session_summary":
-            var id = request.Params?.GetValueOrDefault("session_id")?.ToString() ?? "";
-            var s = await sessions.GetSessionAsync(id.Replace("-", ""));
-            return s != null ? Results.Ok(s) : Results.NotFound();
+        case "search_sessions": {
+            var query = McpString(request.Params, "query");
+            var author = McpString(request.Params, "author") ?? McpString(request.Params, "author_github_id");
+            var repoArg = McpString(request.Params, "repo");
+            var repo = string.Equals(repoArg, "all", StringComparison.OrdinalIgnoreCase) ? null : repoArg;
+            var limit = Math.Clamp(McpInt(request.Params, "limit", 10), 1, 50);
+            var offset = Math.Max(0, McpInt(request.Params, "offset", 0));
+            var found = await sessions.SearchSessionsAsync(query, author, repo, limit, offset);
+            var hits = found.Select(s => (object)new {
+                session_id = s.SessionId,
+                title      = s.Title,
+                owner      = s.OwnerUserId,
+                snippet    = s.Title ?? s.Slug,
+                repo       = s.RepoHash ?? (s.RepoOwner is null ? null : $"{s.RepoOwner}/{s.RepoName}")
+            }).ToList();
+            return Results.Ok(new { hits, limit, offset });
+        }
+        case "get_session_summary": {
+            if (!TryMcpSessionId(request.Params, out var summaryId))
+                return Results.Problem(statusCode: 400, detail: "session_id is required and must be a non-empty string.");
+            var session = await sessions.GetSessionAsync(summaryId);
+            if (session is null) return Results.NotFound();
+            var events = await eventStore.GetEventsAsync(summaryId);
+            return Results.Ok(McpSessionSummary(session, events));
+        }
+        case "get_session_transcript": {
+            if (!TryMcpSessionId(request.Params, out var transcriptId))
+                return Results.Problem(statusCode: 400, detail: "session_id is required and must be a non-empty string.");
+            if (await sessions.GetSessionAsync(transcriptId) is null) return Results.NotFound();
+            var agentId = McpString(request.Params, "agent_id");
+            var events = await eventStore.GetEventsAsync(transcriptId, agentId);
+            var window = McpEventWindow(events, request.Params);
+            return Results.Ok(new {
+                session_id = transcriptId,
+                events = window.Select(e => new {
+                    event_index = e.LineNumber,
+                    agent_id    = e.AgentId,
+                    event_type  = e.EventType,
+                    text        = e.Content ?? e.ToolOutput,
+                    tool        = e.ToolName,
+                    timestamp   = e.Timestamp
+                })
+            });
+        }
+        case "list_turns": {
+            if (!TryMcpSessionId(request.Params, out var turnsId))
+                return Results.Problem(statusCode: 400, detail: "session_id is required and must be a non-empty string.");
+            if (await sessions.GetSessionAsync(turnsId) is null) return Results.NotFound();
+            var events = await eventStore.GetEventsAsync(turnsId);
+            return Results.Ok(new { session_id = turnsId, turns = McpTurns(events) });
+        }
+        case "get_turn": {
+            if (!TryMcpSessionId(request.Params, out var turnSessionId))
+                return Results.Problem(statusCode: 400, detail: "session_id is required and must be a non-empty string.");
+            if (!TryMcpInt(request.Params, "turn_index", out var turnIndex) || turnIndex < 0)
+                return Results.Problem(statusCode: 400, detail: "turn_index is required and must be a non-negative integer.");
+            if (await sessions.GetSessionAsync(turnSessionId) is null) return Results.NotFound();
+            var events = await eventStore.GetEventsAsync(turnSessionId);
+            var turnEvents = McpTurnEvents(events, turnIndex);
+            if (turnEvents is null) return Results.NotFound();
+            return Results.Ok(new { session_id = turnSessionId, turn_index = turnIndex, events = turnEvents });
+        }
         default:
-            return Results.Ok(new { result = "acknowledged", method = request.Method });
+            return Results.Problem(statusCode: 400, detail: $"Unsupported MCP method '{request.Method}'.");
+    }
+});
+
+app.MapPost("/api/mcp/analytics", async (
+    [FromBody] McpRequest request,
+    IServiceProvider services,
+    CancellationToken ct) => {
+    switch (request.Method) {
+        case "get_analytics_schema":
+        case "query_analytics":
+            if (isPostgres)
+                return Results.Problem("Analytics views are not yet available under Database:Provider=Postgres.", statusCode: 501);
+            if (request.Method == "get_analytics_schema") {
+                var conn = services.GetRequiredService<SqliteConnection>();
+                var gate = services.GetRequiredService<SqliteGate>();
+                var text = await gate.RunAsync(async () => {
+                    var sb = new StringBuilder();
+                    sb.AppendLine("# Capacitor analytics views");
+                    sb.AppendLine();
+                    sb.AppendLine("Only single-statement SELECT queries over these v_an_* views are permitted.");
+                    using var cmd = conn.CreateCommand();
+                    cmd.CommandText = "SELECT name, sql FROM sqlite_master WHERE type = 'view' AND name LIKE 'v_an_%' ORDER BY name;";
+                    using var reader = await cmd.ExecuteReaderAsync();
+                    while (await reader.ReadAsync()) {
+                        sb.Append("## ").AppendLine(reader.GetString(0));
+                        sb.AppendLine("```sql");
+                        sb.AppendLine(reader.IsDBNull(1) ? "" : reader.GetString(1).Trim());
+                        sb.AppendLine("```");
+                        sb.AppendLine();
+                    }
+                    return sb.ToString();
+                }, ct);
+                return Results.Ok(new { text, max_rows = SqliteAnalyticsService.DefaultMaxRows });
+            } else {
+                var sql = McpString(request.Params, "sql");
+                if (sql is null)
+                    return Results.Problem(statusCode: 400, detail: "sql is required and must be a non-empty string.");
+                var analytics = services.GetRequiredService<SqliteAnalyticsService>();
+                var repos = McpString(request.Params, "repo") is { } one
+                    ? new[] { one }
+                    : null;
+                try {
+                    var result = await analytics.ExecuteGovernedQueryAsync(sql, repos, McpInt(request.Params, "max_rows", 0) is var n && n > 0 ? n : null, ct);
+                    return Results.Ok(new { rows = result.Rows, truncated = result.Truncated, max_rows = result.MaxRows });
+                } catch (InvalidOperationException ex) {
+                    return Results.Problem(statusCode: 400, detail: ex.Message);
+                } catch (SqliteException ex) {
+                    return Results.Problem(statusCode: 400, detail: ex.Message);
+                }
+            }
+        default:
+            return Results.Problem(statusCode: 400, detail: $"Unsupported MCP method '{request.Method}'.");
+    }
+});
+
+var declaredWorkItems = new ConcurrentDictionary<string, List<object>>(StringComparer.Ordinal);
+app.MapPost("/api/mcp/workitems", ([FromBody] McpRequest request) => {
+    switch (request.Method) {
+        case "declare_work_item": {
+            if (!TryMcpSessionId(request.Params, out var sessionId))
+                return Results.Problem(statusCode: 400, detail: "session_id is required and must be a non-empty string.");
+            var item = new {
+                work_item_id = Guid.NewGuid().ToString("N"),
+                session_id   = sessionId,
+                issue_key    = McpString(request.Params, "issue_key"),
+                pr_number    = McpInt(request.Params, "pr_number", 0) is var pr && pr > 0 ? pr : (int?)null,
+                title        = McpString(request.Params, "new_title") ?? McpString(request.Params, "issue_key")
+            };
+            declaredWorkItems.AddOrUpdate(
+                sessionId,
+                _ => new List<object> { item },
+                (_, existing) => { existing.Add(item); return existing; });
+            return Results.Ok(item);
+        }
+        case "get_session_work_items": {
+            if (!TryMcpSessionId(request.Params, out var sessionId))
+                return Results.Problem(statusCode: 400, detail: "session_id is required and must be a non-empty string.");
+            declaredWorkItems.TryGetValue(sessionId, out var items);
+            return Results.Ok(new { session_id = sessionId, work_items = (object)(items ?? new List<object>()) });
+        }
+        case "declare_work_breakdown":
+        case "retract_work_breakdown":
+        case "declare_work_relation":
+        case "retract_work_relation":
+        case "get_work_item_topology":
+            return Results.Problem(statusCode: 501, detail: $"MCP method '{request.Method}' is not persisted yet.");
+        default:
+            return Results.Problem(statusCode: 400, detail: $"Unsupported MCP method '{request.Method}'.");
     }
 });
 
@@ -383,6 +528,111 @@ static string EvalContextKind(string eventType) => eventType switch {
     "ToolResult"    => "tool_result",
     _               => "event"
 };
+
+static string? McpString(Dictionary<string, object>? parameters, string key) {
+    if (parameters is null || !parameters.TryGetValue(key, out var value) || value is null) return null;
+    var text = value is JsonElement el
+        ? el.ValueKind == JsonValueKind.String ? el.GetString() : el.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined ? null : el.ToString()
+        : value.ToString();
+    return string.IsNullOrWhiteSpace(text) ? null : text;
+}
+
+static int McpInt(Dictionary<string, object>? parameters, string key, int fallback) =>
+    TryMcpInt(parameters, key, out var value) ? value : fallback;
+
+static bool TryMcpInt(Dictionary<string, object>? parameters, string key, out int value) {
+    value = 0;
+    if (parameters is null || !parameters.TryGetValue(key, out var raw) || raw is null) return false;
+    if (raw is int i) { value = i; return true; }
+    if (raw is long l) { value = (int)l; return true; }
+    if (raw is JsonElement el && el.TryGetInt32(out var fromJson)) { value = fromJson; return true; }
+    return int.TryParse(raw.ToString(), out value);
+}
+
+static bool TryMcpSessionId(Dictionary<string, object>? parameters, out string sessionId) {
+    sessionId = McpString(parameters, "session_id")?.Replace("-", "") ?? "";
+    return sessionId.Length > 0;
+}
+
+static object McpSessionSummary(SessionHeaderRecord session, IReadOnlyList<SessionEventRecord> events) {
+    var narrative = events
+        .Where(e => e.EventType is "UserMessage" or "AssistantTurn" && !string.IsNullOrWhiteSpace(e.Content))
+        .Select(e => e.Content!)
+        .Take(8)
+        .ToList();
+    var summaryText = string.Join("\n", narrative);
+    if (string.IsNullOrWhiteSpace(summaryText))
+        summaryText = session.Title ?? "";
+    var plan = events.LastOrDefault(e =>
+        e.EventType.Equals("Plan", StringComparison.OrdinalIgnoreCase) &&
+        !string.IsNullOrWhiteSpace(e.Content))?.Content;
+    return new { summary_text = summaryText, plan };
+}
+
+static IReadOnlyList<SessionEventRecord> McpEventWindow(
+        IReadOnlyList<SessionEventRecord> events,
+        Dictionary<string, object>? parameters) {
+    if (TryMcpInt(parameters, "around_event", out var around)) {
+        var before = Math.Max(0, McpInt(parameters, "before", 5));
+        var after = Math.Max(0, McpInt(parameters, "after", 15));
+        return events.Where(e => e.LineNumber >= around - before && e.LineNumber <= around + after).ToList();
+    }
+
+    var limit = Math.Clamp(McpInt(parameters, "limit", 50), 1, 500);
+    var offset = Math.Max(0, McpInt(parameters, "offset", 0));
+    return events.Skip(offset).Take(limit).ToList();
+}
+
+static List<object> McpTurns(IReadOnlyList<SessionEventRecord> events) {
+    var turns = new List<object>();
+    var turnIndex = -1;
+    string? prompt = null;
+    var tools = new List<string>();
+    long tokens = 0;
+
+    void Flush() {
+        if (turnIndex < 0) return;
+        turns.Add(new {
+            turn_index  = turnIndex,
+            user_prompt = prompt,
+            tools,
+            tokens,
+            prose       = prompt
+        });
+        tools = new List<string>();
+        tokens = 0;
+        prompt = null;
+    }
+
+    foreach (var ev in events) {
+        if (ev.EventType == "UserMessage") {
+            Flush();
+            turnIndex++;
+            prompt = ev.Content;
+        } else if (turnIndex >= 0) {
+            if (ev.ToolName is { Length: > 0 } tool) tools.Add(tool);
+            tokens += ev.InputTokens + ev.OutputTokens;
+        }
+    }
+
+    Flush();
+    return turns;
+}
+
+static List<SessionEventRecord>? McpTurnEvents(IReadOnlyList<SessionEventRecord> events, int turnIndex) {
+    var current = -1;
+    List<SessionEventRecord>? bucket = null;
+    foreach (var ev in events) {
+        if (ev.EventType == "UserMessage") {
+            if (bucket is not null) return bucket;
+            current++;
+            if (current == turnIndex) bucket = new List<SessionEventRecord> { ev };
+        } else if (bucket is not null) {
+            bucket.Add(ev);
+        }
+    }
+    return bucket;
+}
 
 namespace Capacitor.Server.Api {
     using System.Text.Json.Serialization;

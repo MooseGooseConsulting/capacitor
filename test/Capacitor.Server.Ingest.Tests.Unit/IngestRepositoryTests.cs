@@ -192,4 +192,19 @@ public sealed class IngestRepositoryTests : IDisposable {
 
         await Assert.That(resolved).IsNull();
     }
+
+    [Test]
+    public async Task SearchSessions_matches_title_and_repo_and_honours_limit() {
+        var first = await _sessions.GetOrCreatePlaceholderAsync("sess-search-a", "claude", "alice");
+        await _sessions.UpdateSessionAsync(first with { Title = "refactor the ingest path", RepoOwner = "acme", RepoName = "cap" });
+        var second = await _sessions.GetOrCreatePlaceholderAsync("sess-search-b", "codex", "bob");
+        await _sessions.UpdateSessionAsync(second with { Title = "unrelated docs", RepoOwner = "acme", RepoName = "other" });
+
+        var hits = await _sessions.SearchSessionsAsync("refactor", null, "acme/cap", 10, 0);
+        await Assert.That(hits.Count).IsEqualTo(1);
+        await Assert.That(hits[0].SessionId).IsEqualTo("sess-search-a");
+
+        var limited = await _sessions.SearchSessionsAsync(null, null, null, 1, 0);
+        await Assert.That(limited.Count).IsEqualTo(1);
+    }
 }

@@ -11,4 +11,10 @@ public class McpEndpointsTests {
         await Assert.That(req.Method).IsEqualTo("search_sessions");
         await Assert.That(req.Params!["query"].ToString()).IsEqualTo("refactor");
     }
+
+    [Test]
+    public async Task McpRequest_default_params_are_absent() {
+        var req = new McpRequest(Method: "list_turns");
+        await Assert.That(req.Params).IsNull();
+    }
 }

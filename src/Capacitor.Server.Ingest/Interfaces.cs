@@ -24,6 +24,13 @@ public interface ISessionRepository {
         string? defaultVisibility = null,
         CancellationToken ct = default);
     Task<SessionHeaderRecord?> GetSessionAsync(string sessionId, CancellationToken ct = default);
+    Task<IReadOnlyList<SessionHeaderRecord>> SearchSessionsAsync(
+        string? query,
+        string? author,
+        string? repo,
+        int limit,
+        int offset,
+        CancellationToken ct = default);
     Task UpdateSessionAsync(SessionHeaderRecord session, CancellationToken ct = default);
 
     // Rollup-only write: touches the aggregate columns exclusively. A concurrent session-end can

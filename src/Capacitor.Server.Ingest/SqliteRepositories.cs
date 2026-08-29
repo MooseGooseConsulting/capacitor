@@ -116,42 +116,77 @@ public class SqliteSessionRepository : ISessionRepository {
 
         using var reader = await cmd.ExecuteReaderAsync(ct);
         if (!await reader.ReadAsync(ct)) return null;
-
-        return new SessionHeaderRecord {
-            SessionId = reader.GetString(0),
-            Title = reader.IsDBNull(1) ? null : reader.GetString(1),
-            Slug = reader.IsDBNull(2) ? null : reader.GetString(2),
-            Vendor = reader.GetString(3),
-            Model = reader.IsDBNull(4) ? null : reader.GetString(4),
-            Status = reader.GetString(5),
-            Visibility = reader.GetString(6),
-            OwnerUserId = reader.GetString(7),
-            MachineId = reader.IsDBNull(8) ? null : reader.GetString(8),
-            DaemonId = reader.IsDBNull(9) ? null : reader.GetString(9),
-            RepoHash = reader.IsDBNull(10) ? null : reader.GetString(10),
-            RepoOwner = reader.IsDBNull(11) ? null : reader.GetString(11),
-            RepoName = reader.IsDBNull(12) ? null : reader.GetString(12),
-            Branch = reader.IsDBNull(13) ? null : reader.GetString(13),
-            PrNumber = reader.IsDBNull(14) ? null : reader.GetInt32(14),
-            PrTitle = reader.IsDBNull(15) ? null : reader.GetString(15),
-            PrUrl = reader.IsDBNull(16) ? null : reader.GetString(16),
-            PrHeadRef = reader.IsDBNull(17) ? null : reader.GetString(17),
-            StartedAt = DateTimeOffset.Parse(reader.GetString(18), CultureInfo.InvariantCulture),
-            EndedAt = reader.IsDBNull(19) ? null : DateTimeOffset.Parse(reader.GetString(19), CultureInfo.InvariantCulture),
-            LastEventAt = reader.IsDBNull(20) ? null : DateTimeOffset.Parse(reader.GetString(20), CultureInfo.InvariantCulture),
-            DurationMin = reader.GetDecimal(21),
-            EventCount = reader.GetInt32(22),
-            ToolCount = reader.GetInt32(23),
-            TotalTokens = reader.GetInt64(24),
-            TotalCostUsd = reader.GetDecimal(25),
-            PreviousSessionId = reader.IsDBNull(26) ? null : reader.GetString(26),
-            NextSessionId = reader.IsDBNull(27) ? null : reader.GetString(27),
-            PrimaryPhase = reader.IsDBNull(28) ? null : reader.GetString(28),
-            SecondaryPhase = reader.IsDBNull(29) ? null : reader.GetString(29),
-            ClassificationConfidence = reader.IsDBNull(30) ? null : reader.GetDecimal(30),
-            ClassificationSource = reader.IsDBNull(31) ? null : reader.GetString(31)
-        };
+        return ReadSession(reader);
     }
+
+    public Task<IReadOnlyList<SessionHeaderRecord>> SearchSessionsAsync(
+            string? query,
+            string? author,
+            string? repo,
+            int limit,
+            int offset,
+            CancellationToken ct = default) =>
+        _gate.RunAsync(async () => {
+            var list = new List<SessionHeaderRecord>();
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = @"
+                SELECT session_id, title, slug, vendor, model, status, visibility, owner_user_id, machine_id, daemon_id,
+                       repo_hash, repo_owner, repo_name, branch, pr_number, pr_title, pr_url, pr_head_ref,
+                       started_at, ended_at, last_event_at, duration_min, event_count, tool_count, total_tokens, total_cost_usd,
+                       previous_session_id, next_session_id, primary_phase, secondary_phase, classification_confidence, classification_source
+                FROM sessions
+                WHERE ($query IS NULL OR title LIKE $query OR slug LIKE $query OR session_id LIKE $query)
+                  AND ($author IS NULL OR owner_user_id LIKE $author)
+                  AND ($repo IS NULL
+                       OR repo_hash = $repo
+                       OR (repo_owner || '/' || repo_name) = $repo)
+                ORDER BY COALESCE(last_event_at, started_at) DESC
+                LIMIT $limit OFFSET $offset;";
+            cmd.Parameters.AddWithValue("$query", query is null ? DBNull.Value : $"%{query}%");
+            cmd.Parameters.AddWithValue("$author", author is null ? DBNull.Value : $"%{author}%");
+            cmd.Parameters.AddWithValue("$repo", (object?)repo ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$limit", limit);
+            cmd.Parameters.AddWithValue("$offset", offset);
+
+            using var reader = await cmd.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct)) list.Add(ReadSession(reader));
+            return (IReadOnlyList<SessionHeaderRecord>)list;
+        }, ct);
+
+    static SessionHeaderRecord ReadSession(SqliteDataReader reader) => new() {
+        SessionId = reader.GetString(0),
+        Title = reader.IsDBNull(1) ? null : reader.GetString(1),
+        Slug = reader.IsDBNull(2) ? null : reader.GetString(2),
+        Vendor = reader.GetString(3),
+        Model = reader.IsDBNull(4) ? null : reader.GetString(4),
+        Status = reader.GetString(5),
+        Visibility = reader.GetString(6),
+        OwnerUserId = reader.GetString(7),
+        MachineId = reader.IsDBNull(8) ? null : reader.GetString(8),
+        DaemonId = reader.IsDBNull(9) ? null : reader.GetString(9),
+        RepoHash = reader.IsDBNull(10) ? null : reader.GetString(10),
+        RepoOwner = reader.IsDBNull(11) ? null : reader.GetString(11),
+        RepoName = reader.IsDBNull(12) ? null : reader.GetString(12),
+        Branch = reader.IsDBNull(13) ? null : reader.GetString(13),
+        PrNumber = reader.IsDBNull(14) ? null : reader.GetInt32(14),
+        PrTitle = reader.IsDBNull(15) ? null : reader.GetString(15),
+        PrUrl = reader.IsDBNull(16) ? null : reader.GetString(16),
+        PrHeadRef = reader.IsDBNull(17) ? null : reader.GetString(17),
+        StartedAt = DateTimeOffset.Parse(reader.GetString(18), CultureInfo.InvariantCulture),
+        EndedAt = reader.IsDBNull(19) ? null : DateTimeOffset.Parse(reader.GetString(19), CultureInfo.InvariantCulture),
+        LastEventAt = reader.IsDBNull(20) ? null : DateTimeOffset.Parse(reader.GetString(20), CultureInfo.InvariantCulture),
+        DurationMin = reader.GetDecimal(21),
+        EventCount = reader.GetInt32(22),
+        ToolCount = reader.GetInt32(23),
+        TotalTokens = reader.GetInt64(24),
+        TotalCostUsd = reader.GetDecimal(25),
+        PreviousSessionId = reader.IsDBNull(26) ? null : reader.GetString(26),
+        NextSessionId = reader.IsDBNull(27) ? null : reader.GetString(27),
+        PrimaryPhase = reader.IsDBNull(28) ? null : reader.GetString(28),
+        SecondaryPhase = reader.IsDBNull(29) ? null : reader.GetString(29),
+        ClassificationConfidence = reader.IsDBNull(30) ? null : reader.GetDecimal(30),
+        ClassificationSource = reader.IsDBNull(31) ? null : reader.GetString(31)
+    };
 
     public Task UpdateSessionAsync(SessionHeaderRecord session, CancellationToken ct = default) =>
         _gate.RunAsync(async () => {
