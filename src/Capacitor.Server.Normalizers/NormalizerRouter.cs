@@ -121,10 +121,41 @@ public class NormalizerRouter {
                     _normalizers.Add(n);
     }
 
-    public IReadOnlyList<SessionEventRecord> Normalize(string vendor, string sessionId, string? agentId, int lineNumber, string rawLine) {
+    public IReadOnlyList<SessionEventRecord> Normalize(string vendor, string sessionId, string? agentId, int lineNumber, string rawLine) =>
+        Normalize(vendor, sessionId, agentId, lineNumber, rawLine, out _);
+
+    public IReadOnlyList<SessionEventRecord> Normalize(string vendor, string sessionId, string? agentId, int lineNumber, string rawLine, out bool failed) {
         var normalizer = _normalizers.FirstOrDefault(n => n.CanNormalize(vendor))
                          ?? _normalizers.First(n => n.CanNormalize("acp"));
 
-        return normalizer.NormalizeLine(vendor, sessionId, agentId, lineNumber, rawLine);
+        var events = normalizer.NormalizeLine(vendor, sessionId, agentId, lineNumber, rawLine);
+        failed = LineFailed(vendor, rawLine, events);
+        return events;
     }
+
+    static bool LineFailed(string vendor, string rawLine, IReadOnlyList<SessionEventRecord> events) {
+        JsonDocument doc;
+        try {
+            doc = JsonDocument.Parse(rawLine);
+        } catch (JsonException) {
+            return true;
+        }
+
+        using (doc) {
+            if (!IsClaude(vendor)) return false;
+            if (events.Count == 0) return false;
+            if (events.Count != 1 || events[0].EventType != "RawMessage") return false;
+
+            var type = doc.RootElement.Str("type");
+            if (type is "user" or "assistant") {
+                return doc.RootElement.Obj("message") is null;
+            }
+
+            return true;
+        }
+    }
+
+    static bool IsClaude(string vendor) =>
+        string.Equals(vendor, "claude", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(vendor, "claude-code", StringComparison.OrdinalIgnoreCase);
 }

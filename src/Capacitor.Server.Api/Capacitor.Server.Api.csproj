@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk.Web">
     <PropertyGroup>
         <TargetFramework>net10.0</TargetFramework>
         <Nullable>enable</Nullable>
@@ -7,14 +7,14 @@
     <ItemGroup>
         <ProjectReference Include="..\Capacitor.Server.Data\Capacitor.Server.Data.csproj" />
         <ProjectReference Include="..\Capacitor.Server.Ingest\Capacitor.Server.Ingest.csproj" />
+        <ProjectReference Include="..\Capacitor.Server.Normalizers\Capacitor.Server.Normalizers.csproj" />
+        <ProjectReference Include="..\Capacitor.Server.Analytics\Capacitor.Server.Analytics.csproj" />
         <ProjectReference Include="..\Capacitor.Cli.Core\Capacitor.Cli.Core.csproj" />
     </ItemGroup>
     <ItemGroup>
         <PackageReference Include="Microsoft.Data.Sqlite" />
     </ItemGroup>
     <ItemGroup>
-        <InternalsVisibleTo Include="Capacitor.Server.Analytics.Tests.Unit" />
-        <InternalsVisibleTo Include="Capacitor.Server.Api" />
         <InternalsVisibleTo Include="Capacitor.Server.Api.Tests.Unit" />
     </ItemGroup>
 </Project>

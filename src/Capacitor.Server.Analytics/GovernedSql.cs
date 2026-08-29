@@ -31,7 +31,7 @@ internal static class GovernedSql {
         }
 
         var withoutTrailingSemi = stripped.TrimEnd().TrimEnd(';').TrimEnd();
-        if (withoutTrailingSemi.Contains(';', StringComparison.Ordinal)) {
+        if (HasUnquotedStatementSeparator(withoutTrailingSemi)) {
             throw new InvalidOperationException("Governed analytics query must be a single statement.");
         }
 
@@ -215,6 +215,37 @@ internal static class GovernedSql {
         }
 
         return sb.ToString();
+    }
+
+    static bool HasUnquotedStatementSeparator(string sql) {
+        var i = 0;
+        while (i < sql.Length) {
+            var c = sql[i];
+            if (c is '\'' or '"' or '[') {
+                var close = c == '[' ? ']' : c;
+                i++;
+                while (i < sql.Length) {
+                    if (sql[i] == close) {
+                        if (c != '[' && i + 1 < sql.Length && sql[i + 1] == close) {
+                            i += 2;
+                            continue;
+                        }
+
+                        i++;
+                        break;
+                    }
+
+                    i++;
+                }
+
+                continue;
+            }
+
+            if (c == ';') return true;
+            i++;
+        }
+
+        return false;
     }
 
     private static List<Token> Tokenize(string sql) {

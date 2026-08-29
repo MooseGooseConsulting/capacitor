@@ -92,7 +92,7 @@ public class SessionRollupProjector {
 }
 
 public class SqliteAnalyticsService {
-    private const int DefaultMaxRows = 1000;
+    public const int DefaultMaxRows = 1000;
 
     // Every view that ExecuteGovernedQueryAsync is allowed to read from. Keep in
     // sync with 002_analytics_views.sql -- anything not in here (raw tables like

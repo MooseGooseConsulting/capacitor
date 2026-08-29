@@ -177,4 +177,17 @@ public class NormalizerTests {
         await Assert.That(events[0].CacheReadTokens).IsEqualTo(10);
         await Assert.That(events[0].Timestamp).IsEqualTo(DateTimeOffset.Parse("2026-06-01T12:00:00.000Z", System.Globalization.CultureInfo.InvariantCulture));
     }
+
+    [Test]
+    public async Task ClaudeCodeNormalizer_marks_invalid_json_and_unrecognized_shapes_as_failed() {
+        _ = _router.Normalize("claude", "sess-1", "", 1, "not-json", out var jsonFailed);
+        await Assert.That(jsonFailed).IsTrue();
+
+        _ = _router.Normalize("claude", "sess-1", "", 1, """{"type":"user","message":"plain"}""", out var shapeFailed);
+        await Assert.That(shapeFailed).IsTrue();
+
+        var ok = _router.Normalize("claude", "sess-1", "", 1, """{"type":"user","message":{"content":"hi"}}""", out var okFailed);
+        await Assert.That(okFailed).IsFalse();
+        await Assert.That(ok[0].EventType).IsEqualTo("UserMessage");
+    }
 }
