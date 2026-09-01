@@ -10,6 +10,7 @@
     </ItemGroup>
     <ItemGroup>
         <PackageReference Include="Microsoft.Data.Sqlite" />
+        <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" VersionOverride="2.1.13" />
     </ItemGroup>
     <ItemGroup>
         <InternalsVisibleTo Include="Capacitor.Server.Ingest.Tests.Unit" />
