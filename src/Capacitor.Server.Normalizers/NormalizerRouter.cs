@@ -128,12 +128,12 @@ public class NormalizerRouter {
         var normalizer = _normalizers.FirstOrDefault(n => n.CanNormalize(vendor))
                          ?? _normalizers.First(n => n.CanNormalize("acp"));
 
-        var events = normalizer.NormalizeLine(vendor, sessionId, agentId, lineNumber, rawLine);
+        var normalized = normalizer.NormalizeLine(vendor, sessionId, agentId, lineNumber, rawLine);
         // One source line may emit an assistant turn, reasoning, and several tool calls.
         // The stable index makes every emitted event independently idempotent on replay.
-        for (var index = 0; index < events.Count; index++) {
-            events[index] = events[index] with { LogicalSeq = index };
-        }
+        var events = normalized
+            .Select((@event, index) => @event with { LogicalSeq = index })
+            .ToList();
         failed = LineFailed(vendor, rawLine, events);
         return events;
     }
