@@ -18,7 +18,8 @@ public static class SqliteDatabaseInitializer {
         string schemaSql,
         string viewsSql,
         CancellationToken ct = default) {
-        // SQLite ignores FOREIGN KEY inside a transaction, so enable it first.
+        // Foreign-key enforcement is per connection and cannot be changed in a transaction.
+        // Enable it before opening the initialization transaction.
         using (var pragma = connection.CreateCommand()) {
             pragma.CommandText = "PRAGMA foreign_keys = ON;";
             await pragma.ExecuteNonQueryAsync(ct);
