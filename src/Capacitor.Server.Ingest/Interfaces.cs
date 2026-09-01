@@ -68,7 +68,11 @@ public interface ISessionRepository {
 }
 
 public interface ITranscriptIngest {
-    Task<int> IngestAsync(IReadOnlyList<SessionEventRecord> events, string? ownerUserId = null, CancellationToken ct = default);
+    Task<int> IngestAsync(
+        IReadOnlyList<SessionEventRecord> events,
+        string? ownerUserId = null,
+        int firstLineNumber = 0,
+        CancellationToken ct = default);
 }
 
 public interface IMachineRepository {
