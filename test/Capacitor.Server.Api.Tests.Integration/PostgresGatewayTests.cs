@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json.Serialization;
+using System.Globalization;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
@@ -41,7 +42,7 @@ public sealed class PostgresGatewayTests {
         await using var command = new NpgsqlCommand(
             "SELECT COUNT(*) FROM session_events WHERE session_id = $1;", connection);
         command.Parameters.AddWithValue(sessionId);
-        var count = Convert.ToInt64(await command.ExecuteScalarAsync());
+        var count = Convert.ToInt64(await command.ExecuteScalarAsync(), CultureInfo.InvariantCulture);
         await Assert.That(count).IsEqualTo(2L);
     }
 
