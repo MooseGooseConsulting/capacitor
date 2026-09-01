@@ -19,7 +19,7 @@ builder.Services.AddNpgsqlDataSource(connectionString);
 builder.Services.AddSingleton<IEventStoreRepository, PostgresEventStoreRepository>();
 builder.Services.AddSingleton<ISessionWatermarkRepository, PostgresWatermarkRepository>();
 builder.Services.AddSingleton<ISessionRepository, PostgresSessionRepository>();
-builder.Services.AddSingleton<ITranscriptIngest, TranscriptIngestEngine>();
+builder.Services.AddSingleton<ITranscriptIngest, PostgresTranscriptIngestService>();
 builder.Services.AddSingleton<NormalizerRouter>();
 builder.Services.AddSingleton<SessionRollupProjector>();
 builder.Services.AddSingleton<PostgresAnalyticsService>();
