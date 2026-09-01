@@ -53,8 +53,12 @@ public class SqliteSessionRepository : ISessionRepository {
         _connection = connection;
     }
 
-    public async Task<SessionHeaderRecord> GetOrCreatePlaceholderAsync(string sessionId, string vendor, string? ownerUserId = null, CancellationToken ct = default) {
+    public Task<SessionHeaderRecord> GetOrCreatePlaceholderAsync(string sessionId, string vendor, string? ownerUserId = null, CancellationToken ct = default) =>
+        GetOrCreatePlaceholderAsync(sessionId, vendor, ownerUserId, defaultVisibility: null, ct);
+
+    public async Task<SessionHeaderRecord> GetOrCreatePlaceholderAsync(string sessionId, string vendor, string? ownerUserId, string? defaultVisibility, CancellationToken ct = default) {
         var now = DateTimeOffset.UtcNow;
+        var visibility = string.IsNullOrEmpty(defaultVisibility) ? "private" : defaultVisibility;
         using (var cmd = _connection.CreateCommand()) {
             cmd.CommandText = @"
                 INSERT INTO sessions (
@@ -69,7 +73,7 @@ public class SqliteSessionRepository : ISessionRepository {
             cmd.Parameters.AddWithValue("$vendor", vendor);
             cmd.Parameters.AddWithValue("$owner_user_id", ownerUserId ?? "anonymous");
             cmd.Parameters.AddWithValue("$status", "active");
-            cmd.Parameters.AddWithValue("$visibility", "private");
+            cmd.Parameters.AddWithValue("$visibility", visibility);
             cmd.Parameters.AddWithValue("$started_at", SqliteUtc.Format(now));
 
             await cmd.ExecuteNonQueryAsync(ct);
@@ -227,6 +231,132 @@ public class SqliteSessionRepository : ISessionRepository {
                 link.Parameters.AddWithValue("$session_id", session.SessionId);
                 link.Parameters.AddWithValue("$previous_session_id", previousId);
                 await link.ExecuteNonQueryAsync(ct);
+            }
+
+            await tx.CommitAsync(ct);
+        } catch {
+            await tx.RollbackAsync(CancellationToken.None);
+            throw;
+        }
+    }
+
+    public async Task PatchSessionStartAsync(string sessionId, string? ownerUserId, string? defaultVisibility, CancellationToken ct = default) {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = @"
+            UPDATE sessions SET
+                owner_user_id = CASE
+                    WHEN $owner_user_id IS NOT NULL THEN $owner_user_id
+                    ELSE owner_user_id
+                END,
+                visibility = CASE
+                    WHEN $visibility IS NOT NULL THEN $visibility
+                    ELSE visibility
+                END
+            WHERE session_id = $session_id;
+        ";
+        cmd.Parameters.AddWithValue("$session_id", sessionId);
+        cmd.Parameters.AddWithValue("$owner_user_id", string.IsNullOrEmpty(ownerUserId) ? DBNull.Value : ownerUserId);
+        cmd.Parameters.AddWithValue("$visibility", string.IsNullOrEmpty(defaultVisibility) ? DBNull.Value : defaultVisibility);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task UpdateRepositoryMetadataAsync(
+            string sessionId,
+            string? repoHash,
+            string? repoOwner,
+            string? repoName,
+            string? branch,
+            int? prNumber,
+            string? prTitle,
+            string? prUrl,
+            string? prHeadRef,
+            CancellationToken ct = default) {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = @"
+            UPDATE sessions SET
+                repo_hash = COALESCE($repo_hash, repo_hash),
+                repo_owner = COALESCE($repo_owner, repo_owner),
+                repo_name = COALESCE($repo_name, repo_name),
+                branch = COALESCE($branch, branch),
+                pr_number = COALESCE($pr_number, pr_number),
+                pr_title = COALESCE($pr_title, pr_title),
+                pr_url = COALESCE($pr_url, pr_url),
+                pr_head_ref = COALESCE($pr_head_ref, pr_head_ref)
+            WHERE session_id = $session_id;
+        ";
+        cmd.Parameters.AddWithValue("$session_id", sessionId);
+        cmd.Parameters.AddWithValue("$repo_hash", (object?)repoHash ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$repo_owner", (object?)repoOwner ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$repo_name", (object?)repoName ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$branch", (object?)branch ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$pr_number", (object?)prNumber ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$pr_title", (object?)prTitle ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$pr_url", (object?)prUrl ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$pr_head_ref", (object?)prHeadRef ?? DBNull.Value);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task PersistEvalRunAsync(EvalRunRecord run, IReadOnlyList<EvalVerdictRecord> verdicts, CancellationToken ct = default) {
+        using var tx = _connection.BeginTransaction();
+        try {
+            using (var cmd = _connection.CreateCommand()) {
+                cmd.Transaction = tx;
+                cmd.CommandText = @"
+                    INSERT INTO eval_runs (
+                        eval_run_id, session_id, judge_model, overall_score, summary,
+                        retrospective_json, retrospective_prompt_version, evaluated_at
+                    ) VALUES (
+                        $eval_run_id, $session_id, $judge_model, $overall_score, $summary,
+                        $retrospective_json, $retrospective_prompt_version, $evaluated_at
+                    )
+                    ON CONFLICT(eval_run_id) DO UPDATE SET
+                        overall_score = excluded.overall_score,
+                        summary = excluded.summary,
+                        retrospective_json = excluded.retrospective_json,
+                        retrospective_prompt_version = excluded.retrospective_prompt_version,
+                        evaluated_at = excluded.evaluated_at;
+                ";
+                cmd.Parameters.AddWithValue("$eval_run_id", run.EvalRunId);
+                cmd.Parameters.AddWithValue("$session_id", run.SessionId);
+                cmd.Parameters.AddWithValue("$judge_model", run.JudgeModel);
+                cmd.Parameters.AddWithValue("$overall_score", run.OverallScore);
+                cmd.Parameters.AddWithValue("$summary", run.Summary);
+                cmd.Parameters.AddWithValue("$retrospective_json", (object?)run.RetrospectiveJson ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$retrospective_prompt_version", (object?)run.RetrospectivePromptVersion ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$evaluated_at", SqliteUtc.Format(run.EvaluatedAt));
+                await cmd.ExecuteNonQueryAsync(ct);
+            }
+
+            using (var clear = _connection.CreateCommand()) {
+                clear.Transaction = tx;
+                clear.CommandText = "DELETE FROM eval_verdicts WHERE eval_run_id = $eval_run_id;";
+                clear.Parameters.AddWithValue("$eval_run_id", run.EvalRunId);
+                await clear.ExecuteNonQueryAsync(ct);
+            }
+
+            foreach (var verdict in verdicts) {
+                using var cmd = _connection.CreateCommand();
+                cmd.Transaction = tx;
+                cmd.CommandText = @"
+                    INSERT INTO eval_verdicts (
+                        eval_run_id, category, question_id, score, verdict, finding,
+                        evidence, recommendation, tools_used, prompt_version
+                    ) VALUES (
+                        $eval_run_id, $category, $question_id, $score, $verdict, $finding,
+                        $evidence, $recommendation, $tools_used, $prompt_version
+                    );
+                ";
+                cmd.Parameters.AddWithValue("$eval_run_id", verdict.EvalRunId);
+                cmd.Parameters.AddWithValue("$category", verdict.Category);
+                cmd.Parameters.AddWithValue("$question_id", verdict.QuestionId);
+                cmd.Parameters.AddWithValue("$score", verdict.Score);
+                cmd.Parameters.AddWithValue("$verdict", verdict.Verdict);
+                cmd.Parameters.AddWithValue("$finding", verdict.Finding);
+                cmd.Parameters.AddWithValue("$evidence", (object?)verdict.Evidence ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$recommendation", (object?)verdict.Recommendation ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$tools_used", (object?)verdict.ToolsUsed ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$prompt_version", (object?)verdict.PromptVersion ?? DBNull.Value);
+                await cmd.ExecuteNonQueryAsync(ct);
             }
 
             await tx.CommitAsync(ct);

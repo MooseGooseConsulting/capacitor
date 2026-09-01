@@ -323,4 +323,22 @@ public sealed class AnalyticsServiceTests : IDisposable {
         await Assert.That(rows[0]["pr_title"]).IsEqualTo("New title");
         await Assert.That(rows[0]["session_count"]).IsEqualTo(2L);
     }
+
+    [Test]
+    public async Task GovernedAnalytics_rejects_quoted_raw_table_identifiers() {
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _analytics.ExecuteGovernedQueryAsync(
+                "SELECT content FROM \"session_events\";", scope: "global"));
+    }
+
+    [Test]
+    public async Task GovernedAnalytics_accepts_a_semicolon_inside_a_string_literal() {
+        await _sessions.GetOrCreatePlaceholderAsync("sess-semi-1", "claude", "dev-user");
+
+        var rows = await _analytics.ExecuteGovernedQueryAsync(
+            "SELECT 'a;b' AS marker FROM v_an_sessions WHERE session_id = 'sess-semi-1';",
+            scope: "global");
+        await Assert.That(rows.Count).IsEqualTo(1);
+        await Assert.That(rows[0]["marker"]).IsEqualTo("a;b");
+    }
 }

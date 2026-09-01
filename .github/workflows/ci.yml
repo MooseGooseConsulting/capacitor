@@ -87,7 +87,7 @@ jobs:
           node npm/kcap/bin/refresh.test.js
 
       - name: Run server unit tests
-        # Run Data and Ingest unit projects when present. SqliteDatabaseInitializer
+        # Run server unit projects when present. SqliteDatabaseInitializer
         # walks from cwd to Capacitor.slnx, so this step starts at the repo root.
         shell: bash
         working-directory: ${{ github.workspace }}
@@ -96,6 +96,7 @@ jobs:
           projects=(
             test/Capacitor.Server.Data.Tests.Unit/Capacitor.Server.Data.Tests.Unit.csproj
             test/Capacitor.Server.Ingest.Tests.Unit/Capacitor.Server.Ingest.Tests.Unit.csproj
+            test/Capacitor.Server.Api.Tests.Unit/Capacitor.Server.Api.Tests.Unit.csproj
           )
           found=0
           failed=0

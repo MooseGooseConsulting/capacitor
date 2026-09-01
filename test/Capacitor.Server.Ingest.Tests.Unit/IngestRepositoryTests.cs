@@ -244,4 +244,84 @@ public sealed class IngestRepositoryTests : IDisposable {
         await Assert.That(stored[1].ContextUsedTokens).IsNull();
         await Assert.That(stored[1].ContextWindowTokens).IsNull();
     }
+
+    [Test]
+    public async Task UpdateRepositoryMetadata_does_not_rewrite_status() {
+        var sessionId = "sess-repo-meta";
+        var created = await _sessions.GetOrCreatePlaceholderAsync(sessionId, "claude", "user-1");
+        await _sessions.UpdateSessionAsync(created with { Status = "completed" });
+
+        await _sessions.UpdateRepositoryMetadataAsync(
+            sessionId, "hash-a", "acme", "cap", "main", 14, "title", "https://example/pr/14", "head");
+
+        var stored = await _sessions.GetSessionAsync(sessionId);
+        await Assert.That(stored!.Status).IsEqualTo("completed");
+        await Assert.That(stored.RepoHash).IsEqualTo("hash-a");
+        await Assert.That(stored.RepoOwner).IsEqualTo("acme");
+        await Assert.That(stored.RepoName).IsEqualTo("cap");
+    }
+
+    [Test]
+    public async Task PatchSessionStart_does_not_rewrite_status() {
+        var sessionId = "sess-patch-start";
+        var created = await _sessions.GetOrCreatePlaceholderAsync(sessionId, "claude");
+        await _sessions.UpdateSessionAsync(created with { Status = "completed" });
+
+        await _sessions.PatchSessionStartAsync(sessionId, "owner-z", "private");
+
+        var stored = await _sessions.GetSessionAsync(sessionId);
+        await Assert.That(stored!.Status).IsEqualTo("completed");
+        await Assert.That(stored.OwnerUserId).IsEqualTo("owner-z");
+        await Assert.That(stored.Visibility).IsEqualTo("private");
+    }
+
+    [Test]
+    public async Task GetOrCreatePlaceholder_honors_default_visibility_on_insert_only() {
+        var first = await _sessions.GetOrCreatePlaceholderAsync("sess-vis", "claude", "user-1", "private");
+        await Assert.That(first.Visibility).IsEqualTo("private");
+
+        var second = await _sessions.GetOrCreatePlaceholderAsync("sess-vis", "claude", "user-1", "project");
+        await Assert.That(second.Visibility).IsEqualTo("private");
+    }
+
+    [Test]
+    public async Task PersistEvalRun_replaces_verdicts_for_the_same_run() {
+        var sessionId = "sess-eval";
+        await _sessions.GetOrCreatePlaceholderAsync(sessionId, "claude", "user-1");
+
+        var run = new EvalRunRecord {
+            EvalRunId = "run-1",
+            SessionId = sessionId,
+            JudgeModel = "gpt",
+            OverallScore = 80,
+            Summary = "ok",
+            EvaluatedAt = DateTimeOffset.UtcNow
+        };
+
+        await _sessions.PersistEvalRunAsync(run, [
+            new() {
+                EvalRunId = "run-1", Category = "safety", QuestionId = "a",
+                Score = 1, Verdict = "pass", Finding = "one"
+            },
+            new() {
+                EvalRunId = "run-1", Category = "quality", QuestionId = "b",
+                Score = 1, Verdict = "pass", Finding = "two"
+            }
+        ]);
+
+        await _sessions.PersistEvalRunAsync(run with { OverallScore = 90, Summary = "retry" }, [
+            new() {
+                EvalRunId = "run-1", Category = "safety", QuestionId = "a",
+                Score = 2, Verdict = "pass", Finding = "only"
+            }
+        ]);
+
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*), MAX(finding), (SELECT overall_score FROM eval_runs WHERE eval_run_id = 'run-1') FROM eval_verdicts WHERE eval_run_id = 'run-1';";
+        using var reader = await cmd.ExecuteReaderAsync();
+        await reader.ReadAsync();
+        await Assert.That(reader.GetInt64(0)).IsEqualTo(1);
+        await Assert.That(reader.GetString(1)).IsEqualTo("only");
+        await Assert.That(reader.GetInt64(2)).IsEqualTo(90);
+    }
 }
