@@ -30,7 +30,9 @@ CREATE TABLE IF NOT EXISTS session_events (
     is_error            BOOLEAN NOT NULL DEFAULT FALSE,
     content             TEXT,
     raw_payload         TEXT,
-    PRIMARY KEY (session_id, agent_id, line_number)
+    -- A single transcript line can normalize into multiple logical events.
+    -- `logical_seq` is therefore part of the event identity, not merely metadata.
+    PRIMARY KEY (session_id, agent_id, line_number, logical_seq)
 );
 
 CREATE TABLE IF NOT EXISTS session_watermarks (

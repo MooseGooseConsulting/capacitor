@@ -1,106 +1,100 @@
 using System.Globalization;
-using Microsoft.Data.Sqlite;
+using Npgsql;
 using Capacitor.Server.Data.Entities;
 
 namespace Capacitor.Server.Ingest;
 
-public class SqliteEventStoreRepository : IEventStoreRepository {
+public class PostgresEventStoreRepository : IEventStoreRepository {
     private const string EventColumns = @"
         session_id, agent_id, line_number, logical_seq, event_id, event_type, vendor, model,
         timestamp, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
         reasoning_tokens, context_used_tokens, context_window_tokens, cost_usd, item_id,
         tool_server, tool_name, tool_input, tool_output, tool_exit_code, is_error, content, raw_payload";
 
-    private readonly SqliteConnection _connection;
+    private readonly NpgsqlDataSource _dataSource;
 
-    public SqliteEventStoreRepository(SqliteConnection connection) {
-        _connection = connection;
+    public PostgresEventStoreRepository(NpgsqlDataSource dataSource) {
+        _dataSource = dataSource;
     }
 
     public async Task<int> AppendEventsAsync(IReadOnlyList<SessionEventRecord> events, CancellationToken ct = default) {
         if (events.Count == 0) return 0;
 
         var inserted = 0;
-        using var tx = _connection.BeginTransaction();
-        try {
-            const string sql = $@"
-                INSERT INTO session_events ({EventColumns})
-                VALUES (
-                    $session_id, $agent_id, $line_number, $logical_seq, $event_id, $event_type, $vendor, $model,
-                    $timestamp, $input_tokens, $output_tokens, $cache_read_tokens, $cache_write_tokens,
-                    $reasoning_tokens, $context_used_tokens, $context_window_tokens, $cost_usd, $item_id,
-                    $tool_server, $tool_name, $tool_input, $tool_output, $tool_exit_code, $is_error, $content, $raw_payload
-                )
-                ON CONFLICT(session_id, agent_id, line_number, logical_seq) DO NOTHING;
-            ";
+        await using var conn = await _dataSource.OpenConnectionAsync(ct);
+        await using var tx = await conn.BeginTransactionAsync(ct);
 
-            foreach (var ev in events) {
-                using var cmd = _connection.CreateCommand();
-                cmd.Transaction = tx;
-                cmd.CommandText = sql;
+        const string sql = $@"
+            INSERT INTO session_events ({EventColumns})
+            VALUES (
+                $1, $2, $3, $4, $5, $6, $7, $8,
+                $9, $10, $11, $12, $13, $14, $15, $16, $17, $18,
+                $19, $20, $21, $22, $23, $24, $25, $26
+            )
+            ON CONFLICT(session_id, agent_id, line_number, logical_seq) DO NOTHING;
+        ";
 
-                cmd.Parameters.AddWithValue("$session_id", ev.SessionId);
-                cmd.Parameters.AddWithValue("$agent_id", ev.AgentId ?? string.Empty);
-                cmd.Parameters.AddWithValue("$line_number", ev.LineNumber);
-                cmd.Parameters.AddWithValue("$logical_seq", ev.LogicalSeq);
-                cmd.Parameters.AddWithValue("$event_id", (object?)ev.EventId ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("$event_type", ev.EventType);
-                cmd.Parameters.AddWithValue("$vendor", ev.Vendor);
-                cmd.Parameters.AddWithValue("$model", (object?)ev.Model ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("$timestamp", SqliteUtc.Format(ev.Timestamp));
-                cmd.Parameters.AddWithValue("$input_tokens", ev.InputTokens);
-                cmd.Parameters.AddWithValue("$output_tokens", ev.OutputTokens);
-                cmd.Parameters.AddWithValue("$cache_read_tokens", ev.CacheReadTokens);
-                cmd.Parameters.AddWithValue("$cache_write_tokens", ev.CacheWriteTokens);
-                cmd.Parameters.AddWithValue("$reasoning_tokens", (object?)ev.ReasoningTokens ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("$context_used_tokens", (object?)ev.ContextUsedTokens ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("$context_window_tokens", (object?)ev.ContextWindowTokens ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("$cost_usd", ev.CostUsd);
-                cmd.Parameters.AddWithValue("$item_id", (object?)ev.ItemId ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("$tool_server", (object?)ev.ToolServer ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("$tool_name", (object?)ev.ToolName ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("$tool_input", (object?)ev.ToolInput ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("$tool_output", (object?)ev.ToolOutput ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("$tool_exit_code", (object?)ev.ToolExitCode ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("$is_error", ev.IsError ? 1 : 0);
-                cmd.Parameters.AddWithValue("$content", (object?)ev.Content ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("$raw_payload", (object?)ev.RawPayload ?? DBNull.Value);
+        foreach (var ev in events) {
+            await using var cmd = new NpgsqlCommand(sql, conn, tx);
+            cmd.Parameters.AddWithValue(ev.SessionId);
+            cmd.Parameters.AddWithValue(ev.AgentId ?? string.Empty);
+            cmd.Parameters.AddWithValue(ev.LineNumber);
+            cmd.Parameters.AddWithValue(ev.LogicalSeq);
+            cmd.Parameters.AddWithValue((object?)ev.EventId ?? DBNull.Value);
+            cmd.Parameters.AddWithValue(ev.EventType);
+            cmd.Parameters.AddWithValue(ev.Vendor);
+            cmd.Parameters.AddWithValue((object?)ev.Model ?? DBNull.Value);
+            cmd.Parameters.AddWithValue(EventTimestamp.ToUtcString(ev.Timestamp));
+            cmd.Parameters.AddWithValue(ev.InputTokens);
+            cmd.Parameters.AddWithValue(ev.OutputTokens);
+            cmd.Parameters.AddWithValue(ev.CacheReadTokens);
+            cmd.Parameters.AddWithValue(ev.CacheWriteTokens);
+            cmd.Parameters.AddWithValue((object?)ev.ReasoningTokens ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)ev.ContextUsedTokens ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)ev.ContextWindowTokens ?? DBNull.Value);
+            cmd.Parameters.AddWithValue(ev.CostUsd);
+            cmd.Parameters.AddWithValue((object?)ev.ItemId ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)ev.ToolServer ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)ev.ToolName ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)ev.ToolInput ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)ev.ToolOutput ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)ev.ToolExitCode ?? DBNull.Value);
+            cmd.Parameters.AddWithValue(ev.IsError);
+            cmd.Parameters.AddWithValue((object?)ev.Content ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)ev.RawPayload ?? DBNull.Value);
 
-                inserted += await cmd.ExecuteNonQueryAsync(ct);
-            }
-
-            await tx.CommitAsync(ct);
-            return inserted;
-        } catch {
-            await tx.RollbackAsync(CancellationToken.None);
-            throw;
+            inserted += await cmd.ExecuteNonQueryAsync(ct);
         }
+
+        await tx.CommitAsync(ct);
+        return inserted;
     }
 
     public async Task<IReadOnlyList<SessionEventRecord>> GetEventsAsync(string sessionId, string? agentId = null, int fromLine = 0, CancellationToken ct = default) {
         var list = new List<SessionEventRecord>();
-        using var cmd = _connection.CreateCommand();
+        await using var conn = await _dataSource.OpenConnectionAsync(ct);
+        await using var cmd = conn.CreateCommand();
 
         if (agentId == null) {
             cmd.CommandText = $@"
                 SELECT {EventColumns}
                 FROM session_events
-                WHERE session_id = $session_id AND line_number >= $from_line
+                WHERE session_id = $1 AND line_number >= $2
                 ORDER BY line_number ASC, logical_seq ASC, agent_id ASC;";
-            cmd.Parameters.AddWithValue("$session_id", sessionId);
-            cmd.Parameters.AddWithValue("$from_line", fromLine);
+            cmd.Parameters.AddWithValue(sessionId);
+            cmd.Parameters.AddWithValue(fromLine);
         } else {
             cmd.CommandText = $@"
                 SELECT {EventColumns}
                 FROM session_events
-                WHERE session_id = $session_id AND agent_id = $agent_id AND line_number >= $from_line
+                WHERE session_id = $1 AND agent_id = $2 AND line_number >= $3
                 ORDER BY line_number ASC, logical_seq ASC;";
-            cmd.Parameters.AddWithValue("$session_id", sessionId);
-            cmd.Parameters.AddWithValue("$agent_id", agentId);
-            cmd.Parameters.AddWithValue("$from_line", fromLine);
+            cmd.Parameters.AddWithValue(sessionId);
+            cmd.Parameters.AddWithValue(agentId);
+            cmd.Parameters.AddWithValue(fromLine);
         }
 
-        using var reader = await cmd.ExecuteReaderAsync(ct);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct)) {
             list.Add(ReadEvent(reader));
         }
@@ -109,15 +103,17 @@ public class SqliteEventStoreRepository : IEventStoreRepository {
     }
 
     public async Task<long> GetEventCountAsync(string sessionId, CancellationToken ct = default) {
-        using var cmd = _connection.CreateCommand();
-        cmd.CommandText = "SELECT COUNT(*) FROM session_events WHERE session_id = $session_id;";
-        cmd.Parameters.AddWithValue("$session_id", sessionId);
+        await using var conn = await _dataSource.OpenConnectionAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM session_events WHERE session_id = $1;";
+        cmd.Parameters.AddWithValue(sessionId);
         var res = await cmd.ExecuteScalarAsync(ct);
         return res is long count ? count : Convert.ToInt64(res, CultureInfo.InvariantCulture);
     }
 
     public async Task<SessionRollupAggregate?> GetRollupAggregateAsync(string sessionId, CancellationToken ct = default) {
-        using var cmd = _connection.CreateCommand();
+        await using var conn = await _dataSource.OpenConnectionAsync(ct);
+        await using var cmd = conn.CreateCommand();
         cmd.CommandText = @"
             SELECT
                 COUNT(*) AS event_count,
@@ -127,10 +123,10 @@ public class SqliteEventStoreRepository : IEventStoreRepository {
                 MIN(timestamp) AS first_event,
                 MAX(timestamp) AS last_event
             FROM session_events
-            WHERE session_id = $session_id;";
-        cmd.Parameters.AddWithValue("$session_id", sessionId);
+            WHERE session_id = $1;";
+        cmd.Parameters.AddWithValue(sessionId);
 
-        using var reader = await cmd.ExecuteReaderAsync(ct);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
         if (!await reader.ReadAsync(ct)) return null;
 
         var eventCount = reader.IsDBNull(0) ? 0 : Convert.ToInt32(reader.GetValue(0), CultureInfo.InvariantCulture);
@@ -154,7 +150,7 @@ public class SqliteEventStoreRepository : IEventStoreRepository {
         return new SessionRollupAggregate(eventCount, toolCount, totalTokens, totalCost, durationMin, lastEventAt);
     }
 
-    private static SessionEventRecord ReadEvent(SqliteDataReader reader) => new() {
+    private static SessionEventRecord ReadEvent(NpgsqlDataReader reader) => new() {
         SessionId = reader.GetString(0),
         AgentId = reader.GetString(1),
         LineNumber = reader.GetInt32(2),
@@ -178,7 +174,7 @@ public class SqliteEventStoreRepository : IEventStoreRepository {
         ToolInput = reader.IsDBNull(20) ? null : reader.GetString(20),
         ToolOutput = reader.IsDBNull(21) ? null : reader.GetString(21),
         ToolExitCode = reader.IsDBNull(22) ? null : reader.GetInt32(22),
-        IsError = reader.GetInt32(23) != 0,
+        IsError = reader.GetBoolean(23),
         Content = reader.IsDBNull(24) ? null : reader.GetString(24),
         RawPayload = reader.IsDBNull(25) ? null : reader.GetString(25)
     };

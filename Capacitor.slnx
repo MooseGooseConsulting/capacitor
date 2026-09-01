@@ -16,6 +16,7 @@
     <Project Path="src\Capacitor.Server.Ingest\Capacitor.Server.Ingest.csproj" />
     <Project Path="src\Capacitor.Server.Normalizers\Capacitor.Server.Normalizers.csproj" />
     <Project Path="src\Capacitor.Server.Analytics\Capacitor.Server.Analytics.csproj" />
+    <Project Path="src\Capacitor.Server.Api\Capacitor.Server.Api.csproj" />
   </Folder>
   <Folder Name="/test/">
     <File Path="test\Directory.Build.props" />
@@ -30,5 +31,6 @@
     <Project Path="test\Capacitor.Server.Ingest.Tests.Unit\Capacitor.Server.Ingest.Tests.Unit.csproj" />
     <Project Path="test\Capacitor.Server.Normalizers.Tests.Unit\Capacitor.Server.Normalizers.Tests.Unit.csproj" />
     <Project Path="test\Capacitor.Server.Analytics.Tests.Unit\Capacitor.Server.Analytics.Tests.Unit.csproj" />
+    <Project Path="test\Capacitor.Server.Api.Tests.Integration\Capacitor.Server.Api.Tests.Integration.csproj" />
   </Folder>
 </Solution>
