@@ -133,7 +133,7 @@ app.MapPost("/hooks/transcript", async (
     }
 
     if (events.Count > 0) {
-        await ingest.IngestAsync(events);
+        await ingest.IngestAsync(events, firstLineNumber: batch.LineNumbers is null ? 1 : 0);
         await projector.ProjectSessionRollupAsync(sessionId);
     } else if (batch.Lines.Length > 0) {
         await watermarks.UpdateWatermarkAsync(sessionId, agentId, highestLine);
