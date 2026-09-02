@@ -144,6 +144,7 @@ app.MapPost("/hooks/transcript", async (
     var agentId = IdCanonicalizer.Canonicalize(batch.AgentId);
     var events = new List<SessionEventRecord>();
     var acceptedSourceLines = new List<TranscriptSourceLine>();
+    var rejectedSourceLines = new List<TranscriptSourceLine>();
     var highestLine = 0;
     var failedCount = 0;
 
@@ -152,8 +153,12 @@ app.MapPost("/hooks/transcript", async (
         if (lineNum > highestLine) highestLine = lineNum;
 
         var lineEvents = router.Normalize(vendor, sessionId, agentId, lineNum, batch.Lines[i], out var lineFailed);
-        if (lineFailed) failedCount++;
-        else acceptedSourceLines.Add(new TranscriptSourceLine(sessionId, agentId, lineNum));
+        if (lineFailed) {
+            failedCount++;
+            rejectedSourceLines.Add(new TranscriptSourceLine(sessionId, agentId, lineNum));
+        } else {
+            acceptedSourceLines.Add(new TranscriptSourceLine(sessionId, agentId, lineNum));
+        }
         foreach (var ev in lineEvents) {
             events.Add(ev with { Vendor = vendor, AgentId = agentId, SessionId = sessionId });
         }
@@ -163,7 +168,9 @@ app.MapPost("/hooks/transcript", async (
         await ingest.IngestAsync(
             events,
             firstLineNumber: batch.LineNumbers is null ? 1 : 0,
-            acceptedSourceLines: acceptedSourceLines);
+            acceptedSourceLines: acceptedSourceLines,
+            rejectedSourceLines: rejectedSourceLines,
+            inferOmittedSourceLines: batch.LineNumbers is not null);
         await projector.ProjectSessionRollupAsync(sessionId);
     }
 

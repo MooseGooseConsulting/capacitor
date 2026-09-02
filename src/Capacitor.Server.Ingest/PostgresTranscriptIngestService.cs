@@ -26,6 +26,8 @@ public sealed class PostgresTranscriptIngestService : ITranscriptIngest {
         string? ownerUserId = null,
         int firstLineNumber = 0,
         IReadOnlyList<TranscriptSourceLine>? acceptedSourceLines = null,
+        IReadOnlyList<TranscriptSourceLine>? rejectedSourceLines = null,
+        bool inferOmittedSourceLines = false,
         CancellationToken ct = default) {
         if (events.Count == 0 && (acceptedSourceLines is null || acceptedSourceLines.Count == 0)) return 0;
 
@@ -44,6 +46,7 @@ public sealed class PostgresTranscriptIngestService : ITranscriptIngest {
 
         var streams = events.Select(@event => (@event.SessionId, AgentId: @event.AgentId ?? string.Empty))
             .Concat((acceptedSourceLines ?? []).Select(line => (line.SessionId, line.AgentId)))
+            .Concat((rejectedSourceLines ?? []).Select(line => (line.SessionId, line.AgentId)))
             .Distinct()
             .ToArray();
         foreach (var stream in streams) {
@@ -51,7 +54,15 @@ public sealed class PostgresTranscriptIngestService : ITranscriptIngest {
             var acceptedLines = acceptedSourceLines?
                 .Where(line => line.SessionId == stream.SessionId && line.AgentId == stream.AgentId)
                 .Select(line => line.LineNumber);
-            if (TranscriptIngestEngine.ContiguousLastLine(stored, acceptedLines, firstLineNumber) is int lastLine) {
+            var rejectedLines = rejectedSourceLines?
+                .Where(line => line.SessionId == stream.SessionId && line.AgentId == stream.AgentId)
+                .Select(line => line.LineNumber);
+            var watermark = await GetLastLineNumberAsync(connection, transaction, stream.SessionId, stream.AgentId, ct);
+            var startLine = watermark is int lastWatermark
+                ? Math.Max(firstLineNumber, lastWatermark + 1)
+                : firstLineNumber;
+            if (TranscriptIngestEngine.ContiguousLastLine(
+                    stored, acceptedLines, startLine, rejectedLines, inferOmittedSourceLines) is int lastLine) {
                 await AdvanceWatermarkAsync(connection, transaction, stream.SessionId, stream.AgentId, lastLine, ct);
             }
         }
@@ -170,6 +181,23 @@ public sealed class PostgresTranscriptIngestService : ITranscriptIngest {
         }
 
         return events;
+    }
+
+    private static async Task<int?> GetLastLineNumberAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        string sessionId,
+        string agentId,
+        CancellationToken ct) {
+        await using var command = new NpgsqlCommand(@"
+            SELECT last_line_number
+            FROM session_watermarks
+            WHERE session_id = $1 AND agent_id = $2
+            FOR UPDATE;", connection, transaction);
+        command.Parameters.AddWithValue(sessionId);
+        command.Parameters.AddWithValue(agentId);
+        var result = await command.ExecuteScalarAsync(ct);
+        return result is null or DBNull ? null : Convert.ToInt32(result, System.Globalization.CultureInfo.InvariantCulture);
     }
 
     private static async Task AdvanceWatermarkAsync(

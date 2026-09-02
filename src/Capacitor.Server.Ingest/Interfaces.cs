@@ -115,6 +115,8 @@ public interface ITranscriptIngest {
         string? ownerUserId = null,
         int firstLineNumber = 0,
         IReadOnlyList<TranscriptSourceLine>? acceptedSourceLines = null,
+        IReadOnlyList<TranscriptSourceLine>? rejectedSourceLines = null,
+        bool inferOmittedSourceLines = false,
         CancellationToken ct = default);
 }
 

@@ -32,17 +32,27 @@ public sealed class PostgresGatewayTests {
                 vendor = "antigravity",
                 lines = new[] {
                     """{"type":"PLANNER_RESPONSE","content":"response","thinking":"reasoning"}""",
-                    "",
                     """{"type":"PLANNER_RESPONSE","content":"later response","thinking":"later reasoning"}"""
                 },
-                line_numbers = new[] { 0, 1, 2 }
+                // SessionImporter omits blank source lines while retaining their original indexes.
+                line_numbers = new[] { 0, 2 }
             });
             await Assert.That(ingested.StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+            var continued = await client.PostAsJsonAsync("/hooks/transcript", new {
+                session_id = sessionId,
+                vendor = "antigravity",
+                lines = new[] { """{"type":"PLANNER_RESPONSE","content":"final response"}""" },
+                // A second sparse batch must continue from the persisted watermark, not re-scan
+                // old event rows that naturally do not represent blank source lines.
+                line_numbers = new[] { 4 }
+            });
+            await Assert.That(continued.StatusCode).IsEqualTo(HttpStatusCode.OK);
 
             var watermark = await client.GetFromJsonAsync<WatermarkResponse>(
                 $"/api/sessions/{sessionId}/last-line");
             await Assert.That(watermark).IsNotNull();
-            await Assert.That(watermark!.LastLineNumber).IsEqualTo(2);
+            await Assert.That(watermark!.LastLineNumber).IsEqualTo(4);
 
             await using var connection = new NpgsqlConnection(connectionString);
             await connection.OpenAsync();
@@ -50,7 +60,7 @@ public sealed class PostgresGatewayTests {
                 "SELECT COUNT(*) FROM session_events WHERE session_id = $1;", connection);
             command.Parameters.AddWithValue(sessionId);
             var count = Convert.ToInt64(await command.ExecuteScalarAsync(), CultureInfo.InvariantCulture);
-            await Assert.That(count).IsEqualTo(4L);
+            await Assert.That(count).IsEqualTo(6L);
         } finally {
             await DeleteTestSessionAsync(connectionString, sessionId);
         }
