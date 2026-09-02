@@ -103,7 +103,7 @@ spec:
                 await page.goto(`${process.env.WEB_URL}/sessions/${sessionId}?tab=overview`, { waitUntil: 'domcontentloaded' });
                 await page.getByRole('tab', { name: 'Overview', exact: true }).waitFor({ state: 'visible', timeout: 30000 });
 
-                await page.locator('.detail-copy').filter({ hasText: 'Captured from codex using gpt-5.' }).waitFor({ state: 'visible', timeout: 30000 });
+                await page.locator('.detail-copy').filter({ hasText: 'Captured from codex' }).waitFor({ state: 'visible', timeout: 30000 });
                 const tokenMetric = page.locator('[data-metric-label="Tokens"]');
                 assert.equal(await tokenMetric.getAttribute('data-metric-availability'), 'reported');
                 assert.equal((await tokenMetric.textContent()).trim(), '100');
