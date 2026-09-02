@@ -8,7 +8,7 @@ public sealed record SessionSearchResponse {
     public IReadOnlyList<SessionSummary> Sessions { get; init; } = [];
 
     [JsonPropertyName("total")]
-    public int Total { get; init; }
+    public long Total { get; init; }
 }
 
 /// <summary>Query parameters for the read-only sessions index.</summary>
@@ -46,32 +46,11 @@ public record SessionSummary {
     [JsonPropertyName("model")]
     public string? Model { get; init; }
 
-    [JsonPropertyName("input_tokens")]
-    public long InputTokens { get; init; }
-
-    [JsonPropertyName("output_tokens")]
-    public long OutputTokens { get; init; }
-
     [JsonPropertyName("total_tokens")]
     public long TotalTokens { get; init; }
 
-    [JsonPropertyName("context_used_tokens")]
-    public long? ContextUsedTokens { get; init; }
-
-    [JsonPropertyName("context_window_tokens")]
-    public long? ContextWindowTokens { get; init; }
-
-    [JsonPropertyName("diff_additions")]
-    public int? DiffAdditions { get; init; }
-
-    [JsonPropertyName("diff_deletions")]
-    public int? DiffDeletions { get; init; }
-
     [JsonPropertyName("tool_count")]
     public int ToolCount { get; init; }
-
-    [JsonPropertyName("error_count")]
-    public int ErrorCount { get; init; }
 
     [JsonPropertyName("started_at")]
     public DateTimeOffset? StartedAt { get; init; }
@@ -260,6 +239,15 @@ public sealed record TraceTurn {
 
 /// <summary>The latest persisted evaluation, if this session has been evaluated.</summary>
 public sealed record SessionEvaluation {
+    [JsonPropertyName("run")]
+    public SessionEvaluationRun? Run { get; init; }
+
+    [JsonPropertyName("verdicts")]
+    public IReadOnlyList<SessionEvaluationVerdict> Verdicts { get; init; } = [];
+}
+
+/// <summary>Latest evaluation run returned by the persisted-session API.</summary>
+public sealed record SessionEvaluationRun {
     [JsonPropertyName("overall_score")]
     public decimal? OverallScore { get; init; }
 
@@ -271,4 +259,28 @@ public sealed record SessionEvaluation {
 
     [JsonPropertyName("evaluated_at")]
     public DateTimeOffset? EvaluatedAt { get; init; }
+}
+
+/// <summary>One persisted evaluation verdict associated with the latest run.</summary>
+public sealed record SessionEvaluationVerdict {
+    [JsonPropertyName("category")]
+    public string? Category { get; init; }
+
+    [JsonPropertyName("question_id")]
+    public string? QuestionId { get; init; }
+
+    [JsonPropertyName("score")]
+    public int Score { get; init; }
+
+    [JsonPropertyName("verdict")]
+    public string? Verdict { get; init; }
+
+    [JsonPropertyName("finding")]
+    public string? Finding { get; init; }
+
+    [JsonPropertyName("evidence")]
+    public string? Evidence { get; init; }
+
+    [JsonPropertyName("recommendation")]
+    public string? Recommendation { get; init; }
 }

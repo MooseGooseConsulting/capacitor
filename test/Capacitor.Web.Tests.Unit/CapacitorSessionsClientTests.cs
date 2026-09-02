@@ -18,9 +18,9 @@ public sealed class CapacitorSessionsClientTests {
                     "title": "Persisted session",
                     "repo_owner": "owner",
                     "repo_name": "repo",
-                    "input_tokens": 10,
-                    "output_tokens": 5,
-                    "total_tokens": 15
+                    "total_tokens": 15,
+                    "event_count": 2,
+                    "tool_count": 1
                   }],
                   "total": 1
                 }
@@ -81,7 +81,23 @@ public sealed class CapacitorSessionsClientTests {
                   }
                 }]
               },
-              "evaluation": null
+              "evaluation": {
+                "run": {
+                  "eval_run_id": "evaluation-1",
+                  "session_id": "session-1",
+                  "judge_model": "judge-model",
+                  "overall_score": 4,
+                  "summary": "Persisted evaluation",
+                  "evaluated_at": "2026-09-01T00:01:00Z"
+                },
+                "verdicts": [{
+                  "category": "correctness",
+                  "question_id": "question-1",
+                  "score": 4,
+                  "verdict": "pass",
+                  "finding": "Persisted finding"
+                }]
+              }
             }
             """))) {
             BaseAddress = new Uri("https://api.example/")
@@ -93,6 +109,8 @@ public sealed class CapacitorSessionsClientTests {
         await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Value!.Trace!.Entries.Single().Turn!.TurnIndex).IsEqualTo(1);
         await Assert.That(result.Value.Trace.Entries.Single().Turn!.ToolCount).IsEqualTo(1);
+        await Assert.That(result.Value.Evaluation!.Run!.OverallScore).IsEqualTo(4m);
+        await Assert.That(result.Value.Evaluation.Verdicts.Single().Finding).IsEqualTo("Persisted finding");
     }
 
     static HttpResponseMessage JsonResponse(string content) => new(HttpStatusCode.OK) {
