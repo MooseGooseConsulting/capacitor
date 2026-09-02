@@ -49,6 +49,12 @@ public class PostgresWatermarkRepository : ISessionWatermarkRepository {
 }
 
 public class PostgresSessionRepository : ISessionRepository {
+    private const string SessionColumns = @"
+        session_id, title, slug, vendor, model, status, visibility, hidden_reason, disposition, owner_user_id, machine_id, daemon_id,
+        repo_hash, repo_owner, repo_name, branch, pr_number, pr_title, pr_url, pr_head_ref,
+        started_at, ended_at, last_event_at, duration_min, event_count, tool_count, total_tokens, total_cost_usd,
+        previous_session_id, next_session_id, primary_phase, secondary_phase, classification_confidence, classification_source";
+
     private readonly NpgsqlDataSource _dataSource;
 
     public PostgresSessionRepository(NpgsqlDataSource dataSource) {
@@ -140,6 +146,87 @@ public class PostgresSessionRepository : ISessionRepository {
             ClassificationSource = reader.IsDBNull(33) ? null : reader.GetString(33)
         };
     }
+
+    public async Task<SessionSearchPage> SearchSessionsAsync(SessionSearchQuery query, CancellationToken ct = default) {
+        var limit = Math.Clamp(query.Limit, 1, 200);
+        var offset = Math.Max(query.Offset, 0);
+        var text = string.IsNullOrWhiteSpace(query.Query) ? null : query.Query.Trim();
+        var repo = string.IsNullOrWhiteSpace(query.Repo) ? null : query.Repo.Trim();
+        var vendor = string.IsNullOrWhiteSpace(query.Vendor) ? null : query.Vendor.Trim();
+        var status = string.IsNullOrWhiteSpace(query.Status) ? null : query.Status.Trim();
+
+        await using var conn = await _dataSource.OpenConnectionAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = $@"
+            SELECT {SessionColumns}, COUNT(*) OVER() AS total
+            FROM sessions
+            WHERE ($1 IS NULL OR vendor = $1)
+              AND ($2 IS NULL OR status = $2)
+              AND ($3 IS NULL OR repo_hash = $3 OR (repo_owner || '/' || repo_name) = $3)
+              AND ($4 IS NULL
+                   OR title ILIKE '%' || $4 || '%'
+                   OR EXISTS (
+                       SELECT 1
+                       FROM session_events
+                       WHERE session_events.session_id = sessions.session_id
+                         AND content ILIKE '%' || $4 || '%'
+                   ))
+            ORDER BY COALESCE(last_event_at, started_at) DESC, session_id DESC
+            LIMIT $5 OFFSET $6;";
+        cmd.Parameters.AddWithValue((object?)vendor ?? DBNull.Value);
+        cmd.Parameters.AddWithValue((object?)status ?? DBNull.Value);
+        cmd.Parameters.AddWithValue((object?)repo ?? DBNull.Value);
+        cmd.Parameters.AddWithValue((object?)text ?? DBNull.Value);
+        cmd.Parameters.AddWithValue(limit);
+        cmd.Parameters.AddWithValue(offset);
+
+        var sessions = new List<SessionHeaderRecord>();
+        long total = 0;
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct)) {
+            sessions.Add(ReadSession(reader));
+            total = reader.GetInt64(34);
+        }
+
+        return new SessionSearchPage(sessions, total);
+    }
+
+    private static SessionHeaderRecord ReadSession(NpgsqlDataReader reader) => new() {
+        SessionId = reader.GetString(0),
+        Title = reader.IsDBNull(1) ? null : reader.GetString(1),
+        Slug = reader.IsDBNull(2) ? null : reader.GetString(2),
+        Vendor = reader.GetString(3),
+        Model = reader.IsDBNull(4) ? null : reader.GetString(4),
+        Status = reader.GetString(5),
+        Visibility = reader.GetString(6),
+        HiddenReason = reader.IsDBNull(7) ? null : reader.GetString(7),
+        Disposition = reader.IsDBNull(8) ? null : reader.GetString(8),
+        OwnerUserId = reader.GetString(9),
+        MachineId = reader.IsDBNull(10) ? null : reader.GetString(10),
+        DaemonId = reader.IsDBNull(11) ? null : reader.GetString(11),
+        RepoHash = reader.IsDBNull(12) ? null : reader.GetString(12),
+        RepoOwner = reader.IsDBNull(13) ? null : reader.GetString(13),
+        RepoName = reader.IsDBNull(14) ? null : reader.GetString(14),
+        Branch = reader.IsDBNull(15) ? null : reader.GetString(15),
+        PrNumber = reader.IsDBNull(16) ? null : reader.GetInt32(16),
+        PrTitle = reader.IsDBNull(17) ? null : reader.GetString(17),
+        PrUrl = reader.IsDBNull(18) ? null : reader.GetString(18),
+        PrHeadRef = reader.IsDBNull(19) ? null : reader.GetString(19),
+        StartedAt = DateTimeOffset.Parse(reader.GetString(20), CultureInfo.InvariantCulture),
+        EndedAt = reader.IsDBNull(21) ? null : DateTimeOffset.Parse(reader.GetString(21), CultureInfo.InvariantCulture),
+        LastEventAt = reader.IsDBNull(22) ? null : DateTimeOffset.Parse(reader.GetString(22), CultureInfo.InvariantCulture),
+        DurationMin = reader.IsDBNull(23) ? 0 : reader.GetDecimal(23),
+        EventCount = reader.IsDBNull(24) ? 0 : reader.GetInt32(24),
+        ToolCount = reader.IsDBNull(25) ? 0 : reader.GetInt32(25),
+        TotalTokens = reader.IsDBNull(26) ? 0 : reader.GetInt64(26),
+        TotalCostUsd = reader.IsDBNull(27) ? 0 : reader.GetDecimal(27),
+        PreviousSessionId = reader.IsDBNull(28) ? null : reader.GetString(28),
+        NextSessionId = reader.IsDBNull(29) ? null : reader.GetString(29),
+        PrimaryPhase = reader.IsDBNull(30) ? null : reader.GetString(30),
+        SecondaryPhase = reader.IsDBNull(31) ? null : reader.GetString(31),
+        ClassificationConfidence = reader.IsDBNull(32) ? null : reader.GetDecimal(32),
+        ClassificationSource = reader.IsDBNull(33) ? null : reader.GetString(33)
+    };
 
     public async Task UpdateSessionAsync(SessionHeaderRecord session, CancellationToken ct = default) {
         await using var conn = await _dataSource.OpenConnectionAsync(ct);
@@ -358,6 +445,64 @@ public class PostgresSessionRepository : ISessionRepository {
             await tx.RollbackAsync(CancellationToken.None);
             throw;
         }
+    }
+
+    public async Task<SessionEvaluation?> GetLatestEvaluationAsync(string sessionId, CancellationToken ct = default) {
+        await using var conn = await _dataSource.OpenConnectionAsync(ct);
+        EvalRunRecord? run = null;
+        await using (var runCommand = conn.CreateCommand()) {
+            runCommand.CommandText = @"
+                SELECT eval_run_id, session_id, judge_model, overall_score, summary,
+                       retrospective_json, retrospective_prompt_version, evaluated_at
+                FROM eval_runs
+                WHERE session_id = $1
+                ORDER BY evaluated_at DESC, eval_run_id DESC
+                LIMIT 1;";
+            runCommand.Parameters.AddWithValue(sessionId);
+            await using var reader = await runCommand.ExecuteReaderAsync(ct);
+            if (await reader.ReadAsync(ct)) {
+                run = new EvalRunRecord {
+                    EvalRunId = reader.GetString(0),
+                    SessionId = reader.GetString(1),
+                    JudgeModel = reader.GetString(2),
+                    OverallScore = reader.GetInt32(3),
+                    Summary = reader.GetString(4),
+                    RetrospectiveJson = reader.IsDBNull(5) ? null : reader.GetString(5),
+                    RetrospectivePromptVersion = reader.IsDBNull(6) ? null : reader.GetString(6),
+                    EvaluatedAt = DateTimeOffset.Parse(reader.GetString(7), CultureInfo.InvariantCulture)
+                };
+            }
+        }
+
+        if (run is null) return null;
+
+        var verdicts = new List<EvalVerdictRecord>();
+        await using (var verdictCommand = conn.CreateCommand()) {
+            verdictCommand.CommandText = @"
+                SELECT eval_run_id, category, question_id, score, verdict, finding,
+                       evidence, recommendation, tools_used, prompt_version
+                FROM eval_verdicts
+                WHERE eval_run_id = $1
+                ORDER BY category, question_id;";
+            verdictCommand.Parameters.AddWithValue(run.EvalRunId);
+            await using var reader = await verdictCommand.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct)) {
+                verdicts.Add(new EvalVerdictRecord {
+                    EvalRunId = reader.GetString(0),
+                    Category = reader.GetString(1),
+                    QuestionId = reader.GetString(2),
+                    Score = reader.GetInt32(3),
+                    Verdict = reader.GetString(4),
+                    Finding = reader.GetString(5),
+                    Evidence = reader.IsDBNull(6) ? null : reader.GetString(6),
+                    Recommendation = reader.IsDBNull(7) ? null : reader.GetString(7),
+                    ToolsUsed = reader.IsDBNull(8) ? null : reader.GetInt32(8),
+                    PromptVersion = reader.IsDBNull(9) ? null : reader.GetString(9)
+                });
+            }
+        }
+
+        return new SessionEvaluation(run, verdicts);
     }
 
     public async Task UpdateRollupAsync(
