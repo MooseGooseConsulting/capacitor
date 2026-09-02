@@ -139,6 +139,18 @@ public class SqliteSessionRepository : ISessionRepository {
         };
     }
 
+    public async Task<bool> CompleteSessionAsync(string sessionId, DateTimeOffset endedAt, CancellationToken ct = default) {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = @"
+            UPDATE sessions SET
+                status = 'completed',
+                ended_at = COALESCE(ended_at, $ended_at)
+            WHERE session_id = $session_id;";
+        cmd.Parameters.AddWithValue("$session_id", sessionId);
+        cmd.Parameters.AddWithValue("$ended_at", SqliteUtc.Format(endedAt));
+        return await cmd.ExecuteNonQueryAsync(ct) > 0;
+    }
+
     public async Task<SessionSearchPage> SearchSessionsAsync(SessionSearchQuery query, CancellationToken ct = default) {
         var limit = Math.Clamp(query.Limit, 1, 200);
         var offset = Math.Max(query.Offset, 0);
@@ -367,7 +379,7 @@ public class SqliteSessionRepository : ISessionRepository {
                     ELSE owner_user_id
                 END,
                 visibility = CASE
-                    WHEN $visibility IS NOT NULL THEN $visibility
+                    WHEN visibility = '' THEN COALESCE($visibility, visibility)
                     ELSE visibility
                 END,
                 started_at = COALESCE($started_at, started_at),

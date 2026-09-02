@@ -148,6 +148,18 @@ public class PostgresSessionRepository : ISessionRepository {
         };
     }
 
+    public async Task<bool> CompleteSessionAsync(string sessionId, DateTimeOffset endedAt, CancellationToken ct = default) {
+        await using var conn = await _dataSource.OpenConnectionAsync(ct);
+        await using var cmd = new NpgsqlCommand(@"
+            UPDATE sessions SET
+                status = 'completed',
+                ended_at = COALESCE(ended_at, $2)
+            WHERE session_id = $1;", conn);
+        cmd.Parameters.AddWithValue(sessionId);
+        cmd.Parameters.AddWithValue(EventTimestamp.ToUtcString(endedAt));
+        return await cmd.ExecuteNonQueryAsync(ct) > 0;
+    }
+
     public async Task<SessionSearchPage> SearchSessionsAsync(SessionSearchQuery query, CancellationToken ct = default) {
         var limit = Math.Clamp(query.Limit, 1, 200);
         var offset = Math.Max(query.Offset, 0);
@@ -421,7 +433,7 @@ public class PostgresSessionRepository : ISessionRepository {
         cmd.CommandText = @"
             UPDATE sessions SET
                 owner_user_id = COALESCE($2::varchar, owner_user_id),
-                visibility = COALESCE($3::varchar, visibility),
+                visibility = COALESCE(NULLIF(visibility, ''), $3::varchar),
                 started_at = COALESCE($4::varchar, started_at),
                 model = COALESCE($5::varchar, model),
                 slug = COALESCE($6::varchar, slug),

@@ -158,7 +158,10 @@ public class NormalizerRouter {
                 return doc.RootElement.Obj("message") is null;
             }
 
-            return true;
+            // Claude emits legitimate record types (for example system/progress/snapshot)
+            // which the canonical model currently preserves as RawMessage. They are accepted
+            // source lines, not normalization failures that should block a stream watermark.
+            return false;
         }
     }
 

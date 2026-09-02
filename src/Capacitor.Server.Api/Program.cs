@@ -34,12 +34,19 @@ app.MapGet("/health", async (NpgsqlDataSource dataSource, CancellationToken ct) 
 
 async Task<IResult> HandleSessionStart(string vendor, ApiSessionStartPayload payload, ISessionRepository sessions) {
     var sessionId = IdCanonicalizer.Canonicalize(payload.SessionId);
-    var session = await sessions.GetOrCreatePlaceholderAsync(sessionId, vendor, payload.UserId, payload.DefaultVisibility);
+    var sourceVisibility = string.IsNullOrWhiteSpace(payload.DefaultVisibility)
+        ? null
+        : payload.DefaultVisibility.Trim().ToLowerInvariant();
+    if (sourceVisibility is not null and not ("none" or "private" or "project" or "org_public" or "public")) {
+        return Results.BadRequest(new { detail = "default_visibility must be one of: none, private, project, org_public, public." });
+    }
+
+    var session = await sessions.GetOrCreatePlaceholderAsync(sessionId, vendor, payload.UserId, sourceVisibility);
     var repo = payload.Repository;
     var repoHash = repo is { Owner: { Length: > 0 }, RepoName: { Length: > 0 } }
         ? RepoHashHelper.ComputeRepoHash(repo.Owner, repo.RepoName)
         : null;
-    await sessions.PatchSessionStartAsync(sessionId, payload.UserId, payload.DefaultVisibility, new SessionStartPatch(
+    await sessions.PatchSessionStartAsync(sessionId, payload.UserId, sourceVisibility, new SessionStartPatch(
         payload.StartedAt,
         payload.Model,
         payload.Slug,
@@ -61,16 +68,10 @@ async Task<IResult> HandleSessionStart(string vendor, ApiSessionStartPayload pay
 
 async Task<IResult> HandleSessionEnd(string vendor, ApiSessionEndPayload payload, ISessionRepository sessions, SessionRollupProjector projector) {
     var sessionId = IdCanonicalizer.Canonicalize(payload.SessionId);
-    var session = await sessions.GetSessionAsync(sessionId);
     // A missing session must not read as delivered — the client's spool retries a non-2xx but
     // treats 200 as final, so an out-of-order session-end would otherwise be lost for good.
-    if (session == null) return Results.NotFound();
-
-    var updated = session with {
-        Status = "completed",
-        EndedAt = payload.EndedAt ?? DateTimeOffset.UtcNow
-    };
-    await sessions.UpdateSessionAsync(updated);
+    // This narrow write must not overwrite concurrently projected transcript aggregates.
+    if (!await sessions.CompleteSessionAsync(sessionId, payload.EndedAt ?? DateTimeOffset.UtcNow)) return Results.NotFound();
     await projector.ProjectSessionRollupAsync(sessionId);
 
     return Results.Ok(new { status = "ended", session_id = sessionId });
@@ -179,9 +180,12 @@ app.MapPost("/hooks/transcript", async (
             failedCount++;
             rejectedSourceLines.Add(new RejectedTranscriptSourceLine(
                 sessionId, agentId, lineNum, vendor, batch.Lines[i], "normalization failed"));
-        } else {
-            acceptedSourceLines.Add(new TranscriptSourceLine(sessionId, agentId, lineNum));
+            // A rejected source line must not occupy its event identity. A corrected replay uses
+            // the same stream coordinates and must be able to persist its normalized result.
+            continue;
         }
+
+        acceptedSourceLines.Add(new TranscriptSourceLine(sessionId, agentId, lineNum));
         foreach (var ev in lineEvents) {
             events.Add(ev with { Vendor = vendor, AgentId = agentId, SessionId = sessionId });
         }

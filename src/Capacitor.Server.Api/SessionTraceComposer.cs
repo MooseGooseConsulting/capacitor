@@ -87,7 +87,7 @@ public static class SessionTraceComposer {
 
     private static string TraceKind(SessionEventRecord @event) => @event.EventType switch {
         "UserMessage" => "user_message",
-        "AssistantMessage" => "assistant_message",
+        "AssistantTurn" or "AssistantMessage" => "assistant_message",
         "AssistantThinking" => "assistant_thinking",
         "ToolCall" => "tool_invocation",
         "ToolResult" => "tool_result",
@@ -100,7 +100,6 @@ public static class SessionTraceComposer {
         ref int turnIndex) {
         if (activeTurn is not { Count: > 0 } events) return;
 
-        turnIndex++;
         var startedAt = events.Min(e => e.Timestamp);
         var endedAt = events.Max(e => e.Timestamp);
         entries.Add(new SessionTraceEntry("turn", new SessionTraceTurn(
@@ -115,6 +114,7 @@ public static class SessionTraceComposer {
             events.Sum(e => e.CostUsd),
             events.Count(e => !string.IsNullOrEmpty(e.ToolName) || e.EventType is "ToolCall" or "ToolResult"),
             events), null));
+        turnIndex++;
         activeTurn = null;
     }
 }
