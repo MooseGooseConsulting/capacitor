@@ -1,0 +1,77 @@
+@namespace Capacitor.Web.Components.Sessions
+
+<a class="session-card-link" href="@($"/sessions/{Session.SessionId}")">
+    <MudPaper Outlined="true" Class="session-card">
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="session-card-heading">
+            <span class="status-dot @StatusClass" aria-label="@($"{DisplayStatus} session")"></span>
+            <MudText Typo="Typo.subtitle2" Class="session-title">@DisplayTitle</MudText>
+            <MudSpacer />
+            @if (Session.StartedAt is { } startedAt) {
+                <MudText Typo="Typo.caption" Class="muted">@RelativeTime(startedAt)</MudText>
+            }
+        </MudStack>
+
+        <MudStack Row="true" Wrap="Wrap.Wrap" Spacing="1" Class="session-identifiers">
+            <MudText Typo="Typo.caption">@Session.Repository</MudText>
+            @if (Session.PrNumber is { } prNumber) {
+                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">PR #@prNumber</MudChip>
+            }
+            @if (!string.IsNullOrWhiteSpace(Session.Vendor)) {
+                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">@Session.Vendor</MudChip>
+            }
+            @if (!string.IsNullOrWhiteSpace(Session.Model)) {
+                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">@Session.Model</MudChip>
+            }
+        </MudStack>
+
+        <MudGrid Spacing="1" Class="session-metrics">
+            <MudItem xs="12" sm="6" md="3">
+                <Metric Label="Tokens" Value="@TokenFlow" />
+            </MudItem>
+            <MudItem xs="12" sm="6" md="3">
+                <Metric Label="Context" Value="@ContextOccupancy" />
+            </MudItem>
+            <MudItem xs="4" sm="4" md="2">
+                <Metric Label="Diff" Value="@Diff" />
+            </MudItem>
+            <MudItem xs="4" sm="4" md="2">
+                <Metric Label="Tools" Value="@Session.ToolCount.ToString("N0")" />
+            </MudItem>
+            <MudItem xs="4" sm="4" md="2">
+                <Metric Label="Errors" Value="@Session.ErrorCount.ToString("N0")" />
+            </MudItem>
+        </MudGrid>
+    </MudPaper>
+</a>
+
+@code {
+    [Parameter, EditorRequired]
+    public SessionSummary Session { get; set; } = default!;
+
+    string DisplayTitle => string.IsNullOrWhiteSpace(Session.Title) ? "Untitled session" : Session.Title;
+    string DisplayStatus => string.IsNullOrWhiteSpace(Session.Status) ? "unknown" : Session.Status;
+    string StatusClass => $"status-{DisplayStatus.ToLowerInvariant()}";
+    string TokenFlow => $"{Compact(Session.InputTokens)} in → {Compact(Session.OutputTokens)} out ({Compact(Session.TotalTokens)})";
+    string ContextOccupancy => Session.ContextWindowTokens is > 0
+        ? $"{Compact(Session.ContextUsedTokens ?? 0)} / {Compact(Session.ContextWindowTokens.Value)}"
+        : "Not reported";
+    string Diff => Session.DiffAdditions is null && Session.DiffDeletions is null
+        ? "Not reported"
+        : $"+{Session.DiffAdditions ?? 0:N0} −{Session.DiffDeletions ?? 0:N0}";
+
+    static string Compact(long value) => value switch {
+        >= 1_000_000 => $"{value / 1_000_000d:0.#}M",
+        >= 1_000 => $"{value / 1_000d:0.#}k",
+        _ => value.ToString("N0")
+    };
+
+    static string RelativeTime(DateTimeOffset value) {
+        var elapsed = DateTimeOffset.UtcNow - value;
+        return elapsed switch {
+            { TotalMinutes: < 1 } => "just now",
+            { TotalHours: < 1 } => $"{Math.Floor(elapsed.TotalMinutes)}m ago",
+            { TotalDays: < 1 } => $"{Math.Floor(elapsed.TotalHours)}h ago",
+            _ => $"{Math.Floor(elapsed.TotalDays)}d ago"
+        };
+    }
+}

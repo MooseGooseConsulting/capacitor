@@ -1,0 +1,247 @@
+@page "/sessions/{SessionId}"
+@inject ICapacitorSessionsClient SessionsClient
+
+<PageTitle>@(_detail?.Session.Title ?? "Session") · Capacitor</PageTitle>
+
+<main class="session-detail-page" aria-live="polite">
+    @if (_isLoading) {
+        <MudStack Spacing="2" Class="detail-state">
+            <MudSkeleton SkeletonType="SkeletonType.Text" Width="45%" Height="3rem" />
+            <MudSkeleton SkeletonType="SkeletonType.Rectangle" Height="420px" />
+        </MudStack>
+    } else if (_failure is { } failure) {
+        <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Class="detail-state">
+            <MudText Typo="Typo.subtitle2">This persisted session is not available from the API.</MudText>
+            <MudText Typo="Typo.body2">@failure.Message</MudText>
+            <MudButton Href="/sessions" Variant="Variant.Text" Color="Color.Primary">Return to sessions</MudButton>
+        </MudAlert>
+    } else if (_detail is { } detail) {
+        <header class="session-detail-header">
+            <MudStack Row="true" Wrap="Wrap.Wrap" AlignItems="AlignItems.Center" Spacing="1">
+                <MudText Typo="Typo.h4">@DisplayTitle(detail.Session)</MudText>
+                <MudChip T="string" Color="@StatusColor(detail.Session.Status)" Variant="Variant.Outlined">@DisplayStatus(detail.Session.Status)</MudChip>
+            </MudStack>
+            <MudStack Row="true" Wrap="Wrap.Wrap" Spacing="1" Class="detail-identifiers">
+                <MudText Typo="Typo.body2">@detail.Session.Repository</MudText>
+                @if (!string.IsNullOrWhiteSpace(detail.Session.Branch)) {
+                    <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">@detail.Session.Branch</MudChip>
+                }
+                @if (detail.Session.PrNumber is { } prNumber) {
+                    <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">PR #@prNumber</MudChip>
+                }
+                @if (!string.IsNullOrWhiteSpace(detail.Session.Vendor)) {
+                    <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">@detail.Session.Vendor</MudChip>
+                }
+                @if (!string.IsNullOrWhiteSpace(detail.Session.Model)) {
+                    <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">@detail.Session.Model</MudChip>
+                }
+                <MudButton Variant="Variant.Outlined" Size="Size.Small" OnClick="LoadAsync" StartIcon="@Icons.Material.Filled.Refresh">Refresh</MudButton>
+            </MudStack>
+        </header>
+
+        <MudTabs Elevation="0" Rounded="true" Class="session-tabs">
+            <MudTabPanel Text="Overview">
+                <MudGrid Spacing="2">
+                    <MudItem xs="12" md="7">
+                        <MudPaper Outlined="true" Class="detail-panel">
+                            <MudText Typo="Typo.subtitle1">Session summary</MudText>
+                            <MudText Typo="Typo.body2" Class="detail-copy">@Summary(detail.Session)</MudText>
+                        </MudPaper>
+                    </MudItem>
+                    <MudItem xs="12" md="5">
+                        <MudPaper Outlined="true" Class="detail-panel">
+                            <MudText Typo="Typo.subtitle1">Rollup</MudText>
+                            <MudGrid Spacing="1" Class="rollup-grid">
+                                <MudItem xs="6"><Metric Label="Events" Value="@detail.Session.EventCount.ToString("N0")" /></MudItem>
+                                <MudItem xs="6"><Metric Label="Tools" Value="@detail.Session.ToolCount.ToString("N0")" /></MudItem>
+                                <MudItem xs="6"><Metric Label="Tokens" Value="@FormatTokens(detail.Session.TotalTokens)" /></MudItem>
+                                <MudItem xs="6"><Metric Label="Cost" Value="@FormatCost(detail.Session.TotalCostUsd)" /></MudItem>
+                            </MudGrid>
+                        </MudPaper>
+                    </MudItem>
+                </MudGrid>
+            </MudTabPanel>
+            <MudTabPanel Text="Transcript">
+                @if (TranscriptEvents(detail).Count == 0) {
+                    <EmptyTab Title="No transcript messages" Message="No normalized user, assistant, or thinking events have been persisted for this session." />
+                } else {
+                    <MudStack Spacing="2">
+                        @foreach (var entry in TranscriptEvents(detail)) {
+                            <MudPaper Outlined="true" Class="transcript-entry">
+                                <MudStack Row="true" Wrap="Wrap.Wrap" AlignItems="AlignItems.Center" Spacing="1">
+                                    <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">@EventLabel(entry)</MudChip>
+                                    @if (!string.IsNullOrWhiteSpace(entry.Model)) {
+                                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">@entry.Model</MudChip>
+                                    }
+                                    <MudSpacer />
+                                    <MudText Typo="Typo.caption" Class="muted">@entry.Timestamp.LocalDateTime.ToString("g")</MudText>
+                                </MudStack>
+                                @if (!string.IsNullOrWhiteSpace(entry.Content)) {
+                                    <MudText Typo="Typo.body1" Class="transcript-content">@entry.Content</MudText>
+                                }
+                                <MudText Typo="Typo.caption" Class="event-accounting">@EventAccounting(entry)</MudText>
+                            </MudPaper>
+                        }
+                    </MudStack>
+                }
+            </MudTabPanel>
+            <MudTabPanel Text="Events">
+                @if (detail.Events.Count == 0) {
+                    <EmptyTab Title="No events" Message="No typed source events have been persisted for this session." />
+                } else {
+                    <MudExpansionPanels MultiExpansion="true" Class="events-list">
+                        @foreach (var entry in detail.Events.OrderBy(x => x.Timestamp).ThenBy(x => x.LineNumber).ThenBy(x => x.LogicalSequence)) {
+                            <MudExpansionPanel Text="@EventLabel(entry)">
+                                <MudStack Spacing="1">
+                                    <MudText Typo="Typo.caption" Class="event-accounting">@EventAccounting(entry)</MudText>
+                                    @if (!string.IsNullOrWhiteSpace(entry.Content)) {
+                                        <MudText Typo="Typo.body2" Class="pre-wrap">@entry.Content</MudText>
+                                    }
+                                    @if (!string.IsNullOrWhiteSpace(entry.ToolName)) {
+                                        <MudText Typo="Typo.body2"><strong>Tool:</strong> @entry.ToolDisplayName</MudText>
+                                    }
+                                    @if (!string.IsNullOrWhiteSpace(entry.ToolInput)) {
+                                        <MudText Typo="Typo.caption" Class="payload-label">Input</MudText>
+                                        <pre class="event-payload">@entry.ToolInput</pre>
+                                    }
+                                    @if (!string.IsNullOrWhiteSpace(entry.ToolOutput)) {
+                                        <MudText Typo="Typo.caption" Class="payload-label">Output</MudText>
+                                        <pre class="event-payload">@entry.ToolOutput</pre>
+                                    }
+                                    @if (!string.IsNullOrWhiteSpace(entry.RawPayload)) {
+                                        <MudText Typo="Typo.caption" Class="payload-label">Source payload</MudText>
+                                        <pre class="event-payload">@entry.RawPayload</pre>
+                                    }
+                                </MudStack>
+                            </MudExpansionPanel>
+                        }
+                    </MudExpansionPanels>
+                }
+            </MudTabPanel>
+            <MudTabPanel Text="Trace">
+                @if (detail.Trace?.Entries.Count is not > 0) {
+                    <EmptyTab Title="No trace rollup" Message="The API has not returned canonical turn and lifecycle rollups for this session." />
+                } else {
+                    <MudStack Spacing="1">
+                        @foreach (var entry in detail.Trace.Entries) {
+                            <MudPaper Outlined="true" Class="trace-entry">
+                                <MudStack Row="true" Wrap="Wrap.Wrap" AlignItems="AlignItems.Center" Spacing="1">
+                                    <MudText Typo="Typo.subtitle2">@TraceLabel(entry)</MudText>
+                                    @if (entry.Timestamp is { } timestamp) {
+                                        <MudText Typo="Typo.caption" Class="muted">@timestamp.LocalDateTime.ToString("g")</MudText>
+                                    }
+                                    <MudSpacer />
+                                    <MudText Typo="Typo.caption">@TraceMetrics(entry)</MudText>
+                                </MudStack>
+                                @if (!string.IsNullOrWhiteSpace(entry.Content)) {
+                                    <MudText Typo="Typo.body2" Class="pre-wrap">@entry.Content</MudText>
+                                }
+                            </MudPaper>
+                        }
+                    </MudStack>
+                }
+            </MudTabPanel>
+            <MudTabPanel Text="Evaluation">
+                @if (detail.Evaluation is not { } evaluation) {
+                    <EmptyTab Title="No evaluation" Message="No persisted evaluation has been returned for this session." />
+                } else {
+                    <MudPaper Outlined="true" Class="detail-panel">
+                        <MudStack Row="true" Wrap="Wrap.Wrap" AlignItems="AlignItems.Center" Spacing="1">
+                            <MudText Typo="Typo.h6">Evaluation</MudText>
+                            @if (evaluation.OverallScore is { } score) {
+                                <MudChip T="string" Color="Color.Primary">@score.ToString("0.##")</MudChip>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(evaluation.JudgeModel)) {
+                                <MudChip T="string" Variant="Variant.Outlined">@evaluation.JudgeModel</MudChip>
+                            }
+                        </MudStack>
+                        @if (!string.IsNullOrWhiteSpace(evaluation.Summary)) {
+                            <MudText Typo="Typo.body1" Class="detail-copy">@evaluation.Summary</MudText>
+                        }
+                        @if (evaluation.EvaluatedAt is { } evaluatedAt) {
+                            <MudText Typo="Typo.caption" Class="muted">Evaluated @evaluatedAt.LocalDateTime.ToString("g")</MudText>
+                        }
+                    </MudPaper>
+                }
+            </MudTabPanel>
+            <MudTabPanel Text="Details">
+                <MudPaper Outlined="true" Class="detail-panel">
+                    <MudGrid Spacing="2">
+                        <MudItem xs="12" sm="6" md="4"><Metric Label="Session ID" Value="@detail.Session.SessionId" /></MudItem>
+                        <MudItem xs="12" sm="6" md="4"><Metric Label="Owner" Value="@ValueOrNotReported(detail.Session.OwnerUserId)" /></MudItem>
+                        <MudItem xs="12" sm="6" md="4"><Metric Label="Visibility" Value="@ValueOrNotReported(detail.Session.Visibility)" /></MudItem>
+                        <MudItem xs="12" sm="6" md="4"><Metric Label="Repository" Value="@detail.Session.Repository" /></MudItem>
+                        <MudItem xs="12" sm="6" md="4"><Metric Label="Machine" Value="@ValueOrNotReported(detail.Session.MachineId)" /></MudItem>
+                        <MudItem xs="12" sm="6" md="4"><Metric Label="Daemon" Value="@ValueOrNotReported(detail.Session.DaemonId)" /></MudItem>
+                        <MudItem xs="12" sm="6" md="4"><Metric Label="Started" Value="@FormatDate(detail.Session.StartedAt)" /></MudItem>
+                        <MudItem xs="12" sm="6" md="4"><Metric Label="Ended" Value="@FormatDate(detail.Session.EndedAt)" /></MudItem>
+                        <MudItem xs="12" sm="6" md="4"><Metric Label="Last event" Value="@FormatDate(detail.Session.LastEventAt)" /></MudItem>
+                    </MudGrid>
+                </MudPaper>
+            </MudTabPanel>
+        </MudTabs>
+    }
+</main>
+
+@code {
+    [Parameter]
+    public required string SessionId { get; set; }
+
+    SessionDetailResponse? _detail;
+    ApiFailure? _failure;
+    bool _isLoading = true;
+
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+
+    async Task LoadAsync() {
+        _isLoading = true;
+        _failure = null;
+        var response = await SessionsClient.GetSessionAsync(SessionId);
+        _isLoading = false;
+        _detail = response.Value;
+        _failure = response.Failure;
+    }
+
+    static IReadOnlyList<SessionEvent> TranscriptEvents(SessionDetailResponse detail) => detail.Events
+        .Where(x => x.IsTranscriptMessage)
+        .OrderBy(x => x.Timestamp)
+        .ThenBy(x => x.LineNumber)
+        .ThenBy(x => x.LogicalSequence)
+        .ToArray();
+
+    static string DisplayTitle(SessionDetailHeader session) => string.IsNullOrWhiteSpace(session.Title) ? "Untitled session" : session.Title;
+    static string DisplayStatus(string? status) => string.IsNullOrWhiteSpace(status) ? "Unknown" : status;
+    static Color StatusColor(string? status) => status?.ToLowerInvariant() switch {
+        "active" or "running" => Color.Success,
+        "failed" or "error" => Color.Error,
+        "completed" or "success" => Color.Primary,
+        _ => Color.Default
+    };
+    static string Summary(SessionDetailHeader session) => "Captured from " + (session.Vendor ?? "an unknown vendor")
+        + (string.IsNullOrWhiteSpace(session.Model) ? "." : " using " + session.Model + ".")
+        + (session.StartedAt is { } startedAt ? " Started " + startedAt.LocalDateTime.ToString("g") + "." : string.Empty);
+    static string EventLabel(SessionEvent entry) => entry.EventType.Replace("_", " ", StringComparison.Ordinal);
+    static string EventAccounting(SessionEvent entry) => FormatTokens(entry.InputTokens) + " in → " + FormatTokens(entry.OutputTokens)
+        + " out · cache r" + FormatTokens(entry.CacheReadTokens) + " w" + FormatTokens(entry.CacheWriteTokens)
+        + " · " + FormatCost(entry.CostUsd);
+    static string TraceLabel(TraceEntry entry) => entry.Turn is { } turn ? "Turn " + turn : entry.Label ?? entry.Kind ?? "Trace event";
+    static string TraceMetrics(TraceEntry entry) {
+        var values = new List<string> { FormatTokens(entry.InputTokens) + " in → " + FormatTokens(entry.OutputTokens) + " out" };
+        if (entry.ToolCount > 0) values.Add(entry.ToolCount + (entry.ToolCount == 1 ? " tool" : " tools"));
+        if (entry.DurationMilliseconds is { } duration) values.Add(FormatDuration(duration));
+        return string.Join(" · ", values);
+    }
+    static string FormatTokens(long value) => value switch {
+        >= 1_000_000 => (value / 1_000_000d).ToString("0.#") + "M",
+        >= 1_000 => (value / 1_000d).ToString("0.#") + "k",
+        _ => value.ToString("N0")
+    };
+    static string FormatCost(decimal value) => "$" + value.ToString("0.####");
+    static string FormatDuration(long milliseconds) => milliseconds switch {
+        < 1_000 => milliseconds + "ms",
+        < 60_000 => (milliseconds / 1_000d).ToString("0.#") + "s",
+        _ => TimeSpan.FromMilliseconds(milliseconds).ToString("m\\:ss")
+    };
+    static string ValueOrNotReported(string? value) => string.IsNullOrWhiteSpace(value) ? "Not reported" : value;
+    static string FormatDate(DateTimeOffset? value) => value is { } date ? date.LocalDateTime.ToString("g") : "Not reported";
+}

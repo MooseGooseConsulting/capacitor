@@ -1,0 +1,25 @@
+@inherits LayoutComponentBase
+
+<MudLayout Class="capacitor-shell">
+    <MudAppBar Elevation="0" Dense="true" Class="top-shell">
+        <MudText Typo="Typo.h6" Class="product-wordmark">CAPACITOR</MudText>
+        <MudStack Row="true" Spacing="1" Class="top-navigation">
+            <MudButton Href="/sessions" Variant="Variant.Text" Color="Color.Primary">Sessions</MudButton>
+            <MudButton Variant="Variant.Text" Disabled="true">Agents</MudButton>
+            <MudButton Variant="Variant.Text" Disabled="true">Insights</MudButton>
+            <MudButton Variant="Variant.Text" Disabled="true">Flows</MudButton>
+            <MudButton Variant="Variant.Text" Disabled="true">Work items</MudButton>
+        </MudStack>
+        <MudSpacer />
+        <MudText Typo="Typo.caption" Class="shell-status">Recovery · sessions read surface</MudText>
+    </MudAppBar>
+    <MudMainContent Class="shell-main">
+        @Body
+    </MudMainContent>
+</MudLayout>
+
+<div id="blazor-error-ui" data-nosnippet>
+    An unhandled error has occurred.
+    <a href="." class="reload">Reload</a>
+    <span class="dismiss">🗙</span>
+</div>

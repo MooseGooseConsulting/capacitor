@@ -1,0 +1,56 @@
+.sessions-surface {
+    display: grid;
+    grid-template-columns: minmax(218px, 18%) minmax(0, 1fr);
+    min-height: calc(100vh - 48px);
+}
+
+.sessions-list {
+    margin: 0 auto;
+    max-width: 1080px;
+    padding: 2rem clamp(1.25rem, 4vw, 3.5rem) 3rem;
+    width: 100%;
+}
+
+.sessions-heading {
+    margin-bottom: 1.5rem;
+}
+
+.subdued {
+    color: #768093;
+    margin-top: .25rem;
+}
+
+.session-search {
+    align-items: center;
+    margin-bottom: 1.5rem;
+}
+
+.search-field {
+    flex: 1 1 340px;
+}
+
+.session-state {
+    margin-top: 1rem;
+}
+
+.empty-state {
+    align-items: center;
+    color: #717b8c;
+    display: flex;
+    flex-direction: column;
+    gap: .6rem;
+    padding: 3.5rem 1.5rem;
+    text-align: center;
+}
+
+@media (max-width: 860px) {
+    .sessions-surface {
+        display: block;
+    }
+
+    .sessions-surface ::deep .sessions-rail {
+        border-bottom: 1px solid #e4e7ec;
+        border-right: 0;
+        min-height: auto;
+    }
+}
