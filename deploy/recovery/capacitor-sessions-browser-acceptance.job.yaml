@@ -1,0 +1,110 @@
+# Finite, internal-only acceptance run for the recovered Sessions vertical slice.
+# It imports an on-disk Codex rollout through the actual kcap CLI, then drives the
+# deployed web workspace with Chromium. It targets only the recovery test API/DB.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: capacitor-sessions-browser-acceptance-
+  namespace: data-platform
+  labels:
+    app.kubernetes.io/name: capacitor-sessions-browser-acceptance
+    app.kubernetes.io/part-of: capacitor-recovery
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  activeDeadlineSeconds: 1800
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: capacitor-sessions-browser-acceptance
+    spec:
+      restartPolicy: Never
+      volumes:
+        - name: workspace
+          emptyDir: {}
+      initContainers:
+        - name: kcap-import
+          image: mcr.microsoft.com/dotnet/sdk:10.0
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: GIT_REF
+              value: feature/session-vertical-slice
+            - name: KCAP_URL
+              value: http://capacitor-api-test.data-platform.svc.cluster.local
+            - name: KCAP_CONFIG_DIR
+              value: /work/kcap-config
+            - name: CODEX_HOME
+              value: /work/codex
+          volumeMounts:
+            - name: workspace
+              mountPath: /work
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              git clone --depth 1 --branch "$GIT_REF" https://github.com/MooseGooseConsulting/capacitor.git /work/capacitor
+              mkdir -p /work/codex/sessions/2026/09/02 /work/kcap-config
+              cat > /work/codex/sessions/2026/09/02/rollout-2026-09-02T00-00-00-019eed00-0000-7000-8000-000000000001.jsonl <<'EOF'
+              {"timestamp":"2026-09-02T00:00:00.000Z","type":"session_meta","payload":{"id":"019eed00-0000-7000-8000-000000000001","timestamp":"2026-09-02T00:00:00.000Z","cwd":"/work/capacitor","originator":"codex-tui","cli_version":"0.146.0","model_provider":"openai","git":{"commit_hash":"recovery-fixture","branch":"feature/session-vertical-slice","repository_url":"https://github.com/MooseGooseConsulting/capacitor"}}}
+              {"timestamp":"2026-09-02T00:00:01.000Z","type":"turn_context","payload":{"turn_id":"fixture-turn","cwd":"/work/capacitor","model":"gpt-5"}}
+              {"timestamp":"2026-09-02T00:00:02.000Z","type":"response_item","payload":{"id":"fixture-user","type":"message","role":"user","content":[{"type":"input_text","text":"Show the captured Sessions dashboard import fixture."}]}}
+              {"timestamp":"2026-09-02T00:00:03.000Z","type":"event_msg","payload":{"type":"task_started"}}
+              {"timestamp":"2026-09-02T00:00:04.000Z","type":"response_item","payload":{"id":"fixture-assistant","type":"message","role":"assistant","content":[{"type":"output_text","text":"The dashboard should show this imported Codex session and its persisted transcript."}]}}
+              {"timestamp":"2026-09-02T00:00:05.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":80,"output_tokens":20}}}}
+              EOF
+              cd /work/capacitor
+              dotnet run --project src/Capacitor.Cli/Capacitor.Cli.csproj -- import --codex --repo MooseGooseConsulting/capacitor --yes --reimport --skip-title --min-lines 1
+      containers:
+        - name: browser-acceptance
+          image: mcr.microsoft.com/playwright:v1.58.2-noble
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: SESSION_ID
+              value: 019eed00000070008000000000000001
+            - name: WEB_URL
+              value: http://capacitor-web-test.data-platform.svc.cluster.local
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              node <<'EOF'
+              const assert = require('node:assert/strict');
+              const { chromium } = require('playwright');
+
+              const sessionId = process.env.SESSION_ID;
+              const browser = await chromium.launch({ headless: true });
+              const context = await browser.newContext({ viewport: { width: 1600, height: 1200 } });
+              const page = await context.newPage();
+
+              try {
+                await page.goto(`${process.env.WEB_URL}/sessions`, { waitUntil: 'domcontentloaded' });
+                await page.locator(`a.session-card-link[href="/sessions/${sessionId}"]`).waitFor({ state: 'visible', timeout: 30000 });
+
+                await page.keyboard.press('Control+K');
+                const globalSearch = page.locator('details.global-search-menu[open] #capacitor-global-search');
+                await globalSearch.waitFor({ state: 'visible', timeout: 10000 });
+                await globalSearch.fill('captured Sessions dashboard import fixture');
+                await globalSearch.press('Enter');
+                await page.locator(`a.session-card-link[href="/sessions/${sessionId}"]`).waitFor({ state: 'visible', timeout: 30000 });
+
+                await page.locator(`a.session-card-link[href="/sessions/${sessionId}"]`).click();
+                await page.waitForURL(new RegExp(`/sessions/${sessionId}`), { timeout: 30000 });
+
+                for (const [label, route] of [
+                  ['Overview', 'overview'],
+                  ['Transcript', 'transcript'],
+                  ['Events', 'events'],
+                  ['Trace', 'trace'],
+                  ['Evaluation', 'evaluation'],
+                  ['Details', 'details'],
+                ]) {
+                  const tab = page.getByRole('tab', { name: label, exact: true });
+                  await tab.click();
+                  await page.waitForFunction(expected => new URL(window.location.href).searchParams.get('tab') === expected, route);
+                  assert.equal(await tab.getAttribute('aria-selected'), 'true', `${label} must be selected`);
+                }
+
+                console.log(`Browser acceptance passed for imported session ${sessionId}.`);
+              } finally {
+                await context.close();
+                await browser.close();
+              }
+              EOF
