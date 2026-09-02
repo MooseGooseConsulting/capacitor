@@ -390,26 +390,20 @@ public class PostgresSessionRepository : ISessionRepository {
         cmd.Transaction = tx;
         cmd.CommandText = @"
             UPDATE sessions SET
-                owner_user_id = CASE
-                    WHEN $2 IS NOT NULL THEN $2
-                    ELSE owner_user_id
-                END,
-                visibility = CASE
-                    WHEN $3 IS NOT NULL THEN $3
-                    ELSE visibility
-                END,
-                started_at = COALESCE($4, started_at),
-                model = COALESCE($5, model),
-                slug = COALESCE($6, slug),
-                previous_session_id = COALESCE($7, previous_session_id),
-                repo_hash = COALESCE($8, repo_hash),
-                repo_owner = COALESCE($9, repo_owner),
-                repo_name = COALESCE($10, repo_name),
-                branch = COALESCE($11, branch),
-                pr_number = COALESCE($12, pr_number),
-                pr_title = COALESCE($13, pr_title),
-                pr_url = COALESCE($14, pr_url),
-                pr_head_ref = COALESCE($15, pr_head_ref)
+                owner_user_id = COALESCE($2::varchar, owner_user_id),
+                visibility = COALESCE($3::varchar, visibility),
+                started_at = COALESCE($4::varchar, started_at),
+                model = COALESCE($5::varchar, model),
+                slug = COALESCE($6::varchar, slug),
+                previous_session_id = COALESCE($7::varchar, previous_session_id),
+                repo_hash = COALESCE($8::varchar, repo_hash),
+                repo_owner = COALESCE($9::varchar, repo_owner),
+                repo_name = COALESCE($10::varchar, repo_name),
+                branch = COALESCE($11::varchar, branch),
+                pr_number = COALESCE($12::integer, pr_number),
+                pr_title = COALESCE($13::varchar, pr_title),
+                pr_url = COALESCE($14::varchar, pr_url),
+                pr_head_ref = COALESCE($15::varchar, pr_head_ref)
             WHERE session_id = $1;
         ";
         cmd.Parameters.AddWithValue(sessionId);
