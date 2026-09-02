@@ -24,6 +24,19 @@ public sealed record SessionSearchPage(
     IReadOnlyList<SessionHeaderRecord> Sessions,
     long Total);
 
+/// <summary>
+/// Repository and working-directory evidence supplied with one source line or
+/// transcript batch. The repository remains nullable because several supported
+/// vendors cannot provide one.
+/// </summary>
+public sealed record RepositoryEvidence(
+    string? RepoHash,
+    string? RepoOwner,
+    string? RepoName,
+    string? Cwd) {
+    public bool HasRepository => !string.IsNullOrWhiteSpace(RepoHash);
+}
+
 public sealed record SessionStartPatch(
     DateTimeOffset? StartedAt,
     string? Model,
@@ -38,8 +51,18 @@ public sealed record SessionStartPatch(
     string? PrUrl,
     string? PrHeadRef);
 
-/// <summary>One source line accepted by a normalizer, including blank lines that emit no event.</summary>
-public sealed record TranscriptSourceLine(string SessionId, string AgentId, int LineNumber);
+/// <summary>
+/// One source line received by the server, including a line accepted by a
+/// normalizer that emits no display event. This is the durable resume boundary,
+/// distinct from normalized events.
+/// </summary>
+public sealed record TranscriptSourceLine(
+    string SessionId,
+    string AgentId,
+    int LineNumber,
+    string Vendor = "claude",
+    string RawPayload = "",
+    RepositoryEvidence? RepositoryEvidence = null);
 
 /// <summary>A source line the normalizer rejected and that must block watermark progress until replay succeeds.</summary>
 public sealed record RejectedTranscriptSourceLine(
@@ -48,7 +71,8 @@ public sealed record RejectedTranscriptSourceLine(
     int LineNumber,
     string Vendor,
     string RawLine,
-    string ErrorReason);
+    string ErrorReason,
+    RepositoryEvidence? RepositoryEvidence = null);
 
 public sealed record SessionEvaluation(
     EvalRunRecord Run,
@@ -108,6 +132,15 @@ public interface ISessionRepository {
         string? prTitle,
         string? prUrl,
         string? prHeadRef,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Retains a supplied repository association without selecting it as the
+    /// primary repository. Primary selection is derived only from event evidence.
+    /// </summary>
+    Task RecordRepositoryAssociationAsync(
+        string sessionId,
+        RepositoryEvidence evidence,
         CancellationToken ct = default);
 
     Task PersistEvalRunAsync(EvalRunRecord run, IReadOnlyList<EvalVerdictRecord> verdicts, CancellationToken ct = default);

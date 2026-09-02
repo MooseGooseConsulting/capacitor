@@ -32,6 +32,18 @@ app.MapGet("/health", async (NpgsqlDataSource dataSource, CancellationToken ct) 
     return Results.Ok(new { status = "healthy", time = DateTimeOffset.UtcNow });
 });
 
+RepositoryEvidence? ToRepositoryEvidence(string? owner, string? repoName, string? cwd) {
+    var normalizedOwner = string.IsNullOrWhiteSpace(owner) ? null : owner.Trim();
+    var normalizedRepoName = string.IsNullOrWhiteSpace(repoName) ? null : repoName.Trim();
+    var normalizedCwd = string.IsNullOrWhiteSpace(cwd) ? null : cwd.Trim();
+    var repoHash = normalizedOwner is not null && normalizedRepoName is not null
+        ? RepoHashHelper.ComputeRepoHash(normalizedOwner, normalizedRepoName)
+        : null;
+    return repoHash is null && normalizedCwd is null
+        ? null
+        : new RepositoryEvidence(repoHash, normalizedOwner, normalizedRepoName, normalizedCwd);
+}
+
 async Task<IResult> HandleSessionStart(string vendor, ApiSessionStartPayload payload, ISessionRepository sessions) {
     var sessionId = IdCanonicalizer.Canonicalize(payload.SessionId);
     var sourceVisibility = string.IsNullOrWhiteSpace(payload.DefaultVisibility)
@@ -43,9 +55,7 @@ async Task<IResult> HandleSessionStart(string vendor, ApiSessionStartPayload pay
 
     var session = await sessions.GetOrCreatePlaceholderAsync(sessionId, vendor, payload.UserId, sourceVisibility);
     var repo = payload.Repository;
-    var repoHash = repo is { Owner: { Length: > 0 }, RepoName: { Length: > 0 } }
-        ? RepoHashHelper.ComputeRepoHash(repo.Owner, repo.RepoName)
-        : null;
+    var evidence = ToRepositoryEvidence(repo?.Owner, repo?.RepoName, cwd: null);
     await sessions.PatchSessionStartAsync(sessionId, payload.UserId, sourceVisibility, new SessionStartPatch(
         payload.StartedAt,
         payload.Model,
@@ -53,14 +63,20 @@ async Task<IResult> HandleSessionStart(string vendor, ApiSessionStartPayload pay
         string.IsNullOrWhiteSpace(payload.PreviousSessionId)
             ? null
             : IdCanonicalizer.Canonicalize(payload.PreviousSessionId),
-        repoHash,
-        repo?.Owner,
-        repo?.RepoName,
-        repo?.Branch,
-        repo?.PrNumber,
-        repo?.PrTitle,
-        repo?.PrUrl,
-        repo?.PrHeadRef));
+        // Retain lifecycle metadata for compatibility until event evidence exists. The
+        // repository projection is deliberately the source of truth for primary repo
+        // selection and replaces these fields once it has normalized events to rank.
+        RepoHash: evidence?.RepoHash,
+        RepoOwner: evidence?.RepoOwner,
+        RepoName: evidence?.RepoName,
+        Branch: repo?.Branch,
+        PrNumber: repo?.PrNumber,
+        PrTitle: repo?.PrTitle,
+        PrUrl: repo?.PrUrl,
+        PrHeadRef: repo?.PrHeadRef));
+    if (evidence is not null) {
+        await sessions.RecordRepositoryAssociationAsync(sessionId, evidence);
+    }
     session = await sessions.GetSessionAsync(sessionId) ?? session;
 
     return Results.Ok(new { status = "started", session_id = session.SessionId });
@@ -155,14 +171,7 @@ app.MapPost("/hooks/transcript", async (
     }
 
     await sessions.GetOrCreatePlaceholderAsync(sessionId, vendor);
-    if (batch.Repository is { } repo) {
-        var repoHash = repo.Owner is { Length: > 0 } && repo.RepoName is { Length: > 0 }
-            ? RepoHashHelper.ComputeRepoHash(repo.Owner, repo.RepoName)
-            : null;
-        await sessions.UpdateRepositoryMetadataAsync(
-            sessionId, repoHash, repo.Owner, repo.RepoName, repo.Branch,
-            repo.PrNumber, repo.PrTitle, repo.PrUrl, repo.PrHeadRef);
-    }
+    var evidence = ToRepositoryEvidence(batch.Repository?.Owner, batch.Repository?.RepoName, batch.Cwd);
 
     var agentId = IdCanonicalizer.Canonicalize(batch.AgentId);
     var events = new List<SessionEventRecord>();
@@ -179,15 +188,23 @@ app.MapPost("/hooks/transcript", async (
         if (lineFailed) {
             failedCount++;
             rejectedSourceLines.Add(new RejectedTranscriptSourceLine(
-                sessionId, agentId, lineNum, vendor, batch.Lines[i], "normalization failed"));
+                sessionId, agentId, lineNum, vendor, batch.Lines[i], "normalization failed", evidence));
             // A rejected source line must not occupy its event identity. A corrected replay uses
             // the same stream coordinates and must be able to persist its normalized result.
             continue;
         }
 
-        acceptedSourceLines.Add(new TranscriptSourceLine(sessionId, agentId, lineNum));
+        acceptedSourceLines.Add(new TranscriptSourceLine(sessionId, agentId, lineNum, vendor, batch.Lines[i], evidence));
         foreach (var ev in lineEvents) {
-            events.Add(ev with { Vendor = vendor, AgentId = agentId, SessionId = sessionId });
+            events.Add(ev with {
+                Vendor = vendor,
+                AgentId = agentId,
+                SessionId = sessionId,
+                Cwd = evidence?.Cwd,
+                RepoHash = evidence?.RepoHash,
+                RepoOwner = evidence?.RepoOwner,
+                RepoName = evidence?.RepoName
+            });
         }
     }
 

@@ -163,7 +163,13 @@ public class SqliteSessionRepository : ISessionRepository {
         const string where = @"
             ($vendor IS NULL OR vendor = $vendor)
             AND ($status IS NULL OR status = $status)
-            AND ($repo IS NULL OR repo_hash = $repo OR (repo_owner || '/' || repo_name) = $repo)
+            AND ($repo IS NULL OR EXISTS (
+                SELECT 1
+                FROM session_repositories associations
+                WHERE associations.session_id = sessions.session_id
+                  AND (associations.repo_hash = $repo
+                       OR (associations.repo_owner || '/' || associations.repo_name) = $repo)
+            ))
             AND ($author IS NULL OR owner_user_id LIKE '%' || $author || '%')
             AND ($query IS NULL
                  OR title LIKE '%' || $query || '%'
@@ -461,6 +467,29 @@ public class SqliteSessionRepository : ISessionRepository {
         cmd.Parameters.AddWithValue("$pr_title", (object?)prTitle ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$pr_url", (object?)prUrl ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$pr_head_ref", (object?)prHeadRef ?? DBNull.Value);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task RecordRepositoryAssociationAsync(
+        string sessionId,
+        RepositoryEvidence evidence,
+        CancellationToken ct = default) {
+        if (!evidence.HasRepository) return;
+
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = @"
+            INSERT INTO session_repositories (
+                session_id, repo_hash, repo_owner, repo_name, event_count, is_primary, created_at, updated_at
+            ) VALUES ($session_id, $repo_hash, $repo_owner, $repo_name, 0, 0, $now, $now)
+            ON CONFLICT (session_id, repo_hash) DO UPDATE SET
+                repo_owner = COALESCE(excluded.repo_owner, session_repositories.repo_owner),
+                repo_name = COALESCE(excluded.repo_name, session_repositories.repo_name),
+                updated_at = excluded.updated_at;";
+        cmd.Parameters.AddWithValue("$session_id", sessionId);
+        cmd.Parameters.AddWithValue("$repo_hash", evidence.RepoHash!);
+        cmd.Parameters.AddWithValue("$repo_owner", (object?)evidence.RepoOwner ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$repo_name", (object?)evidence.RepoName ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$now", SqliteUtc.Format(DateTimeOffset.UtcNow));
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
