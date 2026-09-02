@@ -141,6 +141,32 @@
     z-index: 12;
 }
 
+.global-search-form {
+    display: flex;
+    gap: .35rem;
+}
+
+.global-search-form input {
+    background: var(--capacitor-bg);
+    border: 1px solid var(--capacitor-border);
+    border-radius: .25rem;
+    color: var(--capacitor-text);
+    min-width: 0;
+    padding: .4rem .45rem;
+    width: 100%;
+}
+
+.global-search-form button {
+    background: var(--capacitor-accent);
+    border: 0;
+    border-radius: .25rem;
+    color: #fff;
+    cursor: pointer;
+    font: inherit;
+    font-weight: 700;
+    padding: .4rem .55rem;
+}
+
 kbd {
     border: 1px solid var(--capacitor-border);
     border-radius: .2rem;

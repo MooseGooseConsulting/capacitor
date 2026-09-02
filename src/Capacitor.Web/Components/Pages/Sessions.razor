@@ -84,6 +84,9 @@
     [SupplyParameterFromQuery(Name = "tab")]
     public string? Tab { get; set; }
 
+    [SupplyParameterFromQuery(Name = "query")]
+    public string? Query { get; set; }
+
     SessionSearchResponse? _result;
     ApiFailure? _failure;
     bool _isLoading = true;
@@ -92,10 +95,19 @@
     IReadOnlyList<SessionSummary> _railSessions = [];
     CancellationTokenSource? _loadCancellation;
     long _requestVersion;
+    bool _hasRouteQuery;
+    string? _routeQuery;
 
     IReadOnlyList<SessionSummary> _sessions => _railSessions;
 
-    protected override async Task OnInitializedAsync() => await LoadAsync();
+    protected override async Task OnParametersSetAsync() {
+        if (_hasRouteQuery && string.Equals(_routeQuery, Query, StringComparison.Ordinal)) return;
+
+        _hasRouteQuery = true;
+        _routeQuery = Query;
+        _query = Query;
+        await LoadAsync();
+    }
 
     async Task SearchAsync() => await LoadAsync();
 
