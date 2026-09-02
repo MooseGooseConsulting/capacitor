@@ -1,4 +1,8 @@
-# @kurrent/kcap
+# Inherited @kurrent/kcap package guide
+
+This is the preserved package guide from the inherited client. Its hosted URL,
+authentication, package-release, and feature statements are not Capacitor
+runtime claims. Use the root documentation map for the owned target system.
 
 CLI companion for [Kurrent Capacitor](https://github.com/kurrent-io/kcap-cli) — records and visualizes coding-agent sessions across Claude Code, Codex CLI, Cursor, GitHub Copilot CLI, and Pi.
 

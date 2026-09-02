@@ -31,7 +31,7 @@ a token.
 `TokenStore.LoadAsync(string profile)` deserializes the file contents with no
 error handling:
 
-[`src/Capacitor.Cli.Core/Auth/TokenStore.cs:55`](../../../src/Capacitor.Cli.Core/Auth/TokenStore.cs)
+[`src/Capacitor.Cli.Core/Auth/TokenStore.cs:55`](../../../../../src/Capacitor.Cli.Core/Auth/TokenStore.cs)
 ```csharp
 public static async Task<StoredTokens?> LoadAsync(string profile) {
     var path = ProfileTokenPath(profile);
@@ -80,7 +80,7 @@ shorter one's closing `}`.
 
 `SaveAsync` writes to a **fixed, shared temp filename** then atomically renames:
 
-[`src/Capacitor.Cli.Core/Auth/TokenStore.cs:62`](../../../src/Capacitor.Cli.Core/Auth/TokenStore.cs)
+[`src/Capacitor.Cli.Core/Auth/TokenStore.cs:62`](../../../../../src/Capacitor.Cli.Core/Auth/TokenStore.cs)
 ```csharp
 var tempPath = $"{path}.tmp";                                    // shared across ALL processes for this profile
 await File.WriteAllTextAsync(tempPath, JsonSerializer.Serialize(tokens, …));

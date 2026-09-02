@@ -8,7 +8,7 @@
 
 `kcap import` ingests historical sessions from every detected coding agent, but
 **OpenCode is not among them**. The source list in
-[`Program.cs`](../../../src/Capacitor.Cli/Program.cs) registers Claude, Codex,
+[`Program.cs`](../../../../../src/Capacitor.Cli/Program.cs) registers Claude, Codex,
 Cursor, Copilot, Gemini, Kiro, and Pi only; `VendorSelection` does not recognize
 a `--opencode` filter. OpenCode reached the *live* surfaces (status line, setup
 wizard, plugin install, live watcher) but never the *import* surface, so a user
@@ -57,7 +57,7 @@ exactly (`info`: `agent,id,model,role,sessionID,summary,time`; `part`:
 **This is final-state reconstruction, not byte-identical to live JSONL.** The
 live plugin appends *multiple* snapshots for one message as its parts stream in
 or a tool transitions to a terminal state ([dedup key on
-`parts.length` + terminal-tool count](../../../src/Capacitor.Cli.Core/OpenCode/OpenCodeExtensionInstaller.cs)).
+`parts.length` + terminal-tool count](../../../../../src/Capacitor.Cli.Core/OpenCode/OpenCodeExtensionInstaller.cs)).
 SQLite holds only the final state, so import emits *one* line per message. This
 is **normalizer-compatible**: the server keeps the first non-skipped snapshot per
 `prt_` id and skips non-terminal tool snapshots, so the single final-state line is
@@ -77,7 +77,7 @@ explicit classification policy under *Discovery & classification*.
 
 A new `OpenCodeImportSource : IImportSource` in
 `src/Capacitor.Cli/Commands/`, structured like
-[`PiImportSource`](../../../src/Capacitor.Cli/Commands/PiImportSource.cs): a
+[`PiImportSource`](../../../../../src/Capacitor.Cli/Commands/PiImportSource.cs): a
 **routed** source (`FilePath = ""`, `SupportsTitleGeneration = false`) that runs
 through `ImportSessionAsync` rather than the chain worker. The SQLite read helper
 (`OpenCodeDb`) lives in the **CLI** project (`src/Capacitor.Cli/Commands/`), not
@@ -248,14 +248,14 @@ the *other* importers remains out of scope.
 
 Children (`parent_id` set) are imported as **subagents of their parent**, not as
 standalone sessions, following the **import** precedent in
-[`GeminiImportSource.ImportSubagentsAsync`](../../../src/Capacitor.Cli/Commands/GeminiImportSource.cs)
+[`GeminiImportSource.ImportSubagentsAsync`](../../../../../src/Capacitor.Cli/Commands/GeminiImportSource.cs)
 and reusing the OpenCode payload builders in
-[`OpenCodeSubagentDiscovery`](../../../src/Capacitor.Cli.Core/OpenCode/OpenCodeSubagentDiscovery.cs).
+[`OpenCodeSubagentDiscovery`](../../../../../src/Capacitor.Cli.Core/OpenCode/OpenCodeSubagentDiscovery.cs).
 
 **Ordering (corrected — was a blocker):** children are imported **between the
 parent's transcript and the parent's `session-end`**, so `SubagentStarted` /
 `SubagentCompleted` land in the parent stream *ahead of* `SessionEnded` — exactly
-as `GeminiImportSource` sequences it ([:229](../../../src/Capacitor.Cli/Commands/GeminiImportSource.cs)).
+as `GeminiImportSource` sequences it ([:229](../../../../../src/Capacitor.Cli/Commands/GeminiImportSource.cs)).
 Full order per root:
 
 1. `POST /hooks/session-start/opencode` (parent).
@@ -296,8 +296,8 @@ parity*:
 - **Title (corrected contract):** unlike Pi, OpenCode's db has a real
   `session.title`. Forward it via **`POST /hooks/set-title`** after the transcript
   send — matching the established native-title importers
-  ([Copilot](../../../src/Capacitor.Cli/Commands/CopilotImportSource.cs),
-  [Kiro](../../../src/Capacitor.Cli/Commands/KiroImportSource.cs)) — **not** by
+  ([Copilot](../../../../../src/Capacitor.Cli/Commands/CopilotImportSource.cs),
+  [Kiro](../../../../../src/Capacitor.Cli/Commands/KiroImportSource.cs)) — **not** by
   stuffing `title` into the session-start payload (the start hook is not confirmed
   to consume it). Best-effort: a title miss must not fail the import.
 - `started_at` = `session.time_created`; `ended_at` = `session.time_updated`
@@ -306,10 +306,10 @@ parity*:
 
 ## Wiring & docs (same PR)
 
-- `VendorSelection` ([VendorSelection.cs:15](../../../src/Capacitor.Cli/Commands/VendorSelection.cs)):
+- `VendorSelection` ([VendorSelection.cs:15](../../../../../src/Capacitor.Cli/Commands/VendorSelection.cs)):
   add `--opencode` → `"opencode"` to `KnownVendorFlags`, the `switch`, and the
   `--opencode-` prefix guards.
-- `Program.cs` ([:459](../../../src/Capacitor.Cli/Program.cs)): add
+- `Program.cs` ([:459](../../../../../src/Capacitor.Cli/Program.cs)): add
   `new OpenCodeImportSource()` to `allSources`.
 - Docs (required by CLAUDE.md in the same PR):
   - `help-import.txt` vendor-filter list (add `--opencode`).

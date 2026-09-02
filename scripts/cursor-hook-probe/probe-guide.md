@@ -1,8 +1,8 @@
-# Cursor hook probe
+# Cursor hook probe guide
 
 A throwaway capture tool that records exactly what Cursor passes to a hook
 script (argv, env, cwd, stdin) per event. Used once to resolve two open
-questions for [AI-669](../../docs/superpowers/specs/2026-06-01-ai-669-cursor-hooks-ingest-design.md):
+questions for [AI-669](../../docs/history/pre-recovery/superpowers/specs/2026-06-01-ai-669-cursor-hooks-ingest-design.md):
 
 1. Does Cursor pass the event name as argv, env var, or somewhere else?
 2. Does `sessionStart.session_id` equal the dashless composer ID that

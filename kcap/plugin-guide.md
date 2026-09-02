@@ -1,6 +1,11 @@
-# Kurrent Capacitor Plugin
+# Inherited Kurrent Capacitor plugin guide
 
-This plugin integrates [Kurrent Capacitor](../README.md) with Claude Code and Codex CLI by automatically registering lifecycle hooks, providing skills for session review, and auto-installing MCP servers that expose past-session context to the agent.
+This is a preserved description of the inherited Kurrent plugin. It integrates
+Kurrent Capacitor with Claude Code and Codex CLI by automatically registering
+lifecycle hooks, providing skills for session review, and auto-installing MCP
+servers that expose past-session context to the agent. It is source material,
+not a claim that Capacitor's replacement server or every described tool is
+available today; use the root documentation map for current direction.
 
 ## What it does
 

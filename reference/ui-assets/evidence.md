@@ -18,7 +18,7 @@ typeface, fine as internal reference, replaced before anything leaves the org.
 | `js/` | the console's own bundles, including `theme.js`, byte-for-byte as served — comments and all, so nothing in them is edited to house style |
 | `js/THIRD-PARTY-NOTICES.md` | copyright notices and full MIT / BSD-3-Clause texts of the libraries embedded in those bundles |
 | `js/vendor/driver/driver.css` | Driver.js base styles, at the path `css/product-tour.css` imports |
-| `icons-extracted/README.md` | which Material icon carries which meaning |
+| `icons-extracted/iconography.md` | which Material icon carries which meaning |
 | `screenshots/` | 14 screens, dark plus a light reference |
 
 ## Three findings that change how the rebuild is scoped
@@ -43,7 +43,7 @@ const seen = new Set();
 **2. There is no artwork.** Every icon is a stock MudBlazor Material icon, the only image
 is the signed-in user's WorkOS avatar, and the wordmark is text in Solina rather than a
 logo file. MudBlazor is MIT, so the icon set comes free with the component library — see
-`icons-extracted/README.md` for the meaning-to-icon mapping, which is the part that is not
+`icons-extracted/iconography.md` for the meaning-to-icon mapping, which is the part that is not
 recoverable from the stylesheet.
 
 **3. Dark is a re-palette, not an inversion.** Primary goes wine `rgba(99,27,58,1)` to
