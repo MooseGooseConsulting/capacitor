@@ -5,7 +5,7 @@ public sealed record CapacitorApiOptions {
     public const string SectionName = "CapacitorApi";
 
     /// <summary>Base URL of the separately configured Capacitor API; it is not a database connection string.</summary>
-    public string BaseUrl { get; init; } = "http://localhost:5000";
+    public string? BaseUrl { get; init; }
 
     public Uri GetBaseAddress() {
         if (!Uri.TryCreate(BaseUrl, UriKind.Absolute, out var uri)
