@@ -150,15 +150,23 @@ public sealed class PostgresGatewayTests {
     private static async Task DeleteTestSessionAsync(string connectionString, string sessionId) {
         await using var connection = new NpgsqlConnection(connectionString);
         await connection.OpenAsync();
-        await using var command = new NpgsqlCommand(@"
-            DELETE FROM eval_verdicts WHERE eval_run_id IN (SELECT eval_run_id FROM eval_runs WHERE session_id = $1);
-            DELETE FROM eval_runs WHERE session_id = $1;
-            DELETE FROM work_item_sessions WHERE session_id = $1;
-            DELETE FROM session_events WHERE session_id = $1;
-            DELETE FROM session_watermarks WHERE session_id = $1;
-            DELETE FROM sessions WHERE session_id = $1;", connection);
-        command.Parameters.AddWithValue(sessionId);
-        await command.ExecuteNonQueryAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        var cleanupStatements = new[] {
+            "DELETE FROM eval_verdicts WHERE eval_run_id IN (SELECT eval_run_id FROM eval_runs WHERE session_id = $1);",
+            "DELETE FROM eval_runs WHERE session_id = $1;",
+            "DELETE FROM work_item_sessions WHERE session_id = $1;",
+            "DELETE FROM session_events WHERE session_id = $1;",
+            "DELETE FROM session_watermarks WHERE session_id = $1;",
+            "DELETE FROM sessions WHERE session_id = $1;"
+        };
+
+        foreach (var cleanupStatement in cleanupStatements) {
+            await using var command = new NpgsqlCommand(cleanupStatement, connection, transaction);
+            command.Parameters.AddWithValue(sessionId);
+            await command.ExecuteNonQueryAsync();
+        }
+
+        await transaction.CommitAsync();
     }
 
     private static string RequireRecoveryConnectionString() {
