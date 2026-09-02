@@ -311,11 +311,43 @@ public class SqliteSessionRepository : ISessionRepository {
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
-    public async Task<bool> UpdateSessionVisibilityAsync(string sessionId, string visibility, CancellationToken ct = default) {
+    public async Task UpsertSubagentRunAsync(SubagentRunRecord run, CancellationToken ct = default) {
         using var cmd = _connection.CreateCommand();
-        cmd.CommandText = "UPDATE sessions SET visibility = $visibility WHERE session_id = $session_id;";
-        cmd.Parameters.AddWithValue("$session_id", sessionId);
-        cmd.Parameters.AddWithValue("$visibility", visibility);
+        cmd.CommandText = @"
+            INSERT INTO subagent_runs (
+                parent_session_id, agent_id, agent_type, role, prompt, spawned_at
+            ) VALUES (
+                $parent_session_id, $agent_id, $agent_type, $role, $prompt, $spawned_at
+            ) ON CONFLICT(parent_session_id, agent_id) DO UPDATE SET
+                agent_type = COALESCE(NULLIF(excluded.agent_type, ''), subagent_runs.agent_type),
+                role = COALESCE(NULLIF(excluded.role, ''), subagent_runs.role),
+                prompt = COALESCE(NULLIF(excluded.prompt, ''), subagent_runs.prompt);";
+        cmd.Parameters.AddWithValue("$parent_session_id", run.ParentSessionId);
+        cmd.Parameters.AddWithValue("$agent_id", run.AgentId);
+        cmd.Parameters.AddWithValue("$agent_type", (object?)run.AgentType ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$role", (object?)run.Role ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$prompt", (object?)run.Prompt ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$spawned_at", SqliteUtc.Format(run.SpawnedAt));
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task<bool> CompleteSubagentRunAsync(
+        string parentSessionId,
+        string agentId,
+        DateTimeOffset stoppedAt,
+        string? exitStatus,
+        CancellationToken ct = default) {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = @"
+            UPDATE subagent_runs SET
+                stopped_at = $stopped_at,
+                duration_ms = MAX(0, CAST((julianday($stopped_at) - julianday(spawned_at)) * 86400000 AS INTEGER)),
+                exit_status = COALESCE($exit_status, exit_status)
+            WHERE parent_session_id = $parent_session_id AND agent_id = $agent_id;";
+        cmd.Parameters.AddWithValue("$parent_session_id", parentSessionId);
+        cmd.Parameters.AddWithValue("$agent_id", agentId);
+        cmd.Parameters.AddWithValue("$stopped_at", SqliteUtc.Format(stoppedAt));
+        cmd.Parameters.AddWithValue("$exit_status", (object?)exitStatus ?? DBNull.Value);
         return await cmd.ExecuteNonQueryAsync(ct) > 0;
     }
 

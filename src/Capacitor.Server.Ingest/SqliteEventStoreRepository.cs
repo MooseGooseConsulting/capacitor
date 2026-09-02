@@ -86,7 +86,7 @@ public class SqliteEventStoreRepository : IEventStoreRepository {
                 SELECT {EventColumns}
                 FROM session_events
                 WHERE session_id = $session_id AND line_number >= $from_line
-                ORDER BY line_number ASC, logical_seq ASC, agent_id ASC;";
+                ORDER BY timestamp ASC, agent_id ASC, line_number ASC, logical_seq ASC;";
             cmd.Parameters.AddWithValue("$session_id", sessionId);
             cmd.Parameters.AddWithValue("$from_line", fromLine);
         } else {
