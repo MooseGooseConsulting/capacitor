@@ -1,0 +1,40 @@
+# Capacitor's isolated integration-test data plane on Blood Arrow's recovery
+# CloudNativePG cluster. This does not create an API deployment or an alpha
+# service, and it contains no credential material.
+#
+# Before applying, create data-platform/capacitor-test-db-credentials as a
+# kubernetes.io/basic-auth Secret with username `capacitor_test` and a password
+# sourced from Doppler's homelab/dev CAPACITOR_TEST_DB_PASSWORD secret.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: pg18-core-recovery
+  namespace: data-platform
+spec:
+  managed:
+    roles:
+      - name: capacitor_test
+        ensure: present
+        login: true
+        superuser: false
+        createdb: false
+        createrole: false
+        replication: false
+        inherit: true
+        connectionLimit: -1
+        passwordSecret:
+          name: capacitor-test-db-credentials
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: capacitor-test
+  namespace: data-platform
+spec:
+  cluster:
+    name: pg18-core-recovery
+  name: capacitor_test
+  owner: capacitor_test
+  ensure: present
+  allowConnections: true
+  databaseReclaimPolicy: retain
