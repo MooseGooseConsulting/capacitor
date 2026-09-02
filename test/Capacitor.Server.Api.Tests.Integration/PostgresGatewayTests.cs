@@ -35,14 +35,14 @@ public sealed class PostgresGatewayTests {
                     "",
                     """{"type":"PLANNER_RESPONSE","content":"later response","thinking":"later reasoning"}"""
                 },
-                line_numbers = new[] { 1, 2, 3 }
+                line_numbers = new[] { 0, 1, 2 }
             });
             await Assert.That(ingested.StatusCode).IsEqualTo(HttpStatusCode.OK);
 
             var watermark = await client.GetFromJsonAsync<WatermarkResponse>(
                 $"/api/sessions/{sessionId}/last-line");
             await Assert.That(watermark).IsNotNull();
-            await Assert.That(watermark!.LastLineNumber).IsEqualTo(3);
+            await Assert.That(watermark!.LastLineNumber).IsEqualTo(2);
 
             await using var connection = new NpgsqlConnection(connectionString);
             await connection.OpenAsync();

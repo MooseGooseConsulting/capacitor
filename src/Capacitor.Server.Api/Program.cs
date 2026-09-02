@@ -271,7 +271,7 @@ app.MapGet("/api/sessions/{id}/transcript", async (
     [FromQuery] int? after,
     [FromQuery] int? limit,
     [FromQuery] int? offset,
-    [FromQuery(Name = "include_thinking")] bool includeThinking,
+    [FromQuery(Name = "include_thinking")] bool? includeThinking,
     ISessionRepository sessions,
     IEventStoreRepository eventStore,
     CancellationToken ct) => {
@@ -282,7 +282,7 @@ app.MapGet("/api/sessions/{id}/transcript", async (
         sessionId,
         string.IsNullOrWhiteSpace(agentId) ? null : IdCanonicalizer.Canonicalize(agentId),
         ct: ct);
-    var visibleEvents = includeThinking
+    var visibleEvents = includeThinking == true
         ? events
         : events.Where(@event => !@event.EventType.Contains("Thinking", StringComparison.OrdinalIgnoreCase)).ToArray();
     IReadOnlyList<SessionEventRecord> window;
