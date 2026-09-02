@@ -148,6 +148,9 @@ spec:
                 }
 
                 console.log(`Browser acceptance passed for imported session ${sessionId}.`);
+                } catch (error) {
+                  console.error(await page.locator('body').innerText());
+                  throw error;
                 } finally {
                   await context.close();
                   await browser.close();
