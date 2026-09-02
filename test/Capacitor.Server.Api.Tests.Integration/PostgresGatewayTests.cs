@@ -40,28 +40,6 @@ public sealed class PostgresGatewayTests {
             });
             await Assert.That(ingested.StatusCode).IsEqualTo(HttpStatusCode.OK);
 
-            // The dashboard reads an evaluator-produced persisted result; it must not
-            // manufacture an Evaluation tab from transcript data.
-            await using (var dataSource = NpgsqlDataSource.Create(connectionString)) {
-                var evaluationStore = new PostgresSessionRepository(dataSource);
-                var evaluationId = $"evaluation-{Guid.NewGuid():N}";
-                await evaluationStore.PersistEvalRunAsync(new EvalRunRecord {
-                    EvalRunId = evaluationId,
-                    SessionId = sessionId,
-                    JudgeModel = "integration-judge",
-                    OverallScore = 4,
-                    Summary = "Persisted dashboard evaluation",
-                    EvaluatedAt = DateTimeOffset.Parse("2026-01-02T03:05:05Z", CultureInfo.InvariantCulture)
-                }, [new EvalVerdictRecord {
-                    EvalRunId = evaluationId,
-                    Category = "quality",
-                    QuestionId = "session-read-model",
-                    Score = 4,
-                    Verdict = "pass",
-                    Finding = "The persisted evaluation is available to the browser API."
-                }]);
-            }
-
             var continued = await client.PostAsJsonAsync("/hooks/transcript", new {
                 session_id = sessionId,
                 vendor = "antigravity",
@@ -124,6 +102,28 @@ public sealed class PostgresGatewayTests {
                 }
             });
             await Assert.That(ingested.StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+            // The dashboard reads an evaluator-produced persisted result; it must not
+            // manufacture an Evaluation tab from transcript data.
+            await using (var dataSource = NpgsqlDataSource.Create(connectionString)) {
+                var evaluationStore = new PostgresSessionRepository(dataSource);
+                var evaluationId = $"evaluation-{Guid.NewGuid():N}";
+                await evaluationStore.PersistEvalRunAsync(new EvalRunRecord {
+                    EvalRunId = evaluationId,
+                    SessionId = sessionId,
+                    JudgeModel = "integration-judge",
+                    OverallScore = 4,
+                    Summary = "Persisted dashboard evaluation",
+                    EvaluatedAt = DateTimeOffset.Parse("2026-01-02T03:05:05Z", CultureInfo.InvariantCulture)
+                }, [new EvalVerdictRecord {
+                    EvalRunId = evaluationId,
+                    Category = "quality",
+                    QuestionId = "session-read-model",
+                    Score = 4,
+                    Verdict = "pass",
+                    Finding = "The persisted evaluation is available to the browser API."
+                }]);
+            }
 
             var search = await client.GetAsync("/api/sessions/search?q=dashboard%20session");
             await Assert.That(search.StatusCode).IsEqualTo(HttpStatusCode.OK);
