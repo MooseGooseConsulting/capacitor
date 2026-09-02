@@ -1,0 +1,12 @@
+@namespace Capacitor.Web.Components.Sessions
+
+<MudText Typo="Typo.caption" Class="metric-label">@Label</MudText>
+<MudText Typo="Typo.body2" Class="metric-value">@Value</MudText>
+
+@code {
+    [Parameter, EditorRequired]
+    public string Label { get; set; } = string.Empty;
+
+    [Parameter, EditorRequired]
+    public string Value { get; set; } = string.Empty;
+}

@@ -1,0 +1,47 @@
+.sessions-rail {
+    border-right: 1px solid #e4e7ec;
+    min-height: calc(100vh - 48px);
+    padding: 1.25rem .75rem;
+}
+
+.rail-label {
+    color: #8791a1;
+    font-size: .66rem;
+    font-weight: 800;
+    letter-spacing: .09em;
+    padding: 0 .65rem .4rem;
+}
+
+.rail-divider {
+    margin: 1rem .25rem;
+}
+
+.rail-empty {
+    color: #8c95a3;
+    display: block;
+    line-height: 1.45;
+    padding: 0 .65rem;
+}
+
+.owner-label {
+    color: #8791a1;
+    display: block;
+    font-weight: 700;
+    padding: .55rem .65rem .2rem;
+}
+
+.rail-link {
+    color: #566174;
+    justify-content: flex-start;
+    text-align: left;
+}
+
+    .rail-link ::deep .mud-button-label {
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+.rail-link-selected {
+    background: #e8eefb;
+    color: #244f9d;
+}
