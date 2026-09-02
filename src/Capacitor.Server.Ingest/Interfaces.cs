@@ -10,6 +10,23 @@ public readonly record struct SessionRollupAggregate(
     decimal DurationMin,
     DateTimeOffset? LastEventAt);
 
+/// <summary>Filters for the repository-backed Sessions dashboard list.</summary>
+public sealed record SessionSearchQuery(
+    string? Query,
+    string? Repo,
+    string? Vendor,
+    string? Status,
+    int Limit = 50,
+    int Offset = 0);
+
+public sealed record SessionSearchPage(
+    IReadOnlyList<SessionHeaderRecord> Sessions,
+    long Total);
+
+public sealed record SessionEvaluation(
+    EvalRunRecord Run,
+    IReadOnlyList<EvalVerdictRecord> Verdicts);
+
 public interface IEventStoreRepository {
     Task<int> AppendEventsAsync(IReadOnlyList<SessionEventRecord> events, CancellationToken ct = default);
     Task<IReadOnlyList<SessionEventRecord>> GetEventsAsync(string sessionId, string? agentId = null, int fromLine = 0, CancellationToken ct = default);
@@ -29,6 +46,7 @@ public interface ISessionRepository {
     Task<SessionHeaderRecord> GetOrCreatePlaceholderAsync(string sessionId, string vendor, string? ownerUserId = null, CancellationToken ct = default);
     Task<SessionHeaderRecord> GetOrCreatePlaceholderAsync(string sessionId, string vendor, string? ownerUserId, string? defaultVisibility, CancellationToken ct = default);
     Task<SessionHeaderRecord?> GetSessionAsync(string sessionId, CancellationToken ct = default);
+    Task<SessionSearchPage> SearchSessionsAsync(SessionSearchQuery query, CancellationToken ct = default);
     Task UpdateSessionAsync(SessionHeaderRecord session, CancellationToken ct = default);
 
     // Owner/visibility only. A concurrent session-end can commit completed between the
@@ -52,6 +70,7 @@ public interface ISessionRepository {
         CancellationToken ct = default);
 
     Task PersistEvalRunAsync(EvalRunRecord run, IReadOnlyList<EvalVerdictRecord> verdicts, CancellationToken ct = default);
+    Task<SessionEvaluation?> GetLatestEvaluationAsync(string sessionId, CancellationToken ct = default);
 
     // Rollup-only write: touches the aggregate columns exclusively. A concurrent session-end can
     // commit status="completed" between this projection's read and its write, so this must never

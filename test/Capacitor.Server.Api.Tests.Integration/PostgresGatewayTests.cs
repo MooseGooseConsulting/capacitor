@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Globalization;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -50,13 +51,72 @@ public sealed class PostgresGatewayTests {
         }
     }
 
+    [Test]
+    public async Task Gateway_exposes_the_postgres_backed_sessions_dashboard_read_surface() {
+        var connectionString = RequireRecoveryConnectionString();
+        var sessionId = $"dashboard-{Guid.NewGuid():N}";
+        var previousConnectionString = Environment.GetEnvironmentVariable("ConnectionStrings__Capacitor");
+        Environment.SetEnvironmentVariable("ConnectionStrings__Capacitor", connectionString);
+
+        try {
+            using var factory = new GatewayFactory();
+            using var client = factory.CreateClient();
+
+            var started = await client.PostAsJsonAsync("/hooks/session-start/codex", new {
+                session_id = sessionId,
+                user_id = "integration-test",
+                default_visibility = "project"
+            });
+            await Assert.That(started.StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+            var ingested = await client.PostAsJsonAsync("/hooks/transcript", new {
+                session_id = sessionId,
+                vendor = "antigravity",
+                lines = new[] {
+                    """{"type":"USER_INPUT","content":"find dashboard session"}""",
+                    """{"type":"PLANNER_RESPONSE","content":"stored result","thinking":"stored reasoning","tool_calls":[{"name":"search"}]}"""
+                }
+            });
+            await Assert.That(ingested.StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+            var search = await client.GetAsync("/api/sessions/search?query=dashboard%20session");
+            await Assert.That(search.StatusCode).IsEqualTo(HttpStatusCode.OK);
+            using (var searchDocument = JsonDocument.Parse(await search.Content.ReadAsStringAsync())) {
+                var matches = searchDocument.RootElement.GetProperty("sessions");
+                await Assert.That(matches.EnumerateArray().Any(s =>
+                    s.GetProperty("session_id").GetString() == sessionId)).IsTrue();
+            }
+
+            var detail = await client.GetAsync($"/api/sessions/{sessionId}");
+            await Assert.That(detail.StatusCode).IsEqualTo(HttpStatusCode.OK);
+            using (var detailDocument = JsonDocument.Parse(await detail.Content.ReadAsStringAsync())) {
+                await Assert.That(detailDocument.RootElement.GetProperty("session").GetProperty("session_id").GetString())
+                    .IsEqualTo(sessionId);
+                await Assert.That(detailDocument.RootElement.GetProperty("events").GetArrayLength()).IsEqualTo(4);
+                await Assert.That(detailDocument.RootElement.GetProperty("trace").GetProperty("entries").GetArrayLength())
+                    .IsGreaterThan(0);
+            }
+
+            var transcript = await client.GetAsync($"/api/sessions/{sessionId}/transcript");
+            var events = await client.GetAsync($"/api/sessions/{sessionId}/events");
+            var turns = await client.GetAsync($"/api/sessions/{sessionId}/turns");
+            var evaluation = await client.GetAsync($"/api/sessions/{sessionId}/evaluation");
+            await Assert.That(transcript.StatusCode).IsEqualTo(HttpStatusCode.OK);
+            await Assert.That(events.StatusCode).IsEqualTo(HttpStatusCode.OK);
+            await Assert.That(turns.StatusCode).IsEqualTo(HttpStatusCode.OK);
+            await Assert.That(evaluation.StatusCode).IsEqualTo(HttpStatusCode.NoContent);
+        } finally {
+            Environment.SetEnvironmentVariable("ConnectionStrings__Capacitor", previousConnectionString);
+        }
+    }
+
     private static string RequireRecoveryConnectionString() {
         var connectionString = Environment.GetEnvironmentVariable("CAPACITOR_TEST_POSTGRES_CONNECTION_STRING")
             ?? throw new InvalidOperationException(
-                "CAPACITOR_TEST_POSTGRES_CONNECTION_STRING is required. Run this integration suite against Blood Arrow's capacitor_recovery database.");
+                "CAPACITOR_TEST_POSTGRES_CONNECTION_STRING is required. Run this integration suite against Blood Arrow's capacitor_test database.");
         var builder = new NpgsqlConnectionStringBuilder(connectionString);
-        if (!string.Equals(builder.Database, "capacitor_recovery", StringComparison.Ordinal)) {
-            throw new InvalidOperationException("The integration suite may only target the capacitor_recovery database.");
+        if (!string.Equals(builder.Database, "capacitor_test", StringComparison.Ordinal)) {
+            throw new InvalidOperationException("The integration suite may only target the capacitor_test database.");
         }
 
         return connectionString;

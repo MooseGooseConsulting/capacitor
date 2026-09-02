@@ -171,6 +171,102 @@ app.MapGet("/watermarks", async (
     return Results.Ok(new { session_id = sessionId, agent_id = canonicalAgent, last_line_number = line });
 });
 
+app.MapGet("/api/sessions/search", async (
+    [FromQuery] string? query,
+    [FromQuery] string? repo,
+    [FromQuery] string? vendor,
+    [FromQuery] string? status,
+    [FromQuery] int? limit,
+    [FromQuery] int? offset,
+    ISessionRepository sessions,
+    CancellationToken ct) => {
+    var page = await sessions.SearchSessionsAsync(new SessionSearchQuery(
+        query, repo, vendor, status, limit ?? 50, offset ?? 0), ct);
+    return Results.Ok(new { sessions = page.Sessions, total = page.Total });
+});
+
+async Task<IResult> RequireSessionAsync(
+    string id,
+    ISessionRepository sessions,
+    CancellationToken ct) {
+    var session = await sessions.GetSessionAsync(IdCanonicalizer.Canonicalize(id), ct);
+    return session is null ? Results.NotFound() : Results.Ok(session);
+}
+
+app.MapGet("/api/sessions/{id}", async (
+    string id,
+    ISessionRepository sessions,
+    IEventStoreRepository eventStore,
+    CancellationToken ct) => {
+    var sessionId = IdCanonicalizer.Canonicalize(id);
+    var session = await sessions.GetSessionAsync(sessionId, ct);
+    if (session is null) return Results.NotFound();
+
+    var events = await eventStore.GetEventsAsync(sessionId, ct: ct);
+    var evaluation = await sessions.GetLatestEvaluationAsync(sessionId, ct);
+    return Results.Ok(new SessionDashboardDetail(session, events, SessionTraceComposer.Compose(events), evaluation));
+});
+
+app.MapGet("/api/sessions/{id}/overview", (
+    string id,
+    ISessionRepository sessions,
+    CancellationToken ct) => RequireSessionAsync(id, sessions, ct));
+
+app.MapGet("/api/sessions/{id}/details", (
+    string id,
+    ISessionRepository sessions,
+    CancellationToken ct) => RequireSessionAsync(id, sessions, ct));
+
+app.MapGet("/api/sessions/{id}/events", async (
+    string id,
+    [FromQuery] string? agentId,
+    [FromQuery] int? fromLine,
+    ISessionRepository sessions,
+    IEventStoreRepository eventStore,
+    CancellationToken ct) => {
+    var sessionId = IdCanonicalizer.Canonicalize(id);
+    if (await sessions.GetSessionAsync(sessionId, ct) is null) return Results.NotFound();
+    var events = await eventStore.GetEventsAsync(
+        sessionId,
+        string.IsNullOrWhiteSpace(agentId) ? null : IdCanonicalizer.Canonicalize(agentId),
+        Math.Max(0, fromLine ?? 0),
+        ct);
+    return Results.Ok(new { session_id = sessionId, events });
+});
+
+app.MapGet("/api/sessions/{id}/transcript", async (
+    string id,
+    ISessionRepository sessions,
+    IEventStoreRepository eventStore,
+    CancellationToken ct) => {
+    var sessionId = IdCanonicalizer.Canonicalize(id);
+    var session = await sessions.GetSessionAsync(sessionId, ct);
+    if (session is null) return Results.NotFound();
+    var events = await eventStore.GetEventsAsync(sessionId, ct: ct);
+    return Results.Ok(new { session, events });
+});
+
+app.MapGet("/api/sessions/{id}/turns", async (
+    string id,
+    ISessionRepository sessions,
+    IEventStoreRepository eventStore,
+    CancellationToken ct) => {
+    var sessionId = IdCanonicalizer.Canonicalize(id);
+    if (await sessions.GetSessionAsync(sessionId, ct) is null) return Results.NotFound();
+    var events = await eventStore.GetEventsAsync(sessionId, ct: ct);
+    return Results.Ok(new { session_id = sessionId, trace = SessionTraceComposer.Compose(events) });
+});
+
+app.MapGet("/api/sessions/{id}/evaluation", async (
+    string id,
+    ISessionRepository sessions,
+    CancellationToken ct) => {
+    var sessionId = IdCanonicalizer.Canonicalize(id);
+    if (await sessions.GetSessionAsync(sessionId, ct) is null) return Results.NotFound();
+    var evaluation = await sessions.GetLatestEvaluationAsync(sessionId, ct);
+    return evaluation is null ? Results.NoContent() : Results.Ok(evaluation);
+});
+
 app.MapGet("/api/eval/catalog", () => Results.Ok(EvalCatalogDefinition.GetCatalog()));
 
 // The CLI/daemon fetch this FIRST (EvalService.RunAsync) and abort the whole run on anything
@@ -325,6 +421,12 @@ namespace Capacitor.Server.Api {
         [JsonPropertyName("max_rows")]
         public int? MaxRows { get; init; }
     }
+
+    public sealed record SessionDashboardDetail(
+        SessionHeaderRecord Session,
+        IReadOnlyList<SessionEventRecord> Events,
+        SessionTraceDocument Trace,
+        SessionEvaluation? Evaluation);
 
     public record ApiSessionStartPayload {
         [JsonPropertyName("session_id")]
