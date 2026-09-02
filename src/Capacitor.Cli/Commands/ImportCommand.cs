@@ -2968,6 +2968,7 @@ class ImportCommand(ConfigRoot config, ProfileContext profiles) {
                     startLine: session.ResumeFromLine,
                     progress: perSessionProgress,
                     vendor: session.Vendor,
+                    cwd: ResolveCwd(session, sessionCwds),
                     failOnError: true
                 );
 
@@ -3044,6 +3045,7 @@ class ImportCommand(ConfigRoot config, ProfileContext profiles) {
         // fallback for fields the rollout omits (user_name / user_email).
         var codexRepo = session.Vendor == "codex" ? ExtractCodexGitInfo(session.FilePath) : null;
 
+        RepositoryPayload? transcriptRepository = null;
         if (cwd is not null) {
             // The imported session-start payload carries no PR fields (only owner/repo/branch/user),
             // so skip the PR/MR provider round-trip.
@@ -3070,6 +3072,15 @@ class ImportCommand(ConfigRoot config, ProfileContext profiles) {
                 if (branch is not null) repoNode["branch"]      = branch;
 
                 if (repoNode.Count > 0) startHook["repository"] = repoNode;
+                transcriptRepository = new RepositoryPayload {
+                    UserName = repo?.UserName,
+                    UserEmail = repo?.UserEmail,
+                    RemoteUrl = remoteUrl,
+                    Host = repo?.Host,
+                    Owner = owner,
+                    RepoName = repoName,
+                    Branch = branch,
+                };
             }
         }
 
@@ -3122,7 +3133,8 @@ class ImportCommand(ConfigRoot config, ProfileContext profiles) {
                 meta,
                 session.EncodedCwd,
                 perSessionProgress,
-                session.Vendor
+                session.Vendor,
+                transcriptRepository
             );
         } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
             throw;

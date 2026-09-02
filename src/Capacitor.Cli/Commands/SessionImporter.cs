@@ -34,7 +34,8 @@ static class SessionImporter {
             SessionMetadata            metadata,
             string?                    encodedCwd,
             IProgress<ImportProgress>? progress = null,
-            string                     vendor   = "claude"
+            string                     vendor   = "claude",
+            RepositoryPayload?         repository = null
         ) {
         if (!File.Exists(transcriptPath))
             return new(sessionId, [], 0);
@@ -95,7 +96,7 @@ static class SessionImporter {
                 if (firstLine == lineIndex && !sentAgents.Contains(agentId) && agentMap.TryGetValue(agentId, out var agentPath)) {
                     // Flush the current batch before inserting agent lifecycle
                     if (batchLines.Count > 0) {
-                        await PostTranscriptBatch(httpClient, baseUrl, sessionId, agentId: null, batchLines, batchLineNumbers, vendor);
+                        await PostTranscriptBatch(httpClient, baseUrl, sessionId, agentId: null, batchLines, batchLineNumbers, vendor, cwd: cwd, repository: repository);
                         var flushed = batchLines.Count;
                         totalSent += flushed;
                         progress?.Report(new BatchFlushed(AgentId: null, flushed));
@@ -105,7 +106,7 @@ static class SessionImporter {
 
                     // Send agent lifecycle: start → transcript → stop
                     agentTypes.TryGetValue(agentId, out var agentType);
-                    await SendAgentLifecycle(httpClient, baseUrl, sessionId, agentId, agentType, agentPath, cwd, transcriptPath, progress);
+                    await SendAgentLifecycle(httpClient, baseUrl, sessionId, agentId, agentType, agentPath, cwd, transcriptPath, progress, repository);
                     sentAgents.Add(agentId);
                     agentIds.Add(agentId);
                 }
@@ -119,7 +120,7 @@ static class SessionImporter {
             lineIndex++;
 
             if (batchLines.Count >= batchSize) {
-                await PostTranscriptBatch(httpClient, baseUrl, sessionId, agentId: null, batchLines, batchLineNumbers, vendor);
+                await PostTranscriptBatch(httpClient, baseUrl, sessionId, agentId: null, batchLines, batchLineNumbers, vendor, cwd: cwd, repository: repository);
                 var flushed = batchLines.Count;
                 totalSent += flushed;
                 progress?.Report(new BatchFlushed(AgentId: null, flushed));
@@ -130,7 +131,7 @@ static class SessionImporter {
 
         // Flush remaining main transcript lines
         if (batchLines.Count > 0) {
-            await PostTranscriptBatch(httpClient, baseUrl, sessionId, agentId: null, batchLines, batchLineNumbers, vendor);
+            await PostTranscriptBatch(httpClient, baseUrl, sessionId, agentId: null, batchLines, batchLineNumbers, vendor, cwd: cwd, repository: repository);
             var flushed = batchLines.Count;
             totalSent += flushed;
             progress?.Report(new BatchFlushed(AgentId: null, flushed));
@@ -141,7 +142,7 @@ static class SessionImporter {
         foreach (var (agentId, agentPath) in agentTranscripts) {
             if (!sentAgents.Contains(agentId)) {
                 agentTypes.TryGetValue(agentId, out var agentType);
-                await SendAgentLifecycle(httpClient, baseUrl, sessionId, agentId, agentType, agentPath, cwd, transcriptPath, progress);
+                await SendAgentLifecycle(httpClient, baseUrl, sessionId, agentId, agentType, agentPath, cwd, transcriptPath, progress, repository);
                 sentAgents.Add(agentId);
                 agentIds.Add(agentId);
             }
@@ -174,7 +175,7 @@ static class SessionImporter {
                 try {
                     subLines = await SendTranscriptBatches(
                         httpClient, baseUrl, sessionId, sub.FilePath, subAgentId,
-                        startLine: 0, progress: progress, vendor: "codex", failOnError: true);
+                        startLine: 0, progress: progress, vendor: "codex", cwd: cwd, repository: repository, failOnError: true);
                 } catch (HttpRequestException) {
                     continue; // leave subagent-stop unsent; a re-import retries (idempotent)
                 }
@@ -464,7 +465,8 @@ static class SessionImporter {
             string                     agentPath,
             string                     cwd,
             string                     sessionTranscriptPath,
-            IProgress<ImportProgress>? progress
+            IProgress<ImportProgress>? progress,
+            RepositoryPayload?         repository
         ) {
         var resolvedAgentType = agentType ?? "task";
 
@@ -486,7 +488,9 @@ static class SessionImporter {
         }
 
         progress?.Report(new SubagentStarted(agentId));
-        var agentLines = await SendTranscriptBatches(httpClient, baseUrl, sessionId, agentPath, agentId, startLine: 0, progress: progress);
+        var agentLines = await SendTranscriptBatches(
+            httpClient, baseUrl, sessionId, agentPath, agentId, startLine: 0,
+            progress: progress, cwd: cwd, repository: repository);
         progress?.Report(new SubagentFinished(agentId, agentLines));
 
         // Stop agent
@@ -547,7 +551,9 @@ static class SessionImporter {
             string                     vendor            = "claude",
             int                        lineNumberOffset  = 0,
             bool                       failOnError       = false,
-            Func<bool>?                abortDelivery     = null
+            Func<bool>?                abortDelivery     = null,
+            string?                    cwd               = null,
+            RepositoryPayload?         repository        = null
         ) {
         if (!File.Exists(filePath)) return 0;
 
@@ -578,7 +584,7 @@ static class SessionImporter {
             if (batchLines.Count >= batchSize) {
                 if (abortDelivery?.Invoke() == true) throw new TranscriptDeliveryAbortedException();
 
-                await PostTranscriptBatch(httpClient, baseUrl, sessionId, agentId, batchLines, batchLineNumbers, vendor, failOnError);
+                await PostTranscriptBatch(httpClient, baseUrl, sessionId, agentId, batchLines, batchLineNumbers, vendor, failOnError, cwd, repository);
                 var flushed = batchLines.Count;
                 totalSent += flushed;
                 progress?.Report(new BatchFlushed(agentId, flushed));
@@ -598,7 +604,7 @@ static class SessionImporter {
         if (batchLines.Count > 0) {
             if (abortDelivery?.Invoke() == true) throw new TranscriptDeliveryAbortedException();
 
-            await PostTranscriptBatch(httpClient, baseUrl, sessionId, agentId, batchLines, batchLineNumbers, vendor, failOnError);
+            await PostTranscriptBatch(httpClient, baseUrl, sessionId, agentId, batchLines, batchLineNumbers, vendor, failOnError, cwd, repository);
             var flushed = batchLines.Count;
             totalSent += flushed;
             progress?.Report(new BatchFlushed(agentId, flushed));
@@ -631,13 +637,17 @@ static class SessionImporter {
             List<string> lines,
             List<int>    lineNumbers,
             string       vendor,
-            bool         failOnError = false
+            bool         failOnError = false,
+            string?      cwd = null,
+            RepositoryPayload? repository = null
         ) {
         var batch = new TranscriptBatch {
             SessionId   = sessionId,
             AgentId     = agentId,
             Lines       = [.. lines],
             LineNumbers = [.. lineNumbers],
+            Cwd         = cwd,
+            Repository  = repository,
             // Default vendor "claude" stays absent on the wire to match older servers; the
             // explicit "codex" tag is what flips the server to CodexNormalizer.
             Vendor = vendor == "claude" ? null : vendor,
