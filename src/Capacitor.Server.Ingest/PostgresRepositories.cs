@@ -173,10 +173,13 @@ public class PostgresSessionRepository : ISessionRepository {
                    ))
             ORDER BY COALESCE(last_event_at, started_at) DESC, session_id DESC
             LIMIT $5 OFFSET $6;";
-        cmd.Parameters.AddWithValue((object?)vendor ?? DBNull.Value);
-        cmd.Parameters.AddWithValue((object?)status ?? DBNull.Value);
-        cmd.Parameters.AddWithValue((object?)repo ?? DBNull.Value);
-        cmd.Parameters.AddWithValue((object?)text ?? DBNull.Value);
+        // PostgreSQL cannot infer the type of a null parameter when it appears in
+        // an `IS NULL OR column = parameter` predicate.  Keep the optional filters
+        // explicitly text-typed so an unfiltered dashboard query is valid too.
+        cmd.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Text, Value = (object?)vendor ?? DBNull.Value });
+        cmd.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Text, Value = (object?)status ?? DBNull.Value });
+        cmd.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Text, Value = (object?)repo ?? DBNull.Value });
+        cmd.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Text, Value = (object?)text ?? DBNull.Value });
         cmd.Parameters.AddWithValue(limit);
         cmd.Parameters.AddWithValue(offset);
 
