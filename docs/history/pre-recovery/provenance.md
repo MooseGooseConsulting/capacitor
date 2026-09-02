@@ -1,4 +1,4 @@
-# Pre-recovery archive
+# Pre-recovery provenance
 
 This directory preserves the inherited material that formerly lived under
 `docs/`. It is provenance, not current Capacitor architecture, delivery scope,

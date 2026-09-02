@@ -1,4 +1,4 @@
-# Iconography
+# Captured iconography
 
 **There is no bespoke icon set to rebuild.** Every `<svg>` the console renders is a stock
 MudBlazor Material icon — `mud-icon-root mud-svg-icon`, a 24x24 viewBox, and an unmodified

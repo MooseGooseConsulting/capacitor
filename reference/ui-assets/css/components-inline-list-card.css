@@ -5,7 +5,7 @@
    127 times each on a full session list, 1.7 MB inline in total. components.css is only
    part of the stylesheet; anything rebuilt from it alone will be missing the session card,
    the compact stat rows, the repo sidebar, the setup progress card and the empty states.
-   The remaining blocks are listed in ../README.md with the snippet that extracts them. */
+   The remaining blocks are listed in ../evidence.md with the snippet that extracts them. */
 
 .list-card {
     background: var(--mud-palette-background);

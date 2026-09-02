@@ -3,7 +3,7 @@
 > Full observability for your AI coding-agent sessions — record every session, watch agent activity in real time, and review code changes grounded in the transcripts that produced them.
 
 [![npm](https://img.shields.io/npm/v/@kurrent/kcap?color=cb3837&logo=npm&label=%40kurrent%2Fkcap)](https://www.npmjs.com/package/@kurrent/kcap)
-[![license](https://img.shields.io/badge/license-Kurrent%20v1-blue)](LICENSE.md)
+[![license](https://img.shields.io/badge/license-Kurrent%20v1-blue)](../LICENSE.md)
 [![platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)](#1-install-the-cli)
 [![built with](https://img.shields.io/badge/.NET%2010-NativeAOT-512bd4?logo=dotnet&logoColor=white)](#)
 
@@ -2093,4 +2093,4 @@ Or remove the config file and re-run setup:
 
 ## License
 
-[Kurrent License v1](LICENSE.md)
+[Kurrent License v1](../LICENSE.md)

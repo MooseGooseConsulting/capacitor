@@ -1,4 +1,4 @@
-# Cursor hook probe
+# Cursor hook probe guide
 
 A throwaway capture tool that records exactly what Cursor passes to a hook
 script (argv, env, cwd, stdin) per event. Used once to resolve two open
