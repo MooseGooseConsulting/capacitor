@@ -64,7 +64,7 @@
 
         if (!firstRender) return;
 
-        _shortcutModule = await JS.InvokeAsync<IJSObjectReference>("import", "./scripts/global-search.js");
+        _shortcutModule = await JS.InvokeAsync<IJSObjectReference>("import", "/scripts/global-search.js");
         if (_disposed) {
             await _shortcutModule.DisposeAsync();
             _shortcutModule = null;

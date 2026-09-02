@@ -84,6 +84,7 @@ spec:
                 await page.goto(`${process.env.WEB_URL}/sessions`, { waitUntil: 'domcontentloaded' });
                 await page.locator(`a.session-card-link[href="/sessions/${sessionId}"]`).waitFor({ state: 'visible', timeout: 30000 });
 
+                await page.waitForTimeout(500);
                 await page.keyboard.press('Control+K');
                 const globalSearch = page.locator('details.global-search-menu[open] #capacitor-global-search');
                 await globalSearch.waitFor({ state: 'visible', timeout: 10000 });
