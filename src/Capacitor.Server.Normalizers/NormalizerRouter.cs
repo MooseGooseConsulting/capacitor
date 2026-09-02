@@ -112,6 +112,8 @@ public class NormalizerRouter {
     public NormalizerRouter(IEnumerable<INormalizer>? normalizers = null) {
         _normalizers = new List<INormalizer> {
             new ClaudeCodeNormalizer(),
+            new CodexNormalizer(),
+            new KiroTranscriptNormalizer(),
             new UniversalAcpNormalizer(),
             new AntigravityNormalizer()
         };
