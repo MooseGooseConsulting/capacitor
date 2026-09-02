@@ -1,8 +1,25 @@
 # Canonical Schema Specification
 
-This document defines the authoritative database schema for the Capacitor Server.
+> **Status: derived candidate, not an authoritative migration or a running
+> database.** The required product order is [`PROMPT.md`](../../PROMPT.md),
+> [`FLEET.md`](../../reference/FLEET.md), [`SURFACE.md`](../../reference/SURFACE.md)
+> plus the captured UI assets, and the measured reference findings. Before using
+> any DDL below, reconcile it with the
+> [`Sessions vertical-slice contract`](../SESSION-VERTICAL-SLICE.md).
 
-The schema is designed to support high-throughput, append-only event streams across a multi-node fleet (`FLEET.md`), position-addressed idempotent ingestion, subagent trees, work item graphs, session evals, and a governed analytics surface. Live `get_analytics_schema` inventories 32 view *names*; this wave defines tables plus SQL for the cores the session list and MCP tour actually query. Do not invent the remaining view bodies here.
+This document preserves an earlier schema synthesis. It is useful design material,
+but its original title overstated its authority. In particular, its one-repository
+session shape and deferred `logical_seq` conflict with the measured cross-repository
+evidence and the event/trace read model. The vertical-slice contract resolves those
+requirements: a receipt remains idempotent at `(session_id, agent_id, line_number)`;
+normalized events have a stable in-line ordinal and source reference; repository
+evidence is event-level with a many-repository session projection; repeated lifecycle
+callbacks are first-write-wins facts.
+
+The DDL below must not be applied as-is until those corrections are represented in a
+reviewed migration that is traced to the browser fields it serves. The target is a
+networked, multi-node fleet store; no section of this document establishes that such a
+Capacitor service is already deployed.
 
 ---
 

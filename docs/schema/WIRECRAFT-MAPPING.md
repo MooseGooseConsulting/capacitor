@@ -1,6 +1,16 @@
 # Wire-to-Schema Mapping Specification
 
-This document defines the 1:1 mapping between client-side wire payloads (defined in `Capacitor.Cli.Core/Models.cs`) and the server's relational database schema.
+> **Status: client-wire inventory plus an older storage proposal.** The client
+> payloads are source constraints; the destination mapping is not a deployed schema
+> or an approved API contract. Read the
+> [`Sessions vertical-slice contract`](../SESSION-VERTICAL-SLICE.md) before deriving
+> a migration or read DTO from this file.
+
+This document maps client-side wire payloads (defined in
+`Capacitor.Cli.Core/Models.cs`) to candidate relational storage. It is not a 1:1
+mapping: a received transcript line is idempotent at its wire position, while one line
+may yield several ordered normalized/display events. Repository data supplied on the
+wire is evidence, not permission to overwrite the accumulated session association.
 
 ---
 
@@ -32,18 +42,25 @@ This document defines the 1:1 mapping between client-side wire payloads (defined
 ```
 
 ### Destination Mapping:
-1. **`session_events`:**
-   * `session_id` $\leftarrow$ `batch.SessionId` (dashless)
-   * `agent_id` $\leftarrow$ `batch.AgentId ?? ""`
-   * `line_number` $\leftarrow$ `batch.LineNumbers[i]` (0-based transcript index; do not invent 1-based positions)
+1. **Durable transcript receipt:**
+   * `(session_id, agent_id, line_number)` $\leftarrow$ `batch.SessionId`,
+     `batch.AgentId ?? ""`, and `batch.LineNumbers[i]` (0-based transcript index;
+     do not invent 1-based positions)
    * `vendor` $\leftarrow$ `batch.Vendor ?? "claude"`
-   * `raw_payload` $\leftarrow$ `batch.Lines[i]` (parsed JSON)
-   * `event_type`, `model`, `tokens`, `tools` $\leftarrow$ extracted by vendor normalizer
-2. **`session_watermarks`:**
+   * raw payload $\leftarrow$ `batch.Lines[i]`, retained before normalization
+   * the receipt key is the client-resume idempotency boundary.
+2. **Normalized events and read projections:**
+   * event type, model, tokens, tools, content, and repository/cwd evidence are
+     extracted by a vendor normalizer and retain a source-receipt reference.
+   * a line that produces multiple events has a stable `logical_seq`; browser Event
+     and Trace ordering must not depend on insertion order.
+3. **`session_watermarks`:**
    * `(session_id, agent_id)` $\leftarrow$ updated to `max(line_number)` (0-based)
-3. **`sessions`:**
-   * Updated with repo metadata if `batch.Repository` is present.
-4. **Resume probe** (`GET /api/sessions/{id}/last-line`):
+4. **Session repository projection:**
+   * `batch.Repository` is one observed association. Accumulate event-level
+     repository evidence and derive a primary repository rather than replacing prior
+     associations or treating an omitted repeated field as a deletion.
+5. **Resume probe** (`GET /api/sessions/{id}/last-line`):
    * 200 + `{ "last_line_number": N }` (0-based; resume at `N + 1`)
    * 204 — stream known, nothing ingested yet
    * 404 — unknown session

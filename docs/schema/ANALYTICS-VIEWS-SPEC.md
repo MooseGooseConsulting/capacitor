@@ -1,5 +1,12 @@
 # Analytics Views Specification
 
+> **Status: derived view candidate, not a deployed analytics contract.** The view
+> inventory was observed from the live oracle; the SQL below is a proposed Capacitor
+> implementation and must yield to [`PROMPT.md`](../../PROMPT.md),
+> [`FLEET.md`](../../reference/FLEET.md),
+> [`SURFACE.md`](../../reference/SURFACE.md), measured reference findings, and the
+> [`Sessions vertical-slice contract`](../SESSION-VERTICAL-SLICE.md).
+
 Live `get_analytics_schema` inventories **32 view names**. This wave records that inventory and defines SQL for the 9 views the session list, the MCP tour's Q-MENU query, and the query governor's own tests ground against real tables. Remaining names are placeholders — do not invent 23 more view bodies to match the count; each of the rest needs base tables (users, teams, deployments, code changes, ...) no wave has created yet.
 
 MCP wire: `GET /api/analytics/schema` and `POST /api/analytics/query` with body `{sql, repos, max_rows}`.
@@ -45,7 +52,7 @@ MCP wire: `GET /api/analytics/schema` and `POST /api/analytics/query` with body 
 
 ---
 
-SQL below is the subset this wave can ground. `v_an_users` is used by the guided-tour queries and is **not** defined here yet — it needs a users/teams table no wave has created. `machine_id` on `v_an_sessions` is an additive fork column (`FLEET.md`).
+SQL below is the subset this wave can ground. `v_an_users` is used by the guided-tour queries and is **not** defined here yet — it needs a users/teams table no wave has created. `machine_id` on `v_an_sessions` is an additive fork column (`FLEET.md`). `v_an_sessions.repo_hash` is a primary-repository compatibility projection, not proof that a session has one repository: the event-level and many-repository model in `CROSS-REPO-SESSIONS.md` is required for correct rail and analytics behavior.
 
 ## 2. Core SQL View Definitions
 
