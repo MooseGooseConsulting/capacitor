@@ -62,7 +62,11 @@ public sealed class CapacitorSessionsClientTests {
                 "owner_user_id": "user-1",
                 "started_at": "2026-09-01T00:00:00Z"
               },
-              "events": [],
+              "events": [{
+                "agent_id": "agent-1",
+                "event_type": "AssistantTurn",
+                "timestamp": "2026-09-01T00:00:00Z"
+              }],
               "trace": {
                 "entries": [{
                   "kind": "turn",
@@ -109,6 +113,7 @@ public sealed class CapacitorSessionsClientTests {
         await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Value!.Trace!.Entries.Single().Turn!.TurnIndex).IsEqualTo(1);
         await Assert.That(result.Value.Trace.Entries.Single().Turn!.ToolCount).IsEqualTo(1);
+        await Assert.That(result.Value.Events.Single().AgentId).IsEqualTo("agent-1");
         await Assert.That(result.Value.Evaluation!.Run!.OverallScore).IsEqualTo(4m);
         await Assert.That(result.Value.Evaluation.Verdicts.Single().Finding).IsEqualTo("Persisted finding");
     }

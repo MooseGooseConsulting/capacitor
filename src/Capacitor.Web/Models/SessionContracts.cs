@@ -117,6 +117,9 @@ public sealed record SessionDetailHeader : SessionSummary {
 
 /// <summary>An immutable normalized transcript event with its original source payload.</summary>
 public sealed record SessionEvent {
+    [JsonPropertyName("agent_id")]
+    public string? AgentId { get; init; }
+
     [JsonPropertyName("event_id")]
     public string? EventId { get; init; }
 
