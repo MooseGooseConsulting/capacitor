@@ -104,7 +104,10 @@
     Task SubmitGlobalSearchAsync() {
         var query = _globalSearchQuery?.Trim();
         _globalSearchOpen = false;
-        Navigation.NavigateTo(Navigation.GetUriWithQueryParameter("/sessions", "query", string.IsNullOrWhiteSpace(query) ? null : query));
+        var destination = string.IsNullOrWhiteSpace(query)
+            ? "/sessions"
+            : "/sessions?query=" + Uri.EscapeDataString(query);
+        Navigation.NavigateTo(destination);
         return Task.CompletedTask;
     }
 
