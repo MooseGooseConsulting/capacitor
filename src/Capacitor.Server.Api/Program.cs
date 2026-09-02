@@ -53,7 +53,12 @@ async Task<IResult> HandleSessionStart(string vendor, ApiSessionStartPayload pay
         return Results.BadRequest(new { detail = "default_visibility must be one of: none, private, project, org_public, public." });
     }
 
-    var session = await sessions.GetOrCreatePlaceholderAsync(sessionId, vendor, payload.UserId, sourceVisibility);
+    var session = await sessions.GetOrCreatePlaceholderAsync(
+        sessionId,
+        vendor,
+        payload.UserId,
+        sourceVisibility,
+        payload.StartedAt);
     var repo = payload.Repository;
     var evidence = ToRepositoryEvidence(repo?.Owner, repo?.RepoName, cwd: null);
     await sessions.PatchSessionStartAsync(sessionId, payload.UserId, sourceVisibility, new SessionStartPatch(

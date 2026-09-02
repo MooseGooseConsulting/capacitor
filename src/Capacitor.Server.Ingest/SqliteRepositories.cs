@@ -54,10 +54,20 @@ public class SqliteSessionRepository : ISessionRepository {
     }
 
     public Task<SessionHeaderRecord> GetOrCreatePlaceholderAsync(string sessionId, string vendor, string? ownerUserId = null, CancellationToken ct = default) =>
-        GetOrCreatePlaceholderAsync(sessionId, vendor, ownerUserId, defaultVisibility: null, ct);
+        GetOrCreatePlaceholderAsync(sessionId, vendor, ownerUserId, defaultVisibility: null, observedStartedAt: null, ct: ct);
 
     public async Task<SessionHeaderRecord> GetOrCreatePlaceholderAsync(string sessionId, string vendor, string? ownerUserId, string? defaultVisibility, CancellationToken ct = default) {
-        var now = DateTimeOffset.UtcNow;
+        return await GetOrCreatePlaceholderAsync(sessionId, vendor, ownerUserId, defaultVisibility, observedStartedAt: null, ct: ct);
+    }
+
+    public async Task<SessionHeaderRecord> GetOrCreatePlaceholderAsync(
+        string sessionId,
+        string vendor,
+        string? ownerUserId,
+        string? defaultVisibility,
+        DateTimeOffset? observedStartedAt,
+        CancellationToken ct = default) {
+        var startedAt = observedStartedAt ?? DateTimeOffset.UtcNow;
         var visibility = string.IsNullOrEmpty(defaultVisibility) ? "private" : defaultVisibility;
         using (var cmd = _connection.CreateCommand()) {
             cmd.CommandText = @"
@@ -74,7 +84,7 @@ public class SqliteSessionRepository : ISessionRepository {
             cmd.Parameters.AddWithValue("$owner_user_id", ownerUserId ?? "anonymous");
             cmd.Parameters.AddWithValue("$status", "active");
             cmd.Parameters.AddWithValue("$visibility", visibility);
-            cmd.Parameters.AddWithValue("$started_at", SqliteUtc.Format(now));
+            cmd.Parameters.AddWithValue("$started_at", SqliteUtc.Format(startedAt));
 
             await cmd.ExecuteNonQueryAsync(ct);
         }
@@ -388,7 +398,7 @@ public class SqliteSessionRepository : ISessionRepository {
                     WHEN visibility = '' THEN COALESCE($visibility, visibility)
                     ELSE visibility
                 END,
-                started_at = COALESCE($started_at, started_at),
+                started_at = COALESCE(started_at, $started_at),
                 model = COALESCE($model, model),
                 slug = COALESCE($slug, slug),
                 previous_session_id = COALESCE($previous_session_id, previous_session_id),
