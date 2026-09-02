@@ -517,9 +517,6 @@ public sealed class PostgresTranscriptIngestService : ITranscriptIngest {
         string.Equals(@event.Vendor, "codex", StringComparison.OrdinalIgnoreCase)
         && string.Equals(@event.EventType, "UsageSnapshot", StringComparison.Ordinal);
 
-    private static long Delta(long current, long previous, bool checkpointExists) =>
-        !checkpointExists || current < previous ? current : current - previous;
-
     private static long? Delta(long? current, long? previous, bool checkpointExists) =>
         current is null ? null
         : !checkpointExists || previous is null || current < previous ? current

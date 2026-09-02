@@ -151,9 +151,9 @@ public class SqliteEventStoreRepository : IEventStoreRepository {
         var eventCount = reader.IsDBNull(0) ? 0 : Convert.ToInt32(reader.GetValue(0), CultureInfo.InvariantCulture);
         if (eventCount == 0) return null;
 
-        var toolCount = reader.IsDBNull(1) ? null : Convert.ToInt32(reader.GetValue(1), CultureInfo.InvariantCulture);
-        var totalTokens = reader.IsDBNull(2) ? null : Convert.ToInt64(reader.GetValue(2), CultureInfo.InvariantCulture);
-        var totalCost = reader.IsDBNull(3) ? null : Convert.ToDecimal(reader.GetValue(3), CultureInfo.InvariantCulture);
+        int? toolCount = reader.IsDBNull(1) ? null : Convert.ToInt32(reader.GetValue(1), CultureInfo.InvariantCulture);
+        long? totalTokens = reader.IsDBNull(2) ? null : Convert.ToInt64(reader.GetValue(2), CultureInfo.InvariantCulture);
+        decimal? totalCost = reader.IsDBNull(3) ? null : Convert.ToDecimal(reader.GetValue(3), CultureInfo.InvariantCulture);
         var firstEventStr = reader.IsDBNull(4) ? null : reader.GetString(4);
         var lastEventStr = reader.IsDBNull(5) ? null : reader.GetString(5);
 
