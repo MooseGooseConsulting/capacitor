@@ -5,7 +5,6 @@ using System.Text.Json.Serialization;
 using System.Globalization;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Npgsql;
-using Capacitor.Cli.Core;
 
 namespace Capacitor.Server.Api.Tests.Integration;
 
