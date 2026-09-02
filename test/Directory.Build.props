@@ -7,11 +7,20 @@
              ships to nobody, so a fresh advisory is a bump to schedule, not a build to stop. -->
         <WarningsNotAsErrors>$(WarningsNotAsErrors);NU1903;NU1904</WarningsNotAsErrors>
     </PropertyGroup>
+    <PropertyGroup Condition="'$(MSBuildProjectName)' != 'Capacitor.Tests.Helpers'
+                      and '$(MSBuildProjectName)' != 'Capacitor.Cli.Tests.Unit.NativeTestHost'">
+        <!-- TUnit runs on Microsoft Testing Platform. Without these properties and
+             its MSBuild bridge, dotnet test builds the executable but discovers no tests. -->
+        <IsTestingPlatformApplication>true</IsTestingPlatformApplication>
+        <TestingPlatformDotnetTestSupport>true</TestingPlatformDotnetTestSupport>
+        <IsTestProject>true</IsTestProject>
+    </PropertyGroup>
     <!-- One source, compiled into each test assembly rather than referenced from Helpers:
          TUnit finds hooks only in assemblies it has loaded.  -->
     <ItemGroup Condition="'$(MSBuildProjectName)' != 'Capacitor.Tests.Helpers'
                       and '$(MSBuildProjectName)' != 'Capacitor.Cli.Tests.Unit.NativeTestHost'">
         <Compile Include="$(MSBuildThisFileDirectory)Capacitor.Tests.Helpers/Guards/GuardsBootstrap.cs"
                  Link="Guards/GuardsBootstrap.cs" />
+        <PackageReference Include="Microsoft.Testing.Platform.MSBuild" />
     </ItemGroup>
 </Project>
