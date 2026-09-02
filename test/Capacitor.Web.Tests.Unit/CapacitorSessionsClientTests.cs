@@ -52,6 +52,49 @@ public sealed class CapacitorSessionsClientTests {
         await Assert.That(result.Failure!.IsNotFound).IsTrue();
     }
 
+    [Test]
+    public async Task GetSessionAsync_deserializes_the_server_trace_contract() {
+        using var http = new HttpClient(new StubHandler(_ => JsonResponse("""
+            {
+              "session": {
+                "session_id": "session-1",
+                "vendor": "codex",
+                "owner_user_id": "user-1",
+                "started_at": "2026-09-01T00:00:00Z"
+              },
+              "events": [],
+              "trace": {
+                "entries": [{
+                  "kind": "turn",
+                  "turn": {
+                    "turn_index": 1,
+                    "started_at": "2026-09-01T00:00:00Z",
+                    "ended_at": "2026-09-01T00:00:01Z",
+                    "duration_ms": 1000,
+                    "input_tokens": 10,
+                    "output_tokens": 5,
+                    "cache_read_tokens": 2,
+                    "cache_write_tokens": 1,
+                    "cost_usd": 0.01,
+                    "tool_count": 1,
+                    "events": []
+                  }
+                }]
+              },
+              "evaluation": null
+            }
+            """))) {
+            BaseAddress = new Uri("https://api.example/")
+        };
+        var client = new CapacitorSessionsClient(http);
+
+        var result = await client.GetSessionAsync("session-1");
+
+        await Assert.That(result.IsSuccess).IsTrue();
+        await Assert.That(result.Value!.Trace!.Entries.Single().Turn!.TurnIndex).IsEqualTo(1);
+        await Assert.That(result.Value.Trace.Entries.Single().Turn!.ToolCount).IsEqualTo(1);
+    }
+
     static HttpResponseMessage JsonResponse(string content) => new(HttpStatusCode.OK) {
         Content = new StringContent(content, Encoding.UTF8, "application/json")
     };
