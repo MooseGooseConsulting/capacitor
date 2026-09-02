@@ -1,5 +1,6 @@
 using System.Globalization;
 using Npgsql;
+using NpgsqlTypes;
 using Capacitor.Server.Data.Entities;
 
 namespace Capacitor.Server.Ingest;
