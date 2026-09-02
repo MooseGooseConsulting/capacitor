@@ -60,7 +60,7 @@ public sealed class CodexNormalizer : INormalizer {
                 toolOutput: Content(payload, "output") ?? Content(payload, "result") ?? Content(payload, "error"),
                 toolExitCode: ToInt(payload.Num("exit_code") ?? payload.Num("exitCode")),
                 isError: payload.Bool("is_error") == true || payload.Bool("isError") == true
-                      || payload.Str("status") is "failed" or "error"),
+                      || payload.Str("status") is "failed" or "error")],
             _ => [Frame(sessionId, agentId, lineNumber, rawLine, timestamp, "RawMessage", eventId: eventId, itemId: itemId)]
         };
     }
