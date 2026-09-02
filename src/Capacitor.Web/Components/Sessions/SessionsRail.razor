@@ -30,10 +30,14 @@
         @foreach (var owner in OtherRepositories.Keys.OrderBy(x => x, StringComparer.OrdinalIgnoreCase)) {
             <MudText Typo="Typo.caption" Class="owner-label">@owner</MudText>
             @foreach (var repository in OtherRepositories[owner]) {
-                <MudButton Variant="Variant.Text" FullWidth="true" OnClick="@(() => OnRepositoryChanged.InvokeAsync(repository))"
-                           Class="@RailClass(repository)" StartIcon="@Icons.Material.Filled.Folder">
-                    @repository
-                </MudButton>
+                @if (string.Equals(owner, "Unattributed", StringComparison.Ordinal)) {
+                    <MudText Typo="Typo.body2" Class="rail-empty">@repository</MudText>
+                } else {
+                    <MudButton Variant="Variant.Text" FullWidth="true" OnClick="@(() => OnRepositoryChanged.InvokeAsync(repository))"
+                               Class="@RailClass(repository)" StartIcon="@Icons.Material.Filled.Folder">
+                        @repository
+                    </MudButton>
+                }
             }
         }
     }
@@ -58,7 +62,7 @@
         .GroupBy(x => string.IsNullOrWhiteSpace(x.RepoOwner) ? "Unattributed" : x.RepoOwner!, StringComparer.OrdinalIgnoreCase)
         .ToDictionary(
             x => x.Key,
-            x => (IReadOnlyList<string>)x.Select(y => y.Repository).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(y => y, StringComparer.OrdinalIgnoreCase).ToArray(),
+            x => (IReadOnlyList<string>)x.Select(y => string.IsNullOrWhiteSpace(y.RepoOwner) ? y.RepoName! : y.Repository).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(y => y, StringComparer.OrdinalIgnoreCase).ToArray(),
             StringComparer.OrdinalIgnoreCase);
 
     string RailClass(string? repository) => string.Equals(SelectedRepository, repository, StringComparison.OrdinalIgnoreCase)

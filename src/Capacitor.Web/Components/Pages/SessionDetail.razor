@@ -92,11 +92,12 @@
                 }
             </MudTabPanel>
             <MudTabPanel Text="Events">
-                @if (detail.Events.Count == 0) {
+                @{ var events = OrderedEvents(detail); }
+                @if (events.Count == 0) {
                     <EmptyTab Title="No events" Message="No typed source events have been persisted for this session." />
                 } else {
                     <MudExpansionPanels MultiExpansion="true" Class="events-list">
-                        @foreach (var entry in detail.Events.OrderBy(x => x.Timestamp).ThenBy(x => x.LineNumber).ThenBy(x => x.LogicalSequence)) {
+                        @foreach (var entry in events.Take(_visibleEventCount)) {
                             <MudExpansionPanel Text="@EventLabel(entry)">
                                 <MudStack Spacing="1">
                                     <MudText Typo="Typo.caption" Class="event-accounting">@EventAccounting(entry)</MudText>
@@ -125,6 +126,11 @@
                             </MudExpansionPanel>
                         }
                     </MudExpansionPanels>
+                    @if (events.Count > _visibleEventCount) {
+                        <MudButton Variant="Variant.Outlined" OnClick="LoadMoreEvents" Class="load-more-events">
+                            Load 100 more events
+                        </MudButton>
+                    }
                 }
             </MudTabPanel>
             <MudTabPanel Text="Trace">
@@ -172,6 +178,31 @@
                         }
                         @if (detail.Evaluation.Verdicts.Count > 0) {
                             <MudText Typo="Typo.caption" Class="muted">@detail.Evaluation.Verdicts.Count persisted verdict@(detail.Evaluation.Verdicts.Count == 1 ? string.Empty : "s")</MudText>
+                            <MudStack Spacing="1" Class="evaluation-verdicts">
+                                @foreach (var verdict in detail.Evaluation.Verdicts) {
+                                    <MudPaper Outlined="true" Class="evaluation-verdict">
+                                        <MudStack Row="true" Wrap="Wrap.Wrap" AlignItems="AlignItems.Center" Spacing="1">
+                                            <MudText Typo="Typo.subtitle2">@ValueOrNotReported(verdict.Category)</MudText>
+                                            @if (!string.IsNullOrWhiteSpace(verdict.QuestionId)) {
+                                                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">@verdict.QuestionId</MudChip>
+                                            }
+                                            <MudChip T="string" Size="Size.Small" Color="Color.Primary">@verdict.Score.ToString()</MudChip>
+                                        </MudStack>
+                                        @if (!string.IsNullOrWhiteSpace(verdict.Verdict)) {
+                                            <MudText Typo="Typo.body2" Class="detail-copy">@verdict.Verdict</MudText>
+                                        }
+                                        @if (!string.IsNullOrWhiteSpace(verdict.Finding)) {
+                                            <MudText Typo="Typo.body2" Class="detail-copy">@verdict.Finding</MudText>
+                                        }
+                                        @if (!string.IsNullOrWhiteSpace(verdict.Evidence)) {
+                                            <MudText Typo="Typo.caption" Class="pre-wrap">@verdict.Evidence</MudText>
+                                        }
+                                        @if (!string.IsNullOrWhiteSpace(verdict.Recommendation)) {
+                                            <MudText Typo="Typo.body2" Class="detail-copy"><strong>Recommendation:</strong> @verdict.Recommendation</MudText>
+                                        }
+                                    </MudPaper>
+                                }
+                            </MudStack>
                         }
                     </MudPaper>
                 }
@@ -209,6 +240,8 @@
     string? _loadedSessionId;
     CancellationTokenSource? _loadCancellation;
     long _requestVersion;
+    const int EventPageSize = 100;
+    int _visibleEventCount = EventPageSize;
 
     protected override async Task OnParametersSetAsync() {
         _activeTab = TabIndex(Tab);
@@ -246,6 +279,7 @@
         _isLoading = false;
         _detail = response.Value;
         _failure = response.Failure;
+        _visibleEventCount = EventPageSize;
     }
 
     public void Dispose() {
@@ -259,6 +293,12 @@
         .ThenBy(x => x.LineNumber)
         .ThenBy(x => x.LogicalSequence)
         .ToArray();
+    static IReadOnlyList<SessionEvent> OrderedEvents(SessionDetailResponse detail) => detail.Events
+        .OrderBy(x => x.Timestamp)
+        .ThenBy(x => x.LineNumber)
+        .ThenBy(x => x.LogicalSequence)
+        .ToArray();
+    void LoadMoreEvents() => _visibleEventCount += EventPageSize;
 
     static string DisplayTitle(SessionDetailHeader session) => string.IsNullOrWhiteSpace(session.Title) ? "Untitled session" : session.Title;
     static string DisplayStatus(string? status) => string.IsNullOrWhiteSpace(status) ? "Unknown" : status;

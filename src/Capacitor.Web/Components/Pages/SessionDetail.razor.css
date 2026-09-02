@@ -61,6 +61,19 @@
     border: 1px solid #e1e6ed;
 }
 
+.load-more-events {
+    margin-top: 1rem;
+}
+
+.evaluation-verdicts {
+    margin-top: 1rem;
+}
+
+.evaluation-verdict {
+    border-color: #e1e6ed;
+    padding: .9rem 1rem;
+}
+
 .pre-wrap {
     white-space: pre-wrap;
 }
