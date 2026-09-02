@@ -43,8 +43,11 @@ spec:
             - |
               git clone --depth 1 --branch "$GIT_REF" https://github.com/MooseGooseConsulting/capacitor.git /work/capacitor
               mkdir -p /work/codex/sessions/2026/09/02 /work/kcap-config
-              cat > /work/codex/sessions/2026/09/02/rollout-2026-09-02T00-00-00-019eed00-0000-7000-8000-000000000001.jsonl <<'EOF'
-              {"timestamp":"2026-09-02T00:00:00.000Z","type":"session_meta","payload":{"id":"019eed00-0000-7000-8000-000000000001","timestamp":"2026-09-02T00:00:00.000Z","cwd":"/work/capacitor","originator":"codex-tui","cli_version":"0.146.0","model_provider":"openai","git":{"commit_hash":"recovery-fixture","branch":"feature/session-vertical-slice","repository_url":"https://github.com/MooseGooseConsulting/capacitor"}}}
+              session_id=$(cat /proc/sys/kernel/random/uuid)
+              session_id_dashless=$(printf '%s' "$session_id" | tr -d '-')
+              printf '%s' "$session_id_dashless" > /work/session-id
+              cat > /work/codex/sessions/2026/09/02/rollout-2026-09-02T00-00-00-${session_id}.jsonl <<EOF
+              {"timestamp":"2026-09-02T00:00:00.000Z","type":"session_meta","payload":{"id":"${session_id}","timestamp":"2026-09-02T00:00:00.000Z","cwd":"/work/capacitor","originator":"codex-tui","cli_version":"0.146.0","model_provider":"openai","git":{"commit_hash":"recovery-fixture","branch":"feature/session-vertical-slice","repository_url":"https://github.com/MooseGooseConsulting/capacitor"}}}
               {"timestamp":"2026-09-02T00:00:01.000Z","type":"turn_context","payload":{"turn_id":"fixture-turn","cwd":"/work/capacitor","model":"gpt-5"}}
               {"timestamp":"2026-09-02T00:00:02.000Z","type":"response_item","payload":{"id":"fixture-user","type":"message","role":"user","content":[{"type":"input_text","text":"Show the captured Sessions dashboard import fixture."}]}}
               {"timestamp":"2026-09-02T00:00:03.000Z","type":"event_msg","payload":{"type":"task_started"}}
@@ -53,15 +56,17 @@ spec:
               EOF
               cd /work/capacitor
               dotnet run --project src/Capacitor.Cli/Capacitor.Cli.csproj -- import --codex --repo MooseGooseConsulting/capacitor --yes --reimport --skip-title --min-lines 1
+              printf 'Acceptance session %s\n' "$session_id_dashless"
       containers:
         - name: browser-acceptance
           image: mcr.microsoft.com/playwright:v1.58.2-noble
           imagePullPolicy: IfNotPresent
           env:
-            - name: SESSION_ID
-              value: 019eed00000070008000000000000001
             - name: WEB_URL
               value: http://capacitor-web-test.data-platform.svc.cluster.local
+          volumeMounts:
+            - name: workspace
+              mountPath: /work
           command: ["/bin/sh", "-ec"]
           args:
             - |
@@ -75,7 +80,7 @@ spec:
               const { chromium } = require('playwright');
 
               (async () => {
-                const sessionId = process.env.SESSION_ID;
+                const sessionId = require('node:fs').readFileSync('/work/session-id', 'utf8').trim();
                 const browser = await chromium.launch({ headless: true });
                 const context = await browser.newContext({ viewport: { width: 1600, height: 1200 } });
                 const page = await context.newPage();
