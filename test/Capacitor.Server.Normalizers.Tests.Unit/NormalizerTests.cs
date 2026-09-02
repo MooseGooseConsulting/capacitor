@@ -179,7 +179,7 @@ public class NormalizerTests {
     }
 
     [Test]
-    public async Task CodexNormalizer_normalizes_response_item_assistant_content_and_usage() {
+    public async Task CodexNormalizer_normalizes_response_item_assistant_content_without_duplicate_usage() {
         const string rawLine = """{"timestamp":"2026-08-11T09:00:16.000Z","type":"response_item","payload":{"id":"msg-1","type":"message","role":"assistant","model":"gpt-5-codex","content":[{"type":"output_text","text":"I found the issue."},{"type":"reasoning","text":"Inspect the call path."}],"usage":{"input_tokens":120,"cached_input_tokens":40,"output_tokens":22,"reasoning_output_tokens":9,"cost_usd":0.0042}}}""";
 
         var events = _router.Normalize("codex", "sess-codex", "", 14, rawLine);
@@ -188,10 +188,13 @@ public class NormalizerTests {
         await Assert.That(events[0].EventType).IsEqualTo("AssistantTurn");
         await Assert.That(events[0].Content).IsEqualTo("I found the issue.");
         await Assert.That(events[0].Model).IsEqualTo("gpt-5-codex");
-        await Assert.That(events[0].InputTokens).IsEqualTo(120);
-        await Assert.That(events[0].CacheReadTokens).IsEqualTo(40);
-        await Assert.That(events[0].ReasoningTokens).IsEqualTo(9);
-        await Assert.That(events[0].CostUsd).IsEqualTo(0.0042m);
+        // Codex response-item usage is a point-in-time value. The durable stream uses the
+        // cumulative token_count records as its sole usage source, so retaining it here
+        // would double count the same work when the snapshot arrives.
+        await Assert.That(events[0].InputTokens).IsEqualTo(0);
+        await Assert.That(events[0].CacheReadTokens).IsEqualTo(0);
+        await Assert.That(events[0].ReasoningTokens).IsNull();
+        await Assert.That(events[0].CostUsd).IsEqualTo(0m);
         await Assert.That(events[0].LogicalSeq).IsEqualTo(0);
         await Assert.That(events[1].EventType).IsEqualTo("AssistantThinking");
         await Assert.That(events[1].InputTokens).IsEqualTo(0);

@@ -76,22 +76,29 @@ public sealed class PostgresTranscriptIngestService : ITranscriptIngest {
             UsageCheckpoint? checkpoint = null;
             if (usageSnapshot) {
                 checkpoint = await GetUsageCheckpointAsync(connection, transaction, @event, ct);
-                var reset = checkpoint is not null && HasUsageCounterReset(@event, checkpoint);
-                storedEvent = @event with {
-                    InputTokens = Delta(@event.InputTokens, checkpoint?.InputTokens ?? 0, checkpoint is not null, reset),
-                    OutputTokens = Delta(@event.OutputTokens, checkpoint?.OutputTokens ?? 0, checkpoint is not null, reset),
-                    CacheReadTokens = Delta(@event.CacheReadTokens, checkpoint?.CacheReadTokens ?? 0, checkpoint is not null, reset),
-                    CacheWriteTokens = Delta(@event.CacheWriteTokens, checkpoint?.CacheWriteTokens ?? 0, checkpoint is not null, reset),
-                    ReasoningTokens = @event.ReasoningTokens is { } reasoning
-                        ? Delta(reasoning, checkpoint?.ReasoningTokens ?? 0, checkpoint is not null, reset)
-                        : null,
-                    CostUsd = Delta(@event.CostUsd, checkpoint?.CostUsd ?? 0m, checkpoint is not null, reset)
-                };
+                var staleSnapshot = checkpoint is not null && @event.LineNumber <= checkpoint.LastLineNumber;
+                storedEvent = staleSnapshot
+                    ? @event with {
+                        InputTokens = 0,
+                        OutputTokens = 0,
+                        CacheReadTokens = 0,
+                        CacheWriteTokens = 0,
+                        ReasoningTokens = null,
+                        CostUsd = 0m
+                    }
+                    : @event with {
+                        InputTokens = Delta(@event.InputTokens, checkpoint?.InputTokens ?? 0, checkpoint is not null),
+                        OutputTokens = Delta(@event.OutputTokens, checkpoint?.OutputTokens ?? 0, checkpoint is not null),
+                        CacheReadTokens = Delta(@event.CacheReadTokens, checkpoint?.CacheReadTokens ?? 0, checkpoint is not null),
+                        CacheWriteTokens = Delta(@event.CacheWriteTokens, checkpoint?.CacheWriteTokens ?? 0, checkpoint is not null),
+                        ReasoningTokens = Delta(@event.ReasoningTokens, checkpoint?.ReasoningTokens, checkpoint is not null),
+                        CostUsd = Delta(@event.CostUsd, checkpoint?.CostUsd ?? 0m, checkpoint is not null)
+                    };
             }
 
             var eventInserted = await InsertEventAsync(connection, transaction, storedEvent, ct);
             inserted += eventInserted;
-            if (eventInserted > 0 && usageSnapshot) {
+            if (eventInserted > 0 && usageSnapshot && (checkpoint is null || @event.LineNumber > checkpoint.LastLineNumber)) {
                 await SaveUsageCheckpointAsync(connection, transaction, @event, ct);
             }
         }
@@ -302,17 +309,16 @@ public sealed class PostgresTranscriptIngestService : ITranscriptIngest {
         string.Equals(@event.Vendor, "codex", StringComparison.OrdinalIgnoreCase)
         && string.Equals(@event.EventType, "UsageSnapshot", StringComparison.Ordinal);
 
-    private static long Delta(long current, long previous, bool checkpointExists, bool reset = false) =>
-        checkpointExists && !reset ? Math.Max(0, current - previous) : current;
+    private static long Delta(long current, long previous, bool checkpointExists) =>
+        !checkpointExists || current < previous ? current : current - previous;
 
-    private static decimal Delta(decimal current, decimal previous, bool checkpointExists, bool reset = false) =>
-        checkpointExists && !reset ? Math.Max(0m, current - previous) : current;
+    private static long? Delta(long? current, long? previous, bool checkpointExists) =>
+        current is null ? null
+        : !checkpointExists || previous is null || current < previous ? current
+        : current - previous;
 
-    private static bool HasUsageCounterReset(SessionEventRecord current, UsageCheckpoint previous) =>
-        current.InputTokens < previous.InputTokens
-        || current.OutputTokens < previous.OutputTokens
-        || current.CacheReadTokens < previous.CacheReadTokens
-        || current.CacheWriteTokens < previous.CacheWriteTokens;
+    private static decimal Delta(decimal current, decimal previous, bool checkpointExists) =>
+        !checkpointExists || current < previous ? current : current - previous;
 
     private static async Task<UsageCheckpoint?> GetUsageCheckpointAsync(
         NpgsqlConnection connection,
@@ -320,7 +326,7 @@ public sealed class PostgresTranscriptIngestService : ITranscriptIngest {
         SessionEventRecord @event,
         CancellationToken ct) {
         await using var command = new NpgsqlCommand(@"
-            SELECT input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens, cost_usd
+            SELECT input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens, cost_usd, last_line_number
             FROM session_usage_checkpoints
             WHERE session_id = $1 AND agent_id = $2 AND vendor = $3
             FOR UPDATE;", connection, transaction);
@@ -331,7 +337,7 @@ public sealed class PostgresTranscriptIngestService : ITranscriptIngest {
         return await reader.ReadAsync(ct)
             ? new UsageCheckpoint(
                 reader.GetInt64(0), reader.GetInt64(1), reader.GetInt64(2), reader.GetInt64(3),
-                reader.IsDBNull(4) ? null : reader.GetInt64(4), reader.GetDecimal(5))
+                reader.IsDBNull(4) ? null : reader.GetInt64(4), reader.GetDecimal(5), reader.GetInt32(6))
             : null;
     }
 
@@ -343,15 +349,16 @@ public sealed class PostgresTranscriptIngestService : ITranscriptIngest {
         await using var command = new NpgsqlCommand(@"
             INSERT INTO session_usage_checkpoints (
                 session_id, agent_id, vendor, input_tokens, output_tokens, cache_read_tokens,
-                cache_write_tokens, reasoning_tokens, cost_usd
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                cache_write_tokens, reasoning_tokens, cost_usd, last_line_number
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             ON CONFLICT (session_id, agent_id, vendor) DO UPDATE SET
                 input_tokens = EXCLUDED.input_tokens,
                 output_tokens = EXCLUDED.output_tokens,
                 cache_read_tokens = EXCLUDED.cache_read_tokens,
                 cache_write_tokens = EXCLUDED.cache_write_tokens,
-                reasoning_tokens = EXCLUDED.reasoning_tokens,
-                cost_usd = EXCLUDED.cost_usd;", connection, transaction);
+                reasoning_tokens = COALESCE(EXCLUDED.reasoning_tokens, session_usage_checkpoints.reasoning_tokens),
+                cost_usd = EXCLUDED.cost_usd,
+                last_line_number = EXCLUDED.last_line_number;", connection, transaction);
         command.Parameters.AddWithValue(@event.SessionId);
         command.Parameters.AddWithValue(@event.AgentId ?? string.Empty);
         command.Parameters.AddWithValue(@event.Vendor);
@@ -361,6 +368,7 @@ public sealed class PostgresTranscriptIngestService : ITranscriptIngest {
         command.Parameters.AddWithValue(@event.CacheWriteTokens);
         command.Parameters.AddWithValue((object?)@event.ReasoningTokens ?? DBNull.Value);
         command.Parameters.AddWithValue(@event.CostUsd);
+        command.Parameters.AddWithValue(@event.LineNumber);
         await command.ExecuteNonQueryAsync(ct);
     }
 
@@ -370,7 +378,8 @@ public sealed class PostgresTranscriptIngestService : ITranscriptIngest {
         long CacheReadTokens,
         long CacheWriteTokens,
         long? ReasoningTokens,
-        decimal CostUsd);
+        decimal CostUsd,
+        int LastLineNumber);
 
     private static async Task<int?> GetLastLineNumberAsync(
         NpgsqlConnection connection,
