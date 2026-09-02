@@ -1,0 +1,139 @@
+# Isolated remote runtime for the Sessions vertical slice. These resources are
+# deliberately internal-only test infrastructure: no Ingress, no production
+# hostname, and no durable Capacitor application service claim.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: capacitor-api-test
+  namespace: data-platform
+  labels:
+    app.kubernetes.io/name: capacitor-api-test
+    app.kubernetes.io/part-of: capacitor-recovery
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: capacitor-api-test
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: capacitor-api-test
+        app.kubernetes.io/part-of: capacitor-recovery
+    spec:
+      containers:
+        - name: api
+          image: capacitor-api:test
+          imagePullPolicy: Never
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              db_user=$(tr -d '\r\n' < /var/run/capacitor-test-db/username)
+              db_password=$(tr -d '\r\n' < /var/run/capacitor-test-db/password)
+              export ConnectionStrings__Capacitor="Host=pg18-core-recovery-rw.data-platform.svc.cluster.local;Port=5432;Database=capacitor_test;Username='$db_user';Password='$db_password';SSL Mode=Disable"
+              exec dotnet Capacitor.Server.Api.dll
+          env:
+            - name: ASPNETCORE_ENVIRONMENT
+              value: Production
+            - name: ASPNETCORE_URLS
+              value: http://+:8080
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          volumeMounts:
+            - name: database-credentials
+              mountPath: /var/run/capacitor-test-db
+              readOnly: true
+      volumes:
+        - name: database-credentials
+          secret:
+            secretName: capacitor-test-db-credentials
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: capacitor-api-test
+  namespace: data-platform
+  labels:
+    app.kubernetes.io/name: capacitor-api-test
+    app.kubernetes.io/part-of: capacitor-recovery
+spec:
+  selector:
+    app.kubernetes.io/name: capacitor-api-test
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: capacitor-web-test
+  namespace: data-platform
+  labels:
+    app.kubernetes.io/name: capacitor-web-test
+    app.kubernetes.io/part-of: capacitor-recovery
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: capacitor-web-test
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: capacitor-web-test
+        app.kubernetes.io/part-of: capacitor-recovery
+    spec:
+      containers:
+        - name: web
+          image: capacitor-web:test
+          imagePullPolicy: Never
+          env:
+            - name: ASPNETCORE_ENVIRONMENT
+              value: Production
+            - name: ASPNETCORE_URLS
+              value: http://+:8080
+            - name: CapacitorApi__BaseUrl
+              value: http://capacitor-api-test.data-platform.svc.cluster.local
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /sessions
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /sessions
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: capacitor-web-test
+  namespace: data-platform
+  labels:
+    app.kubernetes.io/name: capacitor-web-test
+    app.kubernetes.io/part-of: capacitor-recovery
+spec:
+  selector:
+    app.kubernetes.io/name: capacitor-web-test
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
