@@ -294,7 +294,7 @@ public sealed class PostgresGatewayTests {
             await using (var aliceReader = await aliceState.ExecuteReaderAsync()) {
                 await Assert.That(await aliceReader.ReadAsync()).IsTrue();
                 await Assert.That(aliceReader.GetString(0)).IsEqualTo("completed");
-                await Assert.That(aliceReader.GetString(1)).IsEqualTo("project");
+                await Assert.That(aliceReader.GetString(1)).IsEqualTo("private");
             }
 
             await using var subagentState = new NpgsqlCommand(@"
