@@ -113,7 +113,7 @@ public sealed class PostgresTranscriptIngestService : ITranscriptIngest {
                     acceptedLines,
                     startLine);
             if (lastLine is int last) {
-                await AdvanceWatermarkAsync(connection, transaction, stream.SessionId, stream.AgentId, lastLine, ct);
+                await AdvanceWatermarkAsync(connection, transaction, stream.SessionId, stream.AgentId, last, ct);
             }
         }
 
@@ -277,7 +277,9 @@ public sealed class PostgresTranscriptIngestService : ITranscriptIngest {
         command.Parameters.AddWithValue(agentId);
         command.Parameters.AddWithValue(startLine);
         var result = await command.ExecuteScalarAsync(ct);
-        var firstRejected = result is null or DBNull ? null : Convert.ToInt32(result, System.Globalization.CultureInfo.InvariantCulture);
+        int? firstRejected = result is null or DBNull
+            ? null
+            : Convert.ToInt32(result, System.Globalization.CultureInfo.InvariantCulture);
         var last = firstRejected is { } rejected && rejected <= lastAccepted ? rejected - 1 : lastAccepted;
         return last >= startLine ? last : null;
     }
