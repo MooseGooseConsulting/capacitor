@@ -67,6 +67,25 @@ Two inherited assumptions are rejected:
 
 Missing source data remains null. Filling it from a session's primary repository manufactures false attribution, particularly for sources whose tools work across checkouts.
 
+## MCP corpus query and durable memory
+
+`PROMPT.md` requires an MCP **query** surface over the corpus. That makes
+read-only, scope-governed session query a target capability after the canonical
+read models exist; it does not select every observed MCP tool or authorize a
+mutating control plane. The first contract must expose only documented schema
+and bounded reads over sessions, transcript, turns, errors, recap, evaluation,
+and governed analytics. Its caller identity, repository/machine scope, result
+provenance, and rate/shape limits are part of the contract, not optional
+middleware.
+
+Durable user or agent memory is different. The inherited surface's memory
+routes and `v_an_memory_ops` view are evidence that such a feature existed,
+not a Capacitor requirement that has already been selected. Until the feature
+cut decides its retention, consent, scope, provenance, and deletion behavior,
+the corpus stores only captured source evidence and does not invent a separate
+memory store or API. MCP writes, memory writes, and control actions remain out
+of scope for the initial query surface.
+
 ## Work-item model
 
 Work items are durable correlation records, not a replacement for every external tracker. A work item may attach to a session/continuation chain by issue key, PR number, existing ID, or explicitly created title. The record preserves external reference, repository, title/status snapshot, link provenance, and timestamp rather than resolving a mutable external system on every read.

@@ -15,13 +15,13 @@ into a durable implementation decision.
 
 | Source | What it establishes | How to use it |
 | --- | --- | --- |
-| [`PROMPT.md`](../PROMPT.md) | The overarching standalone-stack objective, fidelity method, licensing boundary, and success conditions. | Product brief; read with the fleet brief, not as a release-status report. |
-| [`reference/FLEET.md`](../reference/FLEET.md) | The fleet objective and the requirements it changes: network service, headless identity, machine attribution, and second-node proof. | Wins where older single-machine planning conflicts. |
-| [`reference/SURFACE.md`](../reference/SURFACE.md) | Observed console behavior, client/server wire expectations, canonical event/trace behavior, and captured hosted-service surface. | Fidelity oracle and contract evidence; not our deployment plan or brand. |
-| [`reference/CROSS-REPO-SESSIONS.md`](../reference/CROSS-REPO-SESSIONS.md) | Measured multi-repository session behavior from vendor stores. | Correctness evidence for event-level attribution and many-repository projections. |
+| [`PROMPT.md`](../PROMPT.md) and explicit operator decisions | The standalone-stack objective, fidelity method, licensing boundary, success conditions, and intentional feature decisions. | Decide future-state requirements; not a release-status report. |
+| [`reference/FLEET.md`](../reference/FLEET.md) | The fleet objective and the requirements it changes: network service, headless identity, machine attribution, and second-node proof. | Decides future-state requirements with the prompt; wins where an older single-machine assumption conflicts. |
+| [`reference/SURFACE.md`](../reference/SURFACE.md) | Observed console behavior, client/server wire expectations, canonical event/trace behavior, and captured hosted-service surface. | Compatibility oracle and contract evidence unless the higher product/fleet decision deliberately overrides it; never our deployment plan or brand. |
+| [`reference/CROSS-REPO-SESSIONS.md`](../reference/CROSS-REPO-SESSIONS.md) | Measured multi-repository session behavior from vendor stores. | Constrains correctness for event-level attribution and many-repository projections. |
 | [`reference/EVAL-DIRECTION.md`](../reference/EVAL-DIRECTION.md) | The explicit decision to retain configurable, evidence-grounded evaluation. | Keeps the capability, not the inherited evaluator taxonomy or provider. |
 | [`reference/WAVES.md`](../reference/WAVES.md) and [`reference/BACKLOG.md`](../reference/BACKLOG.md) | A proposed decomposition and a broad captured feature inventory. | Planning input only. Re-plan from evidence and do not treat their sequence or cut as settled. |
-| Client and desktop source | Implemented capture, daemon, local IPC, and desktop behavior; exact route/payload expectations. | Inspect before changing a contract; code is not proof a replacement service exists. |
+| Client and desktop source | Implemented capture, daemon, local IPC, and desktop behavior; exact route/payload expectations. | Inspect before changing a contract; it says what is implemented and compatible, not what the target must be. |
 | Recovery server and web branches | Candidate PostgreSQL/API/dashboard implementation and remote test results. | Verify current branch, test target, and merge state before calling a capability implemented. |
 | Historical archive | Previous designs, probes, schema drafts, and change notes. | Provenance and research leads only; revalidate facts and decisions. |
 
@@ -30,6 +30,49 @@ the reasoning, probe results, and source references are available, not so a
 future reader has to accept every prior conclusion. In particular, historical
 references to a hosted Kurrent service, tenant provisioning, SaaS signup,
 telemetry, or production status do not transfer to Capacitor.
+
+## Feature selection is explicit
+
+An inherited screen, route, view, CLI command, or MCP tool is not selected for
+Capacitor merely because it was observed. Before a capability outside the
+data-foundation priority is implemented, make a complete evidence inventory:
+console navigation and six session tabs, CLI surface, the full analytics
+schema, MCP tools, route inventory, desktop controls, and fleet requirements.
+For each capability, propose **in**, **out**, or **later**, with its reason,
+cost, data/control-plane consequences, and privacy/authorization impact. The
+operator confirms that cut before implementation; the dated inventory and
+confirmation belong under `reference/`, while this page and the topic docs
+carry the confirmed result.
+
+The decisions already made are intentionally narrower than the inherited
+product surface:
+
+| Capability group | Current disposition |
+| --- | --- |
+| Ingested canonical corpus, PostgreSQL persistence, session/transcript enrichment, and the web Sessions experience | **Priority.** This is the active data-first delivery path, not a claim that the rest of the product is cut. |
+| Fleet machine identity, offline drain, headless enrollment, and an independent node distribution answer | **Required target.** FLEET makes them load-bearing; their concrete operations design remains open. |
+| Evidence-grounded evaluation execution | **Retained.** The capability is decided; its catalog, judges, and topology are not. |
+| Read-only MCP corpus query | **Required target.** `PROMPT.md` requires a query surface, but its exact tools, scopes, and authentication are not selected. |
+| Durable user/agent memory | **Unselected.** Observed memory routes and analytics names are evidence only; choose retention, scope, consent, and query semantics through the feature cut. |
+| Analytics/Insights, Work Items, Flows/review, hosted agents/terminal, teams/projects, interactive auth, and feedback | **Unselected.** Each needs an in/out/later proposal and operator confirmation; none may displace the data-first path by implication. |
+
+## Ground truth before schema and read-model commitments
+
+The captured 32-view name inventory is not the analytics schema. Before
+committing a production schema, governed view, or compatibility read model,
+retrieve and read the full live `get_analytics_schema` artifact, then preserve
+three matched probe sets: raw local inputs, the live normalized outputs
+(`list_turns`, `get_turn`, and transcript), and the console Events/Trace view.
+The set should span at least Claude, Codex, and a session with subagents. Also
+measure a previously unknown vendor's ingest outcome rather than assuming a
+reject/accept policy.
+
+Keep scrubbed source/expectation pairs and their capture context in
+`reference/`; fixtures and conformance tests point back to the matching pair.
+Record source version/date, live route or tool, scope, and every deliberate
+Capacitor divergence. Only then freeze a shared wire contract in source and
+tests. Until that work is complete, the inherited view catalogue is a research
+lead—not permission to invent columns, joins, or retention semantics.
 
 ## Current decisions
 

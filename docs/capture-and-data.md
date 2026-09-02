@@ -18,12 +18,19 @@ The PostgreSQL choice is settled for Capacitor's server and remote integration t
 
 ## Where the future state comes from
 
-The design is grounded in four sources, in this precedence order when they disagree:
-
-1. Measured behavior and the inherited client's actual wire contract. The observed sessions, Events, Trace, and analytics surface are captured in [the mapped surface](../reference/SURFACE.md); the code that sends requests is the compatibility authority for an endpoint.
-2. The fleet requirement in [Fleet](../reference/FLEET.md). A one-machine implementation is not a finished system; machine identity, offline delivery, and headless enrollment are part of the data-plane design.
-3. The measured finding that a session may touch several repositories, documented in [Cross-repository sessions](../reference/CROSS-REPO-SESSIONS.md). A singular session repository is a compatibility projection, not the source of truth.
-4. Historical schema and wire designs, especially [the canonical schema](history/pre-recovery/schema/CANONICAL-SCHEMA-SPEC.md), [the wire mapping](history/pre-recovery/schema/WIRECRAFT-MAPPING.md), and [the analytics-view inventory](history/pre-recovery/schema/ANALYTICS-VIEWS-SPEC.md). They explain earlier reasoning, but current measured behavior and executable contracts win when those documents conflict.
+Future-state requirements come first from explicit operator decisions,
+[`PROMPT.md`](../PROMPT.md), and [Fleet](../reference/FLEET.md). Fleet wins when
+an inherited one-machine assumption conflicts: machine identity, offline
+delivery, and headless enrollment are data-plane requirements, not optional
+extensions. The inherited wire contract and measured KCap behavior in [the
+mapped surface](../reference/SURFACE.md) are the compatibility oracle for an
+endpoint unless that higher decision deliberately overrides them. [Cross-repository
+sessions](../reference/CROSS-REPO-SESSIONS.md) constrains repository attribution
+with measurement. Historical schema and wire designs, including [the canonical
+schema](history/pre-recovery/schema/CANONICAL-SCHEMA-SPEC.md), [wire
+mapping](history/pre-recovery/schema/WIRECRAFT-MAPPING.md), and [analytics-view
+inventory](history/pre-recovery/schema/ANALYTICS-VIEWS-SPEC.md), remain research
+and must be revalidated rather than promoted by age or detail.
 
 The result is deliberately data-first: transcript fidelity and useful enrichment precede agent launching, terminals, flows, and other control-plane features.
 
@@ -56,6 +63,10 @@ One vendor source line can contain visible assistant text, thinking, several too
 
 - `session_id` is normalized to its dashless form; a dashed copy/paste form maps to the same record.
 - `agent_id` is empty only for the parent stream. A subagent has its own stream and its own watermark.
+- The canonical display relationship is flat: every subagent is a direct child of
+  the session's parent stream, one level deep. If a source exposes deeper
+  nesting, preserve that raw relationship for provenance but do not manufacture
+  a recursive canonical tree.
 - `line_number` is the source coordinate supplied by the producer. Normalization never renumbers it.
 - `logical_seq` is a stable, zero-based order among the events emitted from that one source line. It is part of the key, not decorative metadata.
 

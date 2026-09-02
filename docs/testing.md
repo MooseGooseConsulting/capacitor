@@ -45,11 +45,24 @@ The test suite must cover these behaviors:
 5. **Transaction atomicity.** An injected failure cannot leave events without the matching source disposition/rollup, or a watermark that claims events absent. Concurrent batch attempts preserve the same invariant.
 6. **Repository and machine truth.** Event-level repository/cwd information may be absent and may differ within a session. Tests cover multiple repositories and distinct machines without backfilling false event attribution from a session header.
 7. **Read projections.** Search pagination, detail, transcript windows, Events, Trace, evaluation, and analytics views all derive the expected data from one persisted event stream. Missing measurements stay missing rather than becoming zero.
-8. **Isolation and parallelism.** Test-owned environment variables, ports, data scopes, and cleanup cannot leak between parallel tests. A test must not depend on or overwrite a developer's local configuration.
+8. **Flat subagents.** An imported subagent renders as one direct child of its session parent. The persisted/read model never turns raw deeper nesting into a recursive dashboard tree, and parent and child watermarks remain independent.
+9. **Isolation and parallelism.** Test-owned environment variables, ports, data scopes, and cleanup cannot leak between parallel tests. A test must not depend on or overwrite a developer's local configuration.
 
 ## Behavioral oracle
 
-The inherited Kurrent surface is a behavioral reference, not a schema generator. For a selected real source session, retain a scrubbed fixture containing both the original source records and the observed expectation: Events order, turn boundaries, token/cache accounting, tool counts, transcript rendering inputs, and relevant analytics totals.
+The inherited Kurrent surface is a behavioral reference, not a schema generator.
+Before freezing a schema or read model, retrieve and read the full live analytics
+schema—not only its 32 view names—and capture three matched probes: raw local
+input, `list_turns`/`get_turn`/transcript output, and the Events/Trace rendering
+for the same session. Include Claude, Codex, and a subagent case, and measure a
+previously unknown vendor rather than assuming its behavior. Retain scrubbed
+source/expectation pairs and capture context in `reference/`; test fixtures
+must identify the pair they represent.
+
+For a selected real source session, retain a scrubbed fixture containing both
+the original source records and the observed expectation: Events order, turn
+boundaries, token/cache accounting, tool counts, transcript rendering inputs,
+and relevant analytics totals.
 
 An oracle test imports that fixture through Capacitor's real remote PostgreSQL path, then reads it through the same API the dashboard uses. It asserts the expected behavior rather than only a row count. At minimum it checks:
 

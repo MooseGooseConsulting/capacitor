@@ -26,14 +26,17 @@ The documents below distinguish four kinds of statement:
 
 Authority is ordered deliberately:
 
-1. Explicit operator decisions and [PROMPT.md](PROMPT.md) set product intent.
-2. [reference/FLEET.md](reference/FLEET.md),
-   [reference/SURFACE.md](reference/SURFACE.md), and
-   [reference/CROSS-REPO-SESSIONS.md](reference/CROSS-REPO-SESSIONS.md) supply
-   observed constraints and data-model evidence.
-3. Current source and runnable tests say what exists here now.
-4. [reference/WAVES.md](reference/WAVES.md) is a proposed sequencing hypothesis,
-   not a mandate.
+1. Explicit operator decisions, [PROMPT.md](PROMPT.md), and the fleet objective
+   in [reference/FLEET.md](reference/FLEET.md) decide future-state requirements.
+   FLEET wins when an older single-machine assumption conflicts.
+2. [reference/SURFACE.md](reference/SURFACE.md),
+   [reference/CROSS-REPO-SESSIONS.md](reference/CROSS-REPO-SESSIONS.md), and the
+   inherited wire/client behavior are the compatibility and measurement oracle,
+   unless an explicit future-state decision deliberately overrides them.
+3. Current source and runnable tests say what exists here now; they do not
+   silently choose the target.
+4. [reference/WAVES.md](reference/WAVES.md) is a proposed sequencing hypothesis
+   and feature-cut method, not a mandate or an approved product cut.
 5. The historical plans, specs, and probes under
    [docs/history/pre-recovery/](docs/history/pre-recovery/provenance.md) are
    detailed source material. They must be reconciled with the higher sources

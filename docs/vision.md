@@ -121,6 +121,23 @@ the API host are recovery work being validated separately before they can be
 called the current runtime. SQLite in those libraries is not the selected
 shared backend.
 
+## Detaching the inherited hosted service
+
+The inherited client contains hosted-service couplings that cannot become
+Capacitor defaults by accident. Their target dispositions are explicit:
+
+| Coupling | Disposition |
+| --- | --- |
+| Kurrent telemetry / PostHog endpoint | **Cut from the target.** Capacitor does not report to the inherited hosted service. Its own observability is a separate, privacy-scoped decision. |
+| Bare profile expansion to a hosted Kurrent URL and tenant/signup provisioning | **Cut from the target.** No Capacitor profile may silently expand to the inherited host or provision its tenant. |
+| WorkOS user authentication and the unauthenticated profile escape hatch | **Replacement required.** Fleet machine credentials and interactive-user authorization are different concerns; neither inherited path decides the replacement. |
+| Inherited npm update check/channel | **Cut as target transport.** Fleet distribution is required, but its secure update/distribution mechanism is open and must not poll the inherited channel. |
+| Hosted feedback submission | **Cut from the target pending an explicitly selected replacement.** It must not send corpus or operator data to the inherited service. |
+
+This detachment does not remove the corresponding product questions. It makes
+their authority and operating model ours to decide under the feature-cut and
+fleet requirements, rather than inheriting them through a configuration default.
+
 ## Delivery direction
 
 The work should progress through demonstrable vertical slices, revising the
@@ -146,6 +163,10 @@ sequence when the corpus disproves an assumption:
 This is a direction, not a promise that each numbered item is complete or that
 the sequence cannot change. The proposed historical waves remain useful
 context, but their ordering was explicitly a hypothesis, not authority.
+The complete feature-cut procedure and the present disposition of MCP, memory,
+analytics, Work Items, Flows, and interactive control are in [Evidence and
+decisions](evidence-and-decisions.md); their presence in this direction is not
+an approval to build them yet.
 
 ## Boundaries and exclusions
 

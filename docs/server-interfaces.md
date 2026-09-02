@@ -35,7 +35,7 @@ The client has parameterized session lifecycle hooks, including `POST /hooks/ses
 
 A lifecycle payload carries the session identifier, model and times when available, repository evidence, origin (live capture or historical import), and appropriate owner, visibility, machine, and daemon context. A transcript may arrive first. The server creates an owner-scoped placeholder, then updates the same dashless session ID when a start event arrives. A missing session end must not return a final success if that would make a spooling client discard the end event forever.
 
-Subagent start is an acknowledgement boundary: the producer may not stream a child until the server has accepted the parent/session relationship. The exact subagent hierarchy is stored as evidence; it is not inferred from a later dashboard rendering.
+Subagent start is an acknowledgement boundary: the producer may not stream a child until the server has accepted its direct relationship to the session parent. The canonical model and console render subagents one level deep, not as a recursive tree. A deeper source relationship remains in retained raw evidence but does not change that flat read model or its acknowledgement boundary.
 
 ### Transcript batches
 
