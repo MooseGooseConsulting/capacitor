@@ -4,7 +4,10 @@ namespace Capacitor.Web.Models;
 
 /// <summary>One page of sessions returned by the Capacitor API.</summary>
 public sealed record SessionSearchResponse {
-    [JsonPropertyName("sessions")]
+    // The API's frozen search envelope is { hits, total }. Keeping this at the
+    // boundary prevents a successful API response from silently rendering an
+    // empty Sessions list.
+    [JsonPropertyName("hits")]
     public IReadOnlyList<SessionSummary> Sessions { get; init; } = [];
 
     [JsonPropertyName("total")]

@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Globalization;
 using Capacitor.Server.Ingest;
+using Capacitor.Server.Data.Entities;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Npgsql;
 
@@ -38,6 +39,28 @@ public sealed class PostgresGatewayTests {
                 line_numbers = new[] { 0, 2 }
             });
             await Assert.That(ingested.StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+            // The dashboard reads an evaluator-produced persisted result; it must not
+            // manufacture an Evaluation tab from transcript data.
+            await using (var dataSource = NpgsqlDataSource.Create(connectionString)) {
+                var evaluationStore = new PostgresSessionRepository(dataSource);
+                var evaluationId = $"evaluation-{Guid.NewGuid():N}";
+                await evaluationStore.PersistEvalRunAsync(new EvalRunRecord {
+                    EvalRunId = evaluationId,
+                    SessionId = sessionId,
+                    JudgeModel = "integration-judge",
+                    OverallScore = 4,
+                    Summary = "Persisted dashboard evaluation",
+                    EvaluatedAt = DateTimeOffset.Parse("2026-01-02T03:05:05Z", CultureInfo.InvariantCulture)
+                }, [new EvalVerdictRecord {
+                    EvalRunId = evaluationId,
+                    Category = "quality",
+                    QuestionId = "session-read-model",
+                    Score = 4,
+                    Verdict = "pass",
+                    Finding = "The persisted evaluation is available to the browser API."
+                }]);
+            }
 
             var continued = await client.PostAsJsonAsync("/hooks/transcript", new {
                 session_id = sessionId,
@@ -126,6 +149,11 @@ public sealed class PostgresGatewayTests {
                     .First(entry => entry.GetProperty("kind").GetString() == "turn")
                     .GetProperty("turn");
                 await Assert.That(firstTurn.GetProperty("turn_index").GetInt32()).IsEqualTo(0);
+                var evaluation = detailDocument.RootElement.GetProperty("evaluation");
+                await Assert.That(evaluation.GetProperty("run").GetProperty("summary").GetString())
+                    .IsEqualTo("Persisted dashboard evaluation");
+                await Assert.That(evaluation.GetProperty("verdicts")[0].GetProperty("question_id").GetString())
+                    .IsEqualTo("session-read-model");
             }
 
             var transcript = await client.GetAsync($"/api/sessions/{sessionId}/transcript");

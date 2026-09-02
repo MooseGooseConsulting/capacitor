@@ -13,7 +13,7 @@ public sealed class CapacitorSessionsClientTests {
             requestedUri = request.RequestUri;
             return JsonResponse("""
                 {
-                  "sessions": [{
+                  "hits": [{
                     "session_id": "session-1",
                     "title": "Persisted session",
                     "repo_owner": "owner",
@@ -35,7 +35,7 @@ public sealed class CapacitorSessionsClientTests {
         await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Value!.Total).IsEqualTo(1);
         await Assert.That(result.Value.Sessions.Single().Repository).IsEqualTo("owner/repo");
-        await Assert.That(requestedUri!.PathAndQuery).IsEqualTo("/api/sessions/search?limit=25&offset=0&query=token%20budget&repo=owner%2Frepo");
+        await Assert.That(requestedUri!.PathAndQuery).IsEqualTo("/api/sessions/search?limit=25&offset=0&q=token%20budget&repo=owner%2Frepo");
     }
 
     [Test]

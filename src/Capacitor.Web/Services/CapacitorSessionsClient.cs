@@ -16,7 +16,7 @@ public sealed class CapacitorSessionsClient(HttpClient httpClient) : ICapacitorS
             $"limit={request.Limit}",
             $"offset={request.Offset}"
         };
-        AddQuery(query, "query", request.Query);
+        AddQuery(query, "q", request.Query);
         AddQuery(query, "repo", request.Repository);
         AddQuery(query, "vendor", request.Vendor);
         AddQuery(query, "status", request.Status);

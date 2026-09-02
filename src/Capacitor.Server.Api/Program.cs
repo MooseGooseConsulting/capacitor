@@ -279,7 +279,8 @@ app.MapGet("/api/sessions/{id}", async (
     if (session is null) return Results.NotFound();
 
     var events = await eventStore.GetEventsAsync(sessionId, ct: ct);
-    return Results.Ok(new SessionDashboardDetail(session, events, SessionTraceComposer.Compose(events)));
+    var evaluation = await sessions.GetLatestEvaluationAsync(sessionId, ct);
+    return Results.Ok(new SessionDashboardDetail(session, events, SessionTraceComposer.Compose(events), evaluation));
 });
 
 app.MapGet("/api/sessions/{id}/overview", (
@@ -375,7 +376,8 @@ namespace Capacitor.Server.Api {
     public sealed record SessionDashboardDetail(
         SessionHeaderRecord Session,
         IReadOnlyList<SessionEventRecord> Events,
-        SessionTraceDocument Trace);
+        SessionTraceDocument Trace,
+        SessionEvaluation? Evaluation);
 
     public record ApiSessionStartPayload {
         [JsonPropertyName("session_id")]
