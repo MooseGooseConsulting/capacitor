@@ -1,0 +1,19 @@
+@namespace Capacitor.Web.Components.Sessions
+
+<span class="metric-label">@Label</span>
+<span class="metric-value" data-metric-label="@Label" data-metric-availability="@(IsAvailable ? "reported" : "unavailable")">@(IsAvailable ? Value : "Unavailable")</span>
+
+@code {
+    [Parameter, EditorRequired]
+    public string Label { get; set; } = string.Empty;
+
+    [Parameter, EditorRequired]
+    public string Value { get; set; } = string.Empty;
+
+    /// <summary>
+    /// A false value means that this recovery API did not persist evidence for
+    /// the metric. It deliberately renders as unavailable instead of a zero.
+    /// </summary>
+    [Parameter]
+    public bool IsAvailable { get; set; } = true;
+}

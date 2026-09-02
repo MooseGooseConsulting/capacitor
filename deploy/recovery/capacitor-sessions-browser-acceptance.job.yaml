@@ -1,0 +1,162 @@
+# Finite, internal-only acceptance run for the recovered Sessions vertical slice.
+# It imports an on-disk Codex rollout through the actual kcap CLI, then drives the
+# deployed web workspace with Chromium. It targets only the recovery test API/DB.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: capacitor-sessions-browser-acceptance-
+  namespace: data-platform
+  labels:
+    app.kubernetes.io/name: capacitor-sessions-browser-acceptance
+    app.kubernetes.io/part-of: capacitor-recovery
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  activeDeadlineSeconds: 1800
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: capacitor-sessions-browser-acceptance
+    spec:
+      restartPolicy: Never
+      volumes:
+        - name: workspace
+          emptyDir: {}
+      initContainers:
+        - name: kcap-import
+          image: mcr.microsoft.com/dotnet/sdk:10.0
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: GIT_REF
+              value: feature/session-vertical-slice
+            - name: KCAP_URL
+              value: http://capacitor-api-test.data-platform.svc.cluster.local
+            - name: KCAP_CONFIG_DIR
+              value: /work/kcap-config
+            - name: CODEX_HOME
+              value: /work/codex
+          volumeMounts:
+            - name: workspace
+              mountPath: /work
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              git clone --depth 1 --branch "$GIT_REF" https://github.com/MooseGooseConsulting/capacitor.git /work/capacitor
+              mkdir -p /work/codex/sessions/2026/09/02 /work/kcap-config
+              session_id=$(cat /proc/sys/kernel/random/uuid)
+              session_id_dashless=$(printf '%s' "$session_id" | tr -d '-')
+              printf '%s' "$session_id_dashless" > /work/session-id
+              cat > /work/codex/sessions/2026/09/02/rollout-2026-09-02T00-00-00-${session_id}.jsonl <<EOF
+              {"timestamp":"2026-09-02T00:00:00.000Z","type":"session_meta","payload":{"id":"${session_id}","timestamp":"2026-09-02T00:00:00.000Z","cwd":"/work/capacitor","originator":"codex-tui","cli_version":"0.146.0","model_provider":"openai","git":{"commit_hash":"recovery-fixture","branch":"feature/session-vertical-slice","repository_url":"https://github.com/MooseGooseConsulting/capacitor"}}}
+              {"timestamp":"2026-09-02T00:00:01.000Z","type":"turn_context","payload":{"turn_id":"fixture-turn","cwd":"/work/capacitor","model":"gpt-5"}}
+              {"timestamp":"2026-09-02T00:00:02.000Z","type":"response_item","payload":{"id":"fixture-user","type":"message","role":"user","content":[{"type":"input_text","text":"Show the captured Sessions dashboard import fixture."}]}}
+              {"timestamp":"2026-09-02T00:00:03.000Z","type":"event_msg","payload":{"type":"task_started"}}
+              {"timestamp":"2026-09-02T00:00:04.000Z","type":"response_item","payload":{"id":"fixture-assistant","type":"message","role":"assistant","content":[{"type":"output_text","text":"The dashboard should show this imported Codex session and its persisted transcript."}]}}
+              {"timestamp":"2026-09-02T00:00:05.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":80,"output_tokens":20}}}}
+              EOF
+              cd /work/capacitor
+              dotnet run --project src/Capacitor.Cli/Capacitor.Cli.csproj -- import --codex --repo MooseGooseConsulting/capacitor --yes --reimport --skip-title --min-lines 1
+              printf 'Acceptance session %s\n' "$session_id_dashless"
+      containers:
+        - name: browser-acceptance
+          image: mcr.microsoft.com/playwright:v1.58.2-noble
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: WEB_URL
+              value: http://capacitor-web-test.data-platform.svc.cluster.local
+          volumeMounts:
+            - name: workspace
+              mountPath: /work
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              # The container supplies the pinned browser binaries and OS dependencies;
+              # install only the matching Node library into this disposable Job filesystem.
+              mkdir -p /tmp/browser-acceptance
+              cd /tmp/browser-acceptance
+              npm install --no-save --ignore-scripts playwright@1.58.2
+              node <<'EOF'
+              const assert = require('node:assert/strict');
+              const { chromium } = require('playwright');
+
+              (async () => {
+                const sessionId = require('node:fs').readFileSync('/work/session-id', 'utf8').trim();
+                const browser = await chromium.launch({ headless: true });
+                const context = await browser.newContext({ viewport: { width: 1600, height: 1200 } });
+                const page = await context.newPage();
+
+                try {
+                await page.goto(`${process.env.WEB_URL}/sessions`, { waitUntil: 'domcontentloaded' });
+                await page.locator(`a.session-card-link[href="/sessions/${sessionId}"]`).waitFor({ state: 'visible', timeout: 30000 });
+
+                await page.waitForTimeout(500);
+                await page.keyboard.press('Control+K');
+                const globalSearch = page.locator('details.global-search-menu[open] #capacitor-global-search');
+                await globalSearch.waitFor({ state: 'visible', timeout: 10000 });
+                await globalSearch.fill('captured Sessions dashboard import fixture');
+                await globalSearch.press('Enter');
+                await page.locator(`a.session-card-link[href="/sessions/${sessionId}"]`).waitFor({ state: 'visible', timeout: 30000 });
+
+                await page.locator(`a.session-card-link[href="/sessions/${sessionId}"]`).click();
+                await page.waitForURL(new RegExp(`/sessions/${sessionId}`), { timeout: 30000 });
+
+                await page.goto(`${process.env.WEB_URL}/sessions/${sessionId}?tab=overview`, { waitUntil: 'domcontentloaded' });
+                await page.getByRole('tab', { name: 'Overview', exact: true }).waitFor({ state: 'visible', timeout: 30000 });
+
+                await page.locator('.detail-copy').filter({ hasText: 'Captured from codex' }).waitFor({ state: 'visible', timeout: 30000 });
+                const tokenMetric = page.locator('[data-metric-label="Tokens"]');
+                assert.equal(await tokenMetric.getAttribute('data-metric-availability'), 'reported');
+                assert.equal((await tokenMetric.textContent()).trim(), '100');
+                const costMetric = page.locator('[data-metric-label="Cost"]');
+                assert.equal(await costMetric.getAttribute('data-metric-availability'), 'unavailable');
+                assert.equal((await costMetric.textContent()).trim(), 'Unavailable');
+
+                for (const [action, reason] of [
+                  ['share', 'authenticated sharing'],
+                  ['copy-link', 'share-link contract'],
+                  ['delete', 'read-only'],
+                ]) {
+                  const control = page.locator(`[data-session-action="${action}"]`);
+                  assert.match(await control.getAttribute('title'), new RegExp(reason));
+                  assert.equal(await control.getByRole('button').isDisabled(), true, `${action} must remain unavailable`);
+                }
+
+                await page.getByRole('tab', { name: 'Transcript', exact: true }).click();
+                await page.getByText('Show the captured Sessions dashboard import fixture.', { exact: true }).waitFor({ state: 'visible', timeout: 30000 });
+                await page.getByText('The dashboard should show this imported Codex session and its persisted transcript.', { exact: true }).waitFor({ state: 'visible', timeout: 30000 });
+                assert.equal((await page.locator('.transcript-entry').count()), 2, 'fixture transcript must persist both messages');
+                assert.ok((await page.locator('.transcript-entry .event-accounting').allTextContents())
+                  .every(text => text.includes('Token usage unavailable') && text.includes('Cost unavailable')),
+                  'missing per-message usage must remain unavailable');
+
+                await page.getByRole('tab', { name: 'Details', exact: true }).click();
+                await page.getByText(sessionId, { exact: true }).waitFor({ state: 'visible', timeout: 30000 });
+                await page.getByText('MooseGooseConsulting/capacitor', { exact: true }).last().waitFor({ state: 'visible', timeout: 30000 });
+
+                for (const [label, route] of [
+                  ['Transcript', 'transcript'],
+                  ['Events', 'events'],
+                  ['Trace', 'trace'],
+                  ['Evaluation', 'evaluation'],
+                  ['Details', 'details'],
+                  ['Overview', 'overview'],
+                ]) {
+                  const tab = page.getByRole('tab', { name: label, exact: true });
+                  await tab.click();
+                  await page.waitForFunction(expected => new URL(window.location.href).searchParams.get('tab') === expected, route);
+                  assert.equal(await tab.getAttribute('aria-selected'), 'true', `${label} must be selected`);
+                }
+
+                console.log(`Browser acceptance passed for imported session ${sessionId}.`);
+                } catch (error) {
+                  console.error(await page.locator('body').innerText());
+                  throw error;
+                } finally {
+                  await context.close();
+                  await browser.close();
+                }
+              })().catch(error => {
+                console.error(error);
+                process.exitCode = 1;
+              });
+              EOF

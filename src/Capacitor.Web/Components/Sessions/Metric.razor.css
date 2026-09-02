@@ -1,0 +1,18 @@
+.metric-label {
+    color: var(--capacitor-muted);
+    display: block;
+    font-size: .66rem;
+    font-weight: 700;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+}
+
+.metric-value {
+    color: var(--capacitor-text);
+    display: block;
+    font-size: .86rem;
+    font-weight: 650;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}

@@ -83,13 +83,13 @@ public record SessionHeaderRecord {
     public int EventCount { get; init; }
 
     [JsonPropertyName("tool_count")]
-    public int ToolCount { get; init; }
+    public int? ToolCount { get; init; }
 
     [JsonPropertyName("total_tokens")]
-    public long TotalTokens { get; init; }
+    public long? TotalTokens { get; init; }
 
     [JsonPropertyName("total_cost_usd")]
-    public decimal TotalCostUsd { get; init; }
+    public decimal? TotalCostUsd { get; init; }
 
     [JsonPropertyName("previous_session_id")]
     public string? PreviousSessionId { get; init; }

@@ -1,0 +1,108 @@
+.session-detail-page {
+    color: var(--capacitor-text);
+    margin: 0 auto;
+    max-width: 1180px;
+    padding: 1.25rem clamp(1rem, 3vw, 2.5rem) 2.5rem;
+}
+
+.session-detail-page ::deep .detail-state {
+    margin-top: 1rem;
+}
+
+.session-detail-header {
+    border-bottom: 1px solid var(--capacitor-border);
+    margin-bottom: 1rem;
+    padding-bottom: 1rem;
+}
+
+.session-detail-page ::deep .detail-identifiers {
+    align-items: center;
+    color: var(--capacitor-muted);
+    margin-top: .6rem;
+}
+
+.session-detail-page ::deep .unavailable-session-action {
+    display: inline-flex;
+}
+
+.session-detail-page ::deep .session-tabs {
+    background: transparent;
+}
+
+.session-detail-page ::deep .detail-panel {
+    background: var(--capacitor-panel);
+    border-color: var(--capacitor-border);
+    padding: 1.25rem;
+}
+
+.session-detail-page ::deep .detail-copy {
+    color: var(--capacitor-subtle-text);
+    line-height: 1.6;
+    margin-top: .8rem;
+}
+
+.session-detail-page ::deep .rollup-grid {
+    margin-top: .8rem;
+}
+
+.session-detail-page ::deep .transcript-entry, .session-detail-page ::deep .trace-entry {
+    background: var(--capacitor-panel);
+    border-color: var(--capacitor-border);
+    padding: 1rem 1.1rem;
+}
+
+.session-detail-page ::deep .transcript-content {
+    line-height: 1.6;
+    margin: .8rem 0;
+    white-space: pre-wrap;
+}
+
+.session-detail-page ::deep .event-accounting {
+    color: var(--capacitor-muted);
+    display: block;
+    line-height: 1.4;
+}
+
+.session-detail-page ::deep .events-list {
+    background: var(--capacitor-panel);
+    border: 1px solid var(--capacitor-border);
+}
+
+.session-detail-page ::deep .load-more-events {
+    margin-top: 1rem;
+}
+
+.session-detail-page ::deep .evaluation-verdicts {
+    margin-top: 1rem;
+}
+
+.session-detail-page ::deep .evaluation-verdict {
+    border-color: var(--capacitor-border);
+    padding: .9rem 1rem;
+}
+
+.pre-wrap {
+    white-space: pre-wrap;
+}
+
+.session-detail-page ::deep .payload-label {
+    color: var(--capacitor-muted);
+    font-weight: 750;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+}
+
+.event-payload {
+    background: var(--capacitor-bg);
+    border: 1px solid var(--capacitor-border);
+    color: var(--capacitor-text);
+    border-radius: 6px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: .78rem;
+    margin: 0;
+    max-height: 24rem;
+    overflow: auto;
+    padding: .75rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+}

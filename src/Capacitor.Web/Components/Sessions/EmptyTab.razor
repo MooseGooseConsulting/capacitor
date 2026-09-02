@@ -1,0 +1,15 @@
+@namespace Capacitor.Web.Components.Sessions
+
+<section class="empty-tab">
+    <MudIcon Icon="@Icons.Material.Filled.DataObject" Size="Size.Large" />
+    <MudText Typo="Typo.h6">@Title</MudText>
+    <MudText Typo="Typo.body2">@Message</MudText>
+</section>
+
+@code {
+    [Parameter, EditorRequired]
+    public string Title { get; set; } = string.Empty;
+
+    [Parameter, EditorRequired]
+    public string Message { get; set; } = string.Empty;
+}

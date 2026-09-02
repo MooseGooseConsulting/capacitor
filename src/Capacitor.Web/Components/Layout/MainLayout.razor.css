@@ -1,0 +1,268 @@
+.capacitor-console {
+    --capacitor-accent: #76556d;
+    --capacitor-accent-strong: #572944;
+    --capacitor-bg: #eef1f4;
+    --capacitor-border: #d7dce2;
+    --capacitor-border-muted: #e5e8ec;
+    --capacitor-hover: #e6e9ed;
+    --capacitor-muted: #657082;
+    --capacitor-panel: #ffffff;
+    --capacitor-selected: #eee6ea;
+    --capacitor-status-active: #1b8a66;
+    --capacitor-status-complete: #496fc4;
+    --capacitor-status-error: #b44949;
+    --capacitor-status-neutral: #838c99;
+    --capacitor-subtle-text: #4b5668;
+    --capacitor-text: #182235;
+    color-scheme: light;
+    min-height: 100vh;
+}
+
+.capacitor-console[data-theme="dark"] {
+    --capacitor-accent: #d6a7bf;
+    --capacitor-accent-strong: #f0c4d8;
+    --capacitor-bg: #18191d;
+    --capacitor-border: #3a3d44;
+    --capacitor-border-muted: #2a2d33;
+    --capacitor-hover: #2b2d33;
+    --capacitor-muted: #a7adb8;
+    --capacitor-panel: #202126;
+    --capacitor-selected: #3a2934;
+    --capacitor-status-active: #59be91;
+    --capacitor-status-complete: #8ca7e7;
+    --capacitor-status-error: #ed8585;
+    --capacitor-status-neutral: #a7adb8;
+    --capacitor-subtle-text: #d5d9e1;
+    --capacitor-text: #f1f3f6;
+    color-scheme: dark;
+}
+
+@media (prefers-color-scheme: dark) {
+    .capacitor-console[data-theme="system"] {
+        --capacitor-accent: #d6a7bf;
+        --capacitor-accent-strong: #f0c4d8;
+        --capacitor-bg: #18191d;
+        --capacitor-border: #3a3d44;
+        --capacitor-border-muted: #2a2d33;
+        --capacitor-hover: #2b2d33;
+        --capacitor-muted: #a7adb8;
+        --capacitor-panel: #202126;
+        --capacitor-selected: #3a2934;
+        --capacitor-status-active: #59be91;
+        --capacitor-status-complete: #8ca7e7;
+        --capacitor-status-error: #ed8585;
+        --capacitor-status-neutral: #a7adb8;
+        --capacitor-subtle-text: #d5d9e1;
+        --capacitor-text: #f1f3f6;
+        color-scheme: dark;
+    }
+}
+
+.capacitor-console ::deep .capacitor-shell {
+    background: var(--capacitor-bg);
+    color: var(--capacitor-text);
+    min-height: 100vh;
+}
+
+.capacitor-console ::deep .top-shell {
+    background: var(--capacitor-panel);
+    border-bottom: 1px solid var(--capacitor-border);
+    color: var(--capacitor-text);
+    display: flex;
+    gap: .7rem;
+    padding: 0 .85rem;
+}
+
+.product-wordmark {
+    font-size: .78rem;
+    font-weight: 800;
+    letter-spacing: .13em;
+    margin-right: .65rem;
+}
+
+.top-navigation {
+    align-items: center;
+    display: flex;
+    gap: .1rem;
+}
+
+.top-nav-link {
+    border-radius: .25rem;
+    color: var(--capacitor-subtle-text);
+    font-size: .72rem;
+    font-weight: 750;
+    letter-spacing: .045em;
+    padding: .36rem .45rem;
+    text-decoration: none;
+    text-transform: uppercase;
+}
+
+.top-nav-link-active {
+    color: var(--capacitor-accent-strong);
+}
+
+.top-nav-unavailable {
+    color: var(--capacitor-muted);
+    cursor: help;
+}
+
+.global-search-menu {
+    color: var(--capacitor-muted);
+    font-size: .75rem;
+    position: relative;
+}
+
+    .global-search-menu summary {
+        border: 1px solid var(--capacitor-border);
+        border-radius: .25rem;
+        cursor: pointer;
+        list-style: none;
+        padding: .22rem .4rem;
+    }
+
+    .global-search-menu summary::-webkit-details-marker {
+        display: none;
+    }
+
+.global-search-popover {
+    background: var(--capacitor-panel);
+    border: 1px solid var(--capacitor-border);
+    border-radius: .4rem;
+    box-shadow: 0 .65rem 1.5rem rgba(0, 0, 0, .16);
+    color: var(--capacitor-text);
+    display: grid;
+    font-size: .76rem;
+    gap: .3rem;
+    padding: .75rem;
+    position: absolute;
+    right: 0;
+    top: calc(100% + .35rem);
+    width: 18rem;
+    z-index: 12;
+}
+
+.global-search-form {
+    display: flex;
+    gap: .35rem;
+}
+
+.global-search-form input {
+    background: var(--capacitor-bg);
+    border: 1px solid var(--capacitor-border);
+    border-radius: .25rem;
+    color: var(--capacitor-text);
+    min-width: 0;
+    padding: .4rem .45rem;
+    width: 100%;
+}
+
+.global-search-form button {
+    background: var(--capacitor-accent);
+    border: 0;
+    border-radius: .25rem;
+    color: #fff;
+    cursor: pointer;
+    font: inherit;
+    font-weight: 700;
+    padding: .4rem .55rem;
+}
+
+kbd {
+    border: 1px solid var(--capacitor-border);
+    border-radius: .2rem;
+    font-family: inherit;
+    font-size: .66rem;
+    margin-left: .25rem;
+    padding: .08rem .2rem;
+}
+
+.capacitor-console ::deep .shell-icon-button {
+    color: var(--capacitor-subtle-text);
+}
+
+.capacitor-console ::deep .mud-paper,
+.capacitor-console ::deep .mud-popover,
+.capacitor-console ::deep .mud-tabs-toolbar {
+    background-color: var(--capacitor-panel);
+    color: var(--capacitor-text);
+}
+
+.capacitor-console ::deep .mud-tabs-toolbar {
+    border-bottom-color: var(--capacitor-border);
+}
+
+.capacitor-console ::deep .mud-tab,
+.capacitor-console ::deep .mud-input,
+.capacitor-console ::deep .mud-input-label {
+    color: var(--capacitor-subtle-text);
+}
+
+.capacitor-console ::deep .mud-input-outlined-border {
+    border-color: var(--capacitor-border);
+}
+
+.shell-utility, .shell-account {
+    align-items: center;
+    border: 1px solid var(--capacitor-border);
+    border-radius: 999px;
+    color: var(--capacitor-subtle-text);
+    cursor: help;
+    display: inline-flex;
+    font-size: .72rem;
+    justify-content: center;
+    min-height: 1.65rem;
+    padding: 0 .42rem;
+}
+
+.shell-utility {
+    font-weight: 800;
+    min-width: 1.65rem;
+    padding: 0;
+}
+
+.console-trial-notice {
+    align-items: center;
+    background: var(--capacitor-accent);
+    color: #ffffff;
+    display: flex;
+    font-size: .75rem;
+    gap: .55rem;
+    padding: .36rem 1rem;
+}
+
+.capacitor-console ::deep .shell-main {
+    padding-top: 48px;
+}
+
+@media (max-width: 900px) {
+    .top-nav-link:nth-of-type(n + 4), .shell-account {
+        display: none;
+    }
+}
+
+@media (max-width: 650px) {
+    .top-navigation, .global-search-menu, .console-trial-notice span {
+        display: none;
+    }
+}
+
+#blazor-error-ui {
+    color-scheme: light only;
+    background: lightyellow;
+    bottom: 0;
+    box-shadow: 0 -1px 2px rgba(0, 0, 0, 0.2);
+    box-sizing: border-box;
+    display: none;
+    left: 0;
+    padding: 0.6rem 1.25rem 0.7rem 1.25rem;
+    position: fixed;
+    width: 100%;
+    z-index: 1000;
+}
+
+    #blazor-error-ui .dismiss {
+        cursor: pointer;
+        position: absolute;
+        right: 0.75rem;
+        top: 0.5rem;
+    }

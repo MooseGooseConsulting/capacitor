@@ -59,17 +59,17 @@ public class AntigravityNormalizer : INormalizer {
             : fallbackTimestamp;
         return Frame(sessionId, agentId, lineNumber, rawLine, timestamp, "UsageBackfill",
             model: root.Str("model"),
-            inputTokens: root.Num("input_tokens") ?? 0,
-            outputTokens: root.Num("output_tokens") ?? 0,
-            cacheRead: root.Num("cache_read_tokens") ?? 0,
-            cacheWrite: root.Num("cache_write_tokens") ?? 0);
+            inputTokens: root.Num("input_tokens"),
+            outputTokens: root.Num("output_tokens"),
+            cacheRead: root.Num("cache_read_tokens"),
+            cacheWrite: root.Num("cache_write_tokens"));
     }
 
     static SessionEventRecord Frame(
             string sessionId, string? agentId, int lineNumber, string rawLine, DateTimeOffset timestamp, string eventType,
             string? model = null, string? content = null, string? toolName = null, string? toolInput = null,
             string? toolOutput = null, bool isError = false,
-            long inputTokens = 0, long outputTokens = 0, long cacheRead = 0, long cacheWrite = 0) =>
+            long? inputTokens = null, long? outputTokens = null, long? cacheRead = null, long? cacheWrite = null) =>
         new SessionEventRecord {
             SessionId = sessionId,
             AgentId = agentId ?? string.Empty,
@@ -112,6 +112,8 @@ public class NormalizerRouter {
     public NormalizerRouter(IEnumerable<INormalizer>? normalizers = null) {
         _normalizers = new List<INormalizer> {
             new ClaudeCodeNormalizer(),
+            new CodexNormalizer(),
+            new KiroTranscriptNormalizer(),
             new UniversalAcpNormalizer(),
             new AntigravityNormalizer()
         };
@@ -121,10 +123,49 @@ public class NormalizerRouter {
                     _normalizers.Add(n);
     }
 
-    public IReadOnlyList<SessionEventRecord> Normalize(string vendor, string sessionId, string? agentId, int lineNumber, string rawLine) {
+    public IReadOnlyList<SessionEventRecord> Normalize(string vendor, string sessionId, string? agentId, int lineNumber, string rawLine) =>
+        Normalize(vendor, sessionId, agentId, lineNumber, rawLine, out _);
+
+    public IReadOnlyList<SessionEventRecord> Normalize(string vendor, string sessionId, string? agentId, int lineNumber, string rawLine, out bool failed) {
         var normalizer = _normalizers.FirstOrDefault(n => n.CanNormalize(vendor))
                          ?? _normalizers.First(n => n.CanNormalize("acp"));
 
-        return normalizer.NormalizeLine(vendor, sessionId, agentId, lineNumber, rawLine);
+        var normalized = normalizer.NormalizeLine(vendor, sessionId, agentId, lineNumber, rawLine);
+        // One source line may emit an assistant turn, reasoning, and several tool calls.
+        // The stable index makes every emitted event independently idempotent on replay.
+        var events = normalized
+            .Select((@event, index) => @event with { LogicalSeq = index })
+            .ToList();
+        failed = LineFailed(vendor, rawLine, events);
+        return events;
     }
+
+    static bool LineFailed(string vendor, string rawLine, IReadOnlyList<SessionEventRecord> events) {
+        JsonDocument doc;
+        try {
+            doc = JsonDocument.Parse(rawLine);
+        } catch (JsonException) {
+            return true;
+        }
+
+        using (doc) {
+            if (!IsClaude(vendor)) return false;
+            if (events.Count == 0) return false;
+            if (events.Count != 1 || events[0].EventType != "RawMessage") return false;
+
+            var type = doc.RootElement.Str("type");
+            if (type is "user" or "assistant") {
+                return doc.RootElement.Obj("message") is null;
+            }
+
+            // Claude emits legitimate record types (for example system/progress/snapshot)
+            // which the canonical model currently preserves as RawMessage. They are accepted
+            // source lines, not normalization failures that should block a stream watermark.
+            return false;
+        }
+    }
+
+    static bool IsClaude(string vendor) =>
+        string.Equals(vendor, "claude", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(vendor, "claude-code", StringComparison.OrdinalIgnoreCase);
 }

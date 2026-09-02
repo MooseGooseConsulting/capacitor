@@ -68,11 +68,11 @@ public class ClaudeCodeNormalizer : INormalizer {
         SessionEventRecord Emit(string eventType, string? content = null, string? toolName = null, string? toolInput = null) {
             var record = Frame(sessionId, agentId, lineNumber, rawLine, timestamp, eventType,
                 model: model, content: content, toolName: toolName, toolInput: toolInput,
-                inputTokens: usageAttached ? 0 : inputTokens,
-                outputTokens: usageAttached ? 0 : outputTokens,
-                cacheRead: usageAttached ? 0 : cacheRead,
-                cacheWrite: usageAttached ? 0 : cacheWrite,
-                costUsd: usageAttached ? 0m : costUsd);
+                inputTokens: usageAttached ? null : inputTokens,
+                outputTokens: usageAttached ? null : outputTokens,
+                cacheRead: usageAttached ? null : cacheRead,
+                cacheWrite: usageAttached ? null : cacheWrite,
+                costUsd: usageAttached ? null : costUsd);
             usageAttached = true;
             return record;
         }
@@ -98,14 +98,14 @@ public class ClaudeCodeNormalizer : INormalizer {
         return result;
     }
 
-    static (long input, long output, long cacheRead, long cacheWrite, decimal cost) ReadUsage(JsonElement message) {
-        if (message.Obj("usage") is not { } usage) return (0, 0, 0, 0, 0m);
-        var cost = usage.TryGetProperty("cost_usd", out var costProp) && costProp.ValueKind == JsonValueKind.Number ? costProp.GetDecimal() : 0m;
+    static (long? input, long? output, long? cacheRead, long? cacheWrite, decimal? cost) ReadUsage(JsonElement message) {
+        if (message.Obj("usage") is not { } usage) return default;
+        var cost = usage.TryGetProperty("cost_usd", out var costProp) && costProp.ValueKind == JsonValueKind.Number ? costProp.GetDecimal() : (decimal?)null;
         return (
-            usage.Num("input_tokens") ?? 0,
-            usage.Num("output_tokens") ?? 0,
-            usage.Num("cache_read_input_tokens") ?? 0,
-            usage.Num("cache_creation_input_tokens") ?? 0,
+            usage.Num("input_tokens"),
+            usage.Num("output_tokens"),
+            usage.Num("cache_read_input_tokens"),
+            usage.Num("cache_creation_input_tokens"),
             cost);
     }
 
@@ -113,7 +113,7 @@ public class ClaudeCodeNormalizer : INormalizer {
             string sessionId, string? agentId, int lineNumber, string rawLine, DateTimeOffset timestamp, string eventType,
             string? model = null, string? content = null, string? toolName = null, string? toolInput = null,
             string? toolOutput = null, int? toolExitCode = null, bool isError = false,
-            long inputTokens = 0, long outputTokens = 0, long cacheRead = 0, long cacheWrite = 0, decimal costUsd = 0m) =>
+            long? inputTokens = null, long? outputTokens = null, long? cacheRead = null, long? cacheWrite = null, decimal? costUsd = null) =>
         new SessionEventRecord {
             SessionId = sessionId,
             AgentId = agentId ?? string.Empty,

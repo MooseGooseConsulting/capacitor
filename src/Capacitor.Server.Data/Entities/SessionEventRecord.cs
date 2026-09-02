@@ -4,7 +4,7 @@ namespace Capacitor.Server.Data.Entities;
 
 /// <summary>
 /// Immutable record representing a single canonical event in a session stream.
-/// Keyed on (SessionId, AgentId, LineNumber).
+/// Keyed on (SessionId, AgentId, LineNumber, LogicalSeq).
 /// </summary>
 public record SessionEventRecord {
     [JsonPropertyName("session_id")]
@@ -35,16 +35,16 @@ public record SessionEventRecord {
     public required DateTimeOffset Timestamp { get; init; }
 
     [JsonPropertyName("input_tokens")]
-    public long InputTokens { get; init; }
+    public long? InputTokens { get; init; }
 
     [JsonPropertyName("output_tokens")]
-    public long OutputTokens { get; init; }
+    public long? OutputTokens { get; init; }
 
     [JsonPropertyName("cache_read_tokens")]
-    public long CacheReadTokens { get; init; }
+    public long? CacheReadTokens { get; init; }
 
     [JsonPropertyName("cache_write_tokens")]
-    public long CacheWriteTokens { get; init; }
+    public long? CacheWriteTokens { get; init; }
 
     [JsonPropertyName("reasoning_tokens")]
     public long? ReasoningTokens { get; init; }
@@ -56,7 +56,7 @@ public record SessionEventRecord {
     public long? ContextWindowTokens { get; init; }
 
     [JsonPropertyName("cost_usd")]
-    public decimal CostUsd { get; init; }
+    public decimal? CostUsd { get; init; }
 
     [JsonPropertyName("item_id")]
     public string? ItemId { get; init; }
@@ -84,4 +84,18 @@ public record SessionEventRecord {
 
     [JsonPropertyName("raw_payload")]
     public string? RawPayload { get; init; }
+
+    // Evidence belongs to the emitted event, never only to the session. A session can
+    // legitimately work across several repositories and directories.
+    [JsonPropertyName("cwd")]
+    public string? Cwd { get; init; }
+
+    [JsonPropertyName("repo_hash")]
+    public string? RepoHash { get; init; }
+
+    [JsonPropertyName("repo_owner")]
+    public string? RepoOwner { get; init; }
+
+    [JsonPropertyName("repo_name")]
+    public string? RepoName { get; init; }
 }

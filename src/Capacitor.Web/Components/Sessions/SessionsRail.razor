@@ -1,0 +1,72 @@
+@namespace Capacitor.Web.Components.Sessions
+
+<aside class="sessions-rail" aria-label="Session repositories">
+    <p class="rail-label">SESSIONS</p>
+    <div class="rail-links">
+        <button type="button" class="@RailClass(null)" @onclick="@(() => OnRepositoryChanged.InvokeAsync(null))">All</button>
+    </div>
+
+    <hr class="rail-divider" />
+    <p class="rail-label">MY PROJECTS</p>
+    @if (MyProjects.Count == 0) {
+        <p class="rail-empty">Viewer identity is not provided by this API.</p>
+    } else {
+        @foreach (var repository in MyProjects) {
+            <button type="button" class="@RailClass(repository)" @onclick="@(() => OnRepositoryChanged.InvokeAsync(repository))">@repository</button>
+        }
+    }
+
+    <hr class="rail-divider" />
+    <p class="rail-label">OTHER REPOS</p>
+    @if (OtherRepositories.Count == 0) {
+        <p class="rail-empty">No other repository sessions returned.</p>
+    } else {
+        @foreach (var owner in OtherRepositories.Keys.OrderBy(x => x, StringComparer.OrdinalIgnoreCase)) {
+            <p class="owner-label">@owner</p>
+            @foreach (var repository in OtherRepositories[owner]) {
+                @if (string.Equals(owner, "Unattributed", StringComparison.Ordinal)) {
+                    <p class="rail-empty">@repository</p>
+                } else {
+                    <button type="button" class="@RailClass(repository)" @onclick="@(() => OnRepositoryChanged.InvokeAsync(repository))">@repository</button>
+                }
+            }
+        }
+    }
+
+    <div class="rail-spacer"></div>
+    <section class="workspace-setup" aria-label="Workspace setup">
+        <p class="rail-label">SETUP</p>
+        <p class="rail-empty">Setup status is not reported by the persisted Sessions API.</p>
+    </section>
+    <footer class="rail-footer">
+        <strong>Capacitor</strong>
+        <span>Sessions read workspace</span>
+    </footer>
+</aside>
+
+@code {
+    [Parameter, EditorRequired]
+    public IReadOnlyList<SessionSummary> Sessions { get; set; } = [];
+
+    [Parameter]
+    public string? SelectedRepository { get; set; }
+
+    [Parameter]
+    public EventCallback<string?> OnRepositoryChanged { get; set; }
+
+    // The read API does not carry a viewer identity, so ownership cannot be inferred from a
+    // session's owner. Until an explicit viewer contract exists, keep every repository honest.
+    IReadOnlyList<string> MyProjects => [];
+
+    IReadOnlyDictionary<string, IReadOnlyList<string>> OtherRepositories => Sessions
+        .Where(x => !string.IsNullOrWhiteSpace(x.RepoName))
+        .GroupBy(x => string.IsNullOrWhiteSpace(x.RepoOwner) ? "Unattributed" : x.RepoOwner!, StringComparer.OrdinalIgnoreCase)
+        .ToDictionary(
+            x => x.Key,
+            x => (IReadOnlyList<string>)x.Select(y => string.IsNullOrWhiteSpace(y.RepoOwner) ? y.RepoName! : y.Repository).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(y => y, StringComparer.OrdinalIgnoreCase).ToArray(),
+            StringComparer.OrdinalIgnoreCase);
+
+    string RailClass(string? repository) => string.Equals(SelectedRepository, repository, StringComparison.OrdinalIgnoreCase)
+        ? "rail-link rail-link-selected"
+        : "rail-link";
+}

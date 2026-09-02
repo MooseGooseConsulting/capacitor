@@ -24,6 +24,11 @@ record TranscriptBatch {
     [JsonPropertyName("repository")]
     public RepositoryPayload? Repository { get; init; }
 
+    // Optional source location for this batch. A missing cwd stays missing; the
+    // server must not manufacture one from a session-start repository.
+    [JsonPropertyName("cwd")]
+    public string? Cwd { get; init; }
+
     // Routes the server's INormalizerSelector to CodexNormalizer when "codex".
     // Null/absent → server treats the batch as Claude (default). Omitted on the
     // wire when null so older servers (pre-#576) keep deserialising the batch

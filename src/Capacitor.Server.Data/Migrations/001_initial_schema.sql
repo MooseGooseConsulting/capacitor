@@ -13,14 +13,14 @@ CREATE TABLE IF NOT EXISTS session_events (
     vendor              VARCHAR(32) NOT NULL,
     model               VARCHAR(64),
     timestamp           VARCHAR(35) NOT NULL,
-    input_tokens        BIGINT NOT NULL DEFAULT 0,
-    output_tokens       BIGINT NOT NULL DEFAULT 0,
-    cache_read_tokens   BIGINT NOT NULL DEFAULT 0,
-    cache_write_tokens  BIGINT NOT NULL DEFAULT 0,
+    input_tokens        BIGINT,
+    output_tokens       BIGINT,
+    cache_read_tokens   BIGINT,
+    cache_write_tokens  BIGINT,
     reasoning_tokens    BIGINT,
     context_used_tokens BIGINT,
     context_window_tokens BIGINT,
-    cost_usd            NUMERIC(10, 6) NOT NULL DEFAULT 0,
+    cost_usd            NUMERIC(10, 6),
     item_id             VARCHAR(64),
     tool_server         VARCHAR(64),
     tool_name           VARCHAR(64),
@@ -30,7 +30,43 @@ CREATE TABLE IF NOT EXISTS session_events (
     is_error            BOOLEAN NOT NULL DEFAULT FALSE,
     content             TEXT,
     raw_payload         TEXT,
+    cwd                 TEXT,
+    repo_hash           VARCHAR(64),
+    repo_owner          VARCHAR(128),
+    repo_name           VARCHAR(128),
     PRIMARY KEY (session_id, agent_id, line_number)
+);
+
+-- The receipt is the source-resume boundary. Normalized events retain the same
+-- coordinates but are not a substitute: one receipt can emit no events or many.
+CREATE TABLE IF NOT EXISTS transcript_receipts (
+    session_id              VARCHAR(64) NOT NULL,
+    agent_id                VARCHAR(64) NOT NULL DEFAULT '',
+    line_number             INTEGER NOT NULL,
+    vendor                  VARCHAR(32) NOT NULL,
+    raw_payload             TEXT NOT NULL,
+    normalization_status    VARCHAR(16) NOT NULL,
+    failure_reason          TEXT,
+    cwd                     TEXT,
+    repo_hash               VARCHAR(64),
+    repo_owner              VARCHAR(128),
+    repo_name               VARCHAR(128),
+    received_at             VARCHAR(35) NOT NULL,
+    updated_at              VARCHAR(35) NOT NULL,
+    PRIMARY KEY (session_id, agent_id, line_number)
+);
+
+CREATE TABLE IF NOT EXISTS session_repositories (
+    session_id              VARCHAR(64) NOT NULL,
+    repo_hash               VARCHAR(64) NOT NULL,
+    repo_owner              VARCHAR(128),
+    repo_name               VARCHAR(128),
+    first_seen_line         INTEGER,
+    event_count             BIGINT NOT NULL DEFAULT 0,
+    is_primary              BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at              VARCHAR(35) NOT NULL,
+    updated_at              VARCHAR(35) NOT NULL,
+    PRIMARY KEY (session_id, repo_hash)
 );
 
 CREATE TABLE IF NOT EXISTS session_watermarks (
@@ -68,9 +104,9 @@ CREATE TABLE IF NOT EXISTS sessions (
     last_event_at               VARCHAR(35),
     duration_min                NUMERIC(8, 2) DEFAULT 0,
     event_count                 INTEGER NOT NULL DEFAULT 0,
-    tool_count                  INTEGER NOT NULL DEFAULT 0,
-    total_tokens                BIGINT NOT NULL DEFAULT 0,
-    total_cost_usd              NUMERIC(10, 4) NOT NULL DEFAULT 0,
+    tool_count                  INTEGER,
+    total_tokens                BIGINT,
+    total_cost_usd              NUMERIC(10, 4),
     previous_session_id         VARCHAR(64),
     next_session_id             VARCHAR(64),
     primary_phase               VARCHAR(32),
@@ -194,6 +230,9 @@ CREATE TABLE IF NOT EXISTS dead_letter_entries (
 
 CREATE INDEX IF NOT EXISTS idx_session_events_lookup ON session_events(session_id, timestamp);
 CREATE INDEX IF NOT EXISTS idx_session_events_vendor_model ON session_events(vendor, model);
+CREATE INDEX IF NOT EXISTS idx_session_events_repository ON session_events(session_id, repo_hash, line_number);
+CREATE INDEX IF NOT EXISTS idx_transcript_receipts_stream ON transcript_receipts(session_id, agent_id, line_number);
+CREATE INDEX IF NOT EXISTS idx_session_repositories_repo ON session_repositories(repo_hash, session_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_repo ON sessions(repo_hash, started_at);
 CREATE INDEX IF NOT EXISTS idx_sessions_owner ON sessions(owner_user_id, started_at);
 CREATE INDEX IF NOT EXISTS idx_sessions_machine ON sessions(machine_id, started_at);

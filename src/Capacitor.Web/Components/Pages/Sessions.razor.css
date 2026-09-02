@@ -1,0 +1,121 @@
+.sessions-workspace {
+    background: var(--capacitor-bg);
+    display: grid;
+    grid-template-columns: minmax(12.25rem, 15rem) minmax(18rem, 23rem) minmax(0, 1fr);
+    height: calc(100vh - 78px);
+    min-height: 34rem;
+    overflow: hidden;
+}
+
+.sessions-list-pane {
+    background: var(--capacitor-panel);
+    border-right: 1px solid var(--capacitor-border);
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    padding: .9rem .7rem 0;
+}
+
+.sessions-list-pane ::deep .sessions-heading {
+    margin-bottom: .75rem;
+}
+
+.sessions-list-pane ::deep .subdued {
+    color: var(--capacitor-muted);
+    font-size: .72rem;
+    margin-top: .12rem;
+}
+
+.sessions-list-pane ::deep .session-search {
+    align-items: center;
+    margin-bottom: .65rem;
+}
+
+.sessions-list-pane ::deep .search-field {
+    flex: 1 1 0;
+}
+
+.session-list-scroll {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    padding-bottom: .9rem;
+}
+
+.session-card-list {
+    display: grid;
+    gap: .35rem;
+}
+
+.sessions-list-pane ::deep .session-state {
+    margin-top: .5rem;
+}
+
+.sessions-list-pane ::deep .load-more-sessions {
+    margin: .75rem 0 0;
+}
+
+.empty-state {
+    align-items: center;
+    border: 1px dashed var(--capacitor-border);
+    border-radius: .45rem;
+    color: var(--capacitor-muted);
+    display: flex;
+    flex-direction: column;
+    gap: .45rem;
+    padding: 2.5rem .9rem;
+    text-align: center;
+}
+
+.session-detail-pane {
+    min-width: 0;
+    overflow-y: auto;
+}
+
+.session-selection-empty {
+    align-items: center;
+    color: var(--capacitor-muted);
+    display: flex;
+    flex-direction: column;
+    gap: .6rem;
+    justify-content: center;
+    min-height: 100%;
+    padding: 2rem;
+    text-align: center;
+}
+
+@media (max-width: 1050px) {
+    .sessions-workspace {
+        grid-template-columns: minmax(11rem, 13rem) minmax(17rem, 20rem) minmax(0, 1fr);
+    }
+}
+
+@media (max-width: 850px) {
+    .sessions-workspace {
+        grid-template-columns: minmax(10rem, 13rem) minmax(0, 1fr);
+        height: auto;
+        min-height: calc(100vh - 78px);
+        overflow: visible;
+    }
+
+    .session-detail-pane {
+        grid-column: 1 / -1;
+        min-height: 32rem;
+    }
+}
+
+@media (max-width: 600px) {
+    .sessions-workspace {
+        display: block;
+    }
+
+    .sessions-workspace ::deep .sessions-rail {
+        border-bottom: 1px solid var(--capacitor-border);
+        border-right: 0;
+        min-height: auto;
+    }
+
+    .sessions-list-pane {
+        min-height: 30rem;
+    }
+}

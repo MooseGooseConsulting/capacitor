@@ -1,0 +1,126 @@
+@inherits LayoutComponentBase
+@implements IAsyncDisposable
+@inject IJSRuntime JS
+@inject NavigationManager Navigation
+
+<div class="capacitor-console" data-theme="@_theme">
+    <MudLayout Class="capacitor-shell">
+        <MudAppBar Elevation="0" Dense="true" Class="top-shell">
+            <span class="product-wordmark">CAPACITOR</span>
+            <nav class="top-navigation" aria-label="Product navigation">
+                <a href="/sessions" class="top-nav-link top-nav-link-active">Sessions</a>
+                <span class="top-nav-link top-nav-unavailable" title="Agent inventory is not available from the persisted Sessions API.">Agents</span>
+                <span class="top-nav-link top-nav-unavailable" title="Insights are not available from the persisted Sessions API.">Insights</span>
+                <span class="top-nav-link top-nav-unavailable" title="Flows are not available from the persisted Sessions API.">Flows</span>
+                <span class="top-nav-link top-nav-unavailable" title="Work items are not available from the persisted Sessions API.">Work items</span>
+            </nav>
+            <MudSpacer />
+            <details class="global-search-menu" open="@_globalSearchOpen">
+                <summary @onclick="ToggleGlobalSearch" @onclick:preventDefault="true">Search <kbd>Ctrl K</kbd></summary>
+                <div class="global-search-popover">
+                    <strong>Search Sessions</strong>
+                    <form class="global-search-form" @onsubmit="SubmitGlobalSearchAsync" @onsubmit:preventDefault="true">
+                        <input id="capacitor-global-search" @bind="_globalSearchQuery" placeholder="Search titles and transcript content" aria-label="Search persisted sessions" />
+                        <button type="submit">Search</button>
+                    </form>
+                    <span>Searches the persisted Sessions title and transcript index.</span>
+                    <span>Other product areas are unavailable.</span>
+                </div>
+            </details>
+            <MudIconButton Icon="@Icons.Material.Filled.DarkMode" OnClick="ToggleTheme" aria-label="@ThemeToggleLabel" title="@ThemeToggleLabel" Class="shell-icon-button" />
+            <span class="shell-utility" title="Help is not available from the persisted Sessions API." aria-label="Help unavailable">?</span>
+            <span class="shell-account" title="No signed-in viewer is provided by the persisted Sessions API." aria-label="Account unavailable">Account</span>
+        </MudAppBar>
+        <div class="console-trial-notice" role="status">
+            <strong>Trial status unavailable</strong>
+            <span>The persisted Sessions API does not report workspace trial or setup state.</span>
+        </div>
+        <MudMainContent Class="shell-main">
+            @Body
+        </MudMainContent>
+    </MudLayout>
+</div>
+
+<div id="blazor-error-ui" data-nosnippet>
+    An unhandled error has occurred.
+    <a href="." class="reload">Reload</a>
+    <span class="dismiss">🗙</span>
+</div>
+
+@code {
+    string _theme = "system";
+    string? _globalSearchQuery;
+    bool _globalSearchOpen;
+    bool _focusGlobalSearch;
+    bool _disposed;
+    IJSObjectReference? _shortcutModule;
+    DotNetObjectReference<MainLayout>? _shortcutReference;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender) {
+        if (_focusGlobalSearch && _shortcutModule is not null) {
+            _focusGlobalSearch = false;
+            await _shortcutModule.InvokeVoidAsync("focus", "capacitor-global-search");
+        }
+
+        if (!firstRender) return;
+
+        _shortcutModule = await JS.InvokeAsync<IJSObjectReference>("import", "/scripts/global-search.js");
+        if (_disposed) {
+            await _shortcutModule.DisposeAsync();
+            _shortcutModule = null;
+            return;
+        }
+
+        _shortcutReference = DotNetObjectReference.Create(this);
+        await _shortcutModule.InvokeVoidAsync("register", _shortcutReference);
+    }
+
+    string ThemeToggleLabel => _theme switch {
+        "system" => "Use dark theme",
+        "dark" => "Use light theme",
+        _ => "Use system theme"
+    };
+
+    void ToggleTheme() {
+        _theme = _theme switch {
+            "system" => "dark",
+            "dark" => "light",
+            _ => "system"
+        };
+    }
+
+    void ToggleGlobalSearch() {
+        _globalSearchOpen = !_globalSearchOpen;
+        _focusGlobalSearch = _globalSearchOpen;
+    }
+
+    [JSInvokable]
+    public Task OpenGlobalSearchAsync() {
+        _globalSearchOpen = true;
+        _focusGlobalSearch = true;
+        return InvokeAsync(StateHasChanged);
+    }
+
+    Task SubmitGlobalSearchAsync() {
+        var query = _globalSearchQuery?.Trim();
+        _globalSearchOpen = false;
+        var destination = string.IsNullOrWhiteSpace(query)
+            ? "/sessions"
+            : "/sessions?query=" + Uri.EscapeDataString(query);
+        Navigation.NavigateTo(destination);
+        return Task.CompletedTask;
+    }
+
+    public async ValueTask DisposeAsync() {
+        _disposed = true;
+        try {
+            if (_shortcutModule is not null) {
+                await _shortcutModule.InvokeVoidAsync("unregister");
+                await _shortcutModule.DisposeAsync();
+            }
+        } catch (JSDisconnectedException) {
+            // The browser can disconnect while the interactive layout is disposed.
+        }
+        _shortcutReference?.Dispose();
+    }
+}

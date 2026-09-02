@@ -1,20 +1,52 @@
 using System.Data;
 using System.Globalization;
 using Microsoft.Data.Sqlite;
+using Capacitor.Server.Ingest;
 
 namespace Capacitor.Server.Analytics;
 
 public class SessionRollupProjector {
-    private readonly SqliteConnection _connection;
+    private readonly SqliteConnection? _connection;
+    private readonly IEventStoreRepository? _eventStore;
+    private readonly ISessionRepository? _sessionRepo;
 
     public SessionRollupProjector(SqliteConnection connection) {
         _connection = connection;
     }
 
-    public async Task ProjectSessionRollupAsync(string sessionId, CancellationToken ct = default) {
-        using var tx = _connection.BeginTransaction(IsolationLevel.Serializable);
+    public SessionRollupProjector(IEventStoreRepository eventStore, ISessionRepository sessionRepo) {
+        _eventStore = eventStore;
+        _sessionRepo = sessionRepo;
+    }
 
-        using var cmd = _connection.CreateCommand();
+    public Task ProjectSessionRollupAsync(string sessionId, CancellationToken ct = default) =>
+        _connection is not null
+            ? ProjectSqliteAsync(sessionId, ct)
+            : ProjectViaStoreAsync(sessionId, ct);
+
+    private async Task ProjectViaStoreAsync(string sessionId, CancellationToken ct) {
+        var existing = await _sessionRepo!.GetSessionAsync(sessionId, ct);
+        if (existing == null) return;
+
+        var aggregate = await _eventStore!.GetRollupAggregateAsync(sessionId, ct);
+        if (aggregate is not { } rollup) return;
+
+        await _sessionRepo.UpdateRollupAsync(
+            sessionId,
+            rollup.EventCount,
+            rollup.ToolCount,
+            rollup.TotalTokens,
+            rollup.TotalCostUsd,
+            rollup.DurationMin,
+            rollup.LastEventAt,
+            ct);
+    }
+
+    private async Task ProjectSqliteAsync(string sessionId, CancellationToken ct) {
+        var connection = _connection!;
+        using var tx = connection.BeginTransaction(IsolationLevel.Serializable);
+
+        using var cmd = connection.CreateCommand();
         cmd.Transaction = tx;
         cmd.CommandText = @"
             SELECT timestamp, tool_name,
@@ -26,8 +58,8 @@ public class SessionRollupProjector {
 
         long eventCount = 0;
         long toolCount = 0;
-        long totalTokens = 0;
-        decimal totalCost = 0m;
+        long? totalTokens = null;
+        decimal? totalCost = null;
         DateTimeOffset? first = null;
         DateTimeOffset? last = null;
 
@@ -38,9 +70,15 @@ public class SessionRollupProjector {
                     toolCount++;
                 }
 
-                totalTokens += reader.GetInt64(2) + reader.GetInt64(3)
-                    + reader.GetInt64(4) + reader.GetInt64(5);
-                totalCost += reader.GetDecimal(6);
+                if (!reader.IsDBNull(2) || !reader.IsDBNull(3)
+                    || !reader.IsDBNull(4) || !reader.IsDBNull(5)) {
+                    totalTokens = (totalTokens ?? 0)
+                        + (reader.IsDBNull(2) ? 0 : reader.GetInt64(2))
+                        + (reader.IsDBNull(3) ? 0 : reader.GetInt64(3))
+                        + (reader.IsDBNull(4) ? 0 : reader.GetInt64(4))
+                        + (reader.IsDBNull(5) ? 0 : reader.GetInt64(5));
+                }
+                if (!reader.IsDBNull(6)) totalCost = (totalCost ?? 0m) + reader.GetDecimal(6);
 
                 var ts = DateTimeOffset.Parse(reader.GetString(0), CultureInfo.InvariantCulture);
                 if (first is null || ts < first) {
@@ -58,7 +96,7 @@ public class SessionRollupProjector {
             durationMin = (decimal)Math.Round((last.Value - first.Value).TotalMinutes, 2);
         }
 
-        using var update = _connection.CreateCommand();
+        using var update = connection.CreateCommand();
         update.Transaction = tx;
         // Only rollup columns, and only if this snapshot is at least as complete
         // as whatever already landed — a delayed projector must not clobber a
@@ -75,9 +113,9 @@ public class SessionRollupProjector {
               AND event_count <= $event_count;";
         update.Parameters.AddWithValue("$session_id", sessionId);
         update.Parameters.AddWithValue("$event_count", SaturateToInt(eventCount));
-        update.Parameters.AddWithValue("$tool_count", SaturateToInt(toolCount));
-        update.Parameters.AddWithValue("$total_tokens", totalTokens);
-        update.Parameters.AddWithValue("$total_cost_usd", totalCost);
+        update.Parameters.AddWithValue("$tool_count", eventCount == 0 ? DBNull.Value : SaturateToInt(toolCount));
+        update.Parameters.AddWithValue("$total_tokens", (object?)totalTokens ?? DBNull.Value);
+        update.Parameters.AddWithValue("$total_cost_usd", (object?)totalCost ?? DBNull.Value);
         update.Parameters.AddWithValue("$duration_min", durationMin);
         update.Parameters.AddWithValue(
             "$last_event_at",
@@ -92,7 +130,7 @@ public class SessionRollupProjector {
 }
 
 public class SqliteAnalyticsService {
-    private const int DefaultMaxRows = 1000;
+    public const int DefaultMaxRows = 1000;
 
     // Every view that ExecuteGovernedQueryAsync is allowed to read from. Keep in
     // sync with 002_analytics_views.sql -- anything not in here (raw tables like
