@@ -1,0 +1,90 @@
+@page "/"
+@page "/sessions"
+@inject ICapacitorSessionsClient SessionsClient
+
+<PageTitle>Sessions · Capacitor</PageTitle>
+
+<div class="sessions-surface">
+    <SessionsRail Sessions="_sessions" SelectedRepository="_repository" OnRepositoryChanged="SelectRepositoryAsync" />
+
+    <main class="sessions-list" aria-live="polite">
+        <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="sessions-heading">
+            <div>
+                <MudText Typo="Typo.h4">Sessions</MudText>
+                @if (_result is { } result) {
+                    <MudText Typo="Typo.body2" Class="subdued">@result.Total.ToString("N0") persisted session@(result.Total == 1 ? string.Empty : "s")</MudText>
+                }
+            </div>
+            <MudButton Variant="Variant.Outlined" OnClick="LoadAsync" StartIcon="@Icons.Material.Filled.Refresh">Refresh</MudButton>
+        </MudStack>
+
+        <MudStack Row="true" Wrap="Wrap.Wrap" Spacing="1" Class="session-search">
+            <MudTextField @bind-Value="_query" Placeholder="Search titles and transcript content" Variant="Variant.Outlined"
+                          Immediate="true" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+                          Class="search-field" />
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SearchAsync">Search</MudButton>
+            @if (!string.IsNullOrWhiteSpace(_repository)) {
+                <MudChip T="string" Color="Color.Primary" OnClose="@(() => ClearRepositoryAsync())">@_repository</MudChip>
+            }
+        </MudStack>
+
+        @if (_isLoading) {
+            <MudStack Spacing="2" Class="session-state">
+                @for (var i = 0; i < 4; i++) {
+                    <MudSkeleton SkeletonType="SkeletonType.Rectangle" Height="142px" />
+                }
+            </MudStack>
+        } else if (_failure is { } failure) {
+            <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Class="session-state">
+                <MudText Typo="Typo.subtitle2">Sessions are not available from the API.</MudText>
+                <MudText Typo="Typo.body2">@failure.Message</MudText>
+                <MudButton Variant="Variant.Text" Color="Color.Primary" OnClick="LoadAsync">Try again</MudButton>
+            </MudAlert>
+        } else if (_result is { Sessions.Count: 0 }) {
+            <MudPaper Outlined="true" Class="empty-state session-state">
+                <MudIcon Icon="@Icons.Material.Filled.Inbox" Size="Size.Large" />
+                <MudText Typo="Typo.h6">No persisted sessions match this view.</MudText>
+                <MudText Typo="Typo.body2">Import or capture transcripts through the API, then refresh this list.</MudText>
+            </MudPaper>
+        } else if (_result is { } result) {
+            <MudStack Spacing="1">
+                @foreach (var session in result.Sessions) {
+                    <SessionCard Session="session" />
+                }
+            </MudStack>
+        }
+    </main>
+</div>
+
+@code {
+    SessionSearchResponse? _result;
+    ApiFailure? _failure;
+    bool _isLoading = true;
+    string? _query;
+    string? _repository;
+
+    IReadOnlyList<SessionSummary> _sessions => _result?.Sessions ?? [];
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    async Task SearchAsync() => await LoadAsync();
+
+    async Task SelectRepositoryAsync(string? repository) {
+        _repository = repository;
+        await LoadAsync();
+    }
+
+    async Task ClearRepositoryAsync() {
+        _repository = null;
+        await LoadAsync();
+    }
+
+    async Task LoadAsync() {
+        _isLoading = true;
+        _failure = null;
+        var response = await SessionsClient.SearchAsync(new SessionSearchRequest(Query: _query, Repository: _repository));
+        _isLoading = false;
+        _result = response.Value;
+        _failure = response.Failure;
+    }
+}

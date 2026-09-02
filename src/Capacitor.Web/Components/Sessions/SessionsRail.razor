@@ -1,0 +1,70 @@
+@namespace Capacitor.Web.Components.Sessions
+
+<aside class="sessions-rail" aria-label="Session repositories">
+    <MudText Typo="Typo.overline" Class="rail-label">Sessions</MudText>
+    <MudStack Spacing="0" Class="rail-links">
+        <MudButton Variant="Variant.Text" FullWidth="true" OnClick="@(() => OnRepositoryChanged.InvokeAsync(null))"
+                   Class="@RailClass(null)" StartIcon="@Icons.Material.Filled.GridView">
+            All
+        </MudButton>
+    </MudStack>
+
+    <MudDivider Class="rail-divider" />
+    <MudText Typo="Typo.overline" Class="rail-label">My projects</MudText>
+    @if (MyProjects.Count == 0) {
+        <MudText Typo="Typo.caption" Class="rail-empty">No project sessions returned.</MudText>
+    } else {
+        @foreach (var repository in MyProjects) {
+            <MudButton Variant="Variant.Text" FullWidth="true" OnClick="@(() => OnRepositoryChanged.InvokeAsync(repository))"
+                       Class="@RailClass(repository)" StartIcon="@Icons.Material.Filled.Folder">
+                @repository
+            </MudButton>
+        }
+    }
+
+    <MudDivider Class="rail-divider" />
+    <MudText Typo="Typo.overline" Class="rail-label">Other repos</MudText>
+    @if (OtherRepositories.Count == 0) {
+        <MudText Typo="Typo.caption" Class="rail-empty">No other repository sessions returned.</MudText>
+    } else {
+        @foreach (var owner in OtherRepositories.Keys.OrderBy(x => x, StringComparer.OrdinalIgnoreCase)) {
+            <MudText Typo="Typo.caption" Class="owner-label">@owner</MudText>
+            @foreach (var repository in OtherRepositories[owner]) {
+                <MudButton Variant="Variant.Text" FullWidth="true" OnClick="@(() => OnRepositoryChanged.InvokeAsync(repository))"
+                           Class="@RailClass(repository)" StartIcon="@Icons.Material.Filled.Folder">
+                    @repository
+                </MudButton>
+            }
+        }
+    }
+</aside>
+
+@code {
+    [Parameter, EditorRequired]
+    public IReadOnlyList<SessionSummary> Sessions { get; set; } = [];
+
+    [Parameter]
+    public string? SelectedRepository { get; set; }
+
+    [Parameter]
+    public EventCallback<string?> OnRepositoryChanged { get; set; }
+
+    IReadOnlyList<string> MyProjects => Sessions
+        .Where(x => !string.IsNullOrWhiteSpace(x.RepoName) && !string.IsNullOrWhiteSpace(x.OwnerUserId) && string.Equals(x.RepoOwner, x.OwnerUserId, StringComparison.OrdinalIgnoreCase))
+        .Select(x => x.Repository)
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+        .ToArray();
+
+    IReadOnlyDictionary<string, IReadOnlyList<string>> OtherRepositories => Sessions
+        .Where(x => !string.IsNullOrWhiteSpace(x.RepoOwner) && !MyProjects.Contains(x.Repository, StringComparer.OrdinalIgnoreCase))
+        .GroupBy(x => x.RepoOwner!, StringComparer.OrdinalIgnoreCase)
+        .ToDictionary(
+            x => x.Key,
+            x => (IReadOnlyList<string>)x.Select(y => y.Repository).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(y => y, StringComparer.OrdinalIgnoreCase).ToArray(),
+            StringComparer.OrdinalIgnoreCase);
+
+    string RailClass(string? repository) => string.Equals(SelectedRepository, repository, StringComparison.OrdinalIgnoreCase)
+        ? "rail-link rail-link-selected"
+        : "rail-link";
+}

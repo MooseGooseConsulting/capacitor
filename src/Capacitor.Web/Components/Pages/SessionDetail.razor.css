@@ -1,0 +1,87 @@
+.session-detail-page {
+    margin: 0 auto;
+    max-width: 1180px;
+    padding: 2rem clamp(1.25rem, 4vw, 3.5rem) 3rem;
+}
+
+.detail-state {
+    margin-top: 1rem;
+}
+
+.session-detail-header {
+    margin-bottom: 1.5rem;
+}
+
+.detail-identifiers {
+    align-items: center;
+    color: #647084;
+    margin-top: .8rem;
+}
+
+.session-tabs {
+    background: transparent;
+}
+
+.detail-panel {
+    background: #fff;
+    border-color: #e1e6ed;
+    padding: 1.25rem;
+}
+
+.detail-copy {
+    color: #4e5a6e;
+    line-height: 1.6;
+    margin-top: .8rem;
+}
+
+.rollup-grid {
+    margin-top: .8rem;
+}
+
+.transcript-entry, .trace-entry {
+    background: #fff;
+    border-color: #e1e6ed;
+    padding: 1rem 1.1rem;
+}
+
+.transcript-content {
+    line-height: 1.6;
+    margin: .8rem 0;
+    white-space: pre-wrap;
+}
+
+.event-accounting {
+    color: #7b8595;
+    display: block;
+    line-height: 1.4;
+}
+
+.events-list {
+    background: #fff;
+    border: 1px solid #e1e6ed;
+}
+
+.pre-wrap {
+    white-space: pre-wrap;
+}
+
+.payload-label {
+    color: #7a8493;
+    font-weight: 750;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+}
+
+.event-payload {
+    background: #f4f6f9;
+    border: 1px solid #e4e8ee;
+    border-radius: 6px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: .78rem;
+    margin: 0;
+    max-height: 24rem;
+    overflow: auto;
+    padding: .75rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+}

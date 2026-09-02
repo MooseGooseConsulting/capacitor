@@ -1,0 +1,75 @@
+.capacitor-shell {
+    min-height: 100vh;
+    background: #f7f8fa;
+}
+
+.top-shell {
+    border-bottom: 1px solid #e5e7eb;
+    background: rgba(255, 255, 255, .96);
+    color: #172033;
+    padding: 0 1.25rem;
+}
+
+.product-wordmark {
+    font-size: .86rem;
+    font-weight: 760;
+    letter-spacing: .13em;
+    margin-right: 1.75rem;
+}
+
+.top-navigation {
+    align-items: center;
+}
+
+    .top-navigation ::deep .mud-button-root {
+        color: #596274;
+        font-size: .78rem;
+        font-weight: 700;
+        letter-spacing: .04em;
+        min-width: auto;
+        padding-inline: .5rem;
+    }
+
+    .top-navigation ::deep .mud-button-root:disabled {
+        color: #9aa3b1;
+    }
+
+.shell-status {
+    color: #6a7382;
+    white-space: nowrap;
+}
+
+.shell-main {
+    padding-top: 48px;
+}
+
+@media (max-width: 780px) {
+    .top-navigation {
+        display: none;
+    }
+
+    .shell-status {
+        display: none;
+    }
+}
+
+#blazor-error-ui {
+    color-scheme: light only;
+    background: lightyellow;
+    bottom: 0;
+    box-shadow: 0 -1px 2px rgba(0, 0, 0, 0.2);
+    box-sizing: border-box;
+    display: none;
+    left: 0;
+    padding: 0.6rem 1.25rem 0.7rem 1.25rem;
+    position: fixed;
+    width: 100%;
+    z-index: 1000;
+}
+
+    #blazor-error-ui .dismiss {
+        cursor: pointer;
+        position: absolute;
+        right: 0.75rem;
+        top: 0.5rem;
+    }
