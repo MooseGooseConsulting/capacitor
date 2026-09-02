@@ -95,13 +95,16 @@ spec:
                 await page.locator(`a.session-card-link[href="/sessions/${sessionId}"]`).click();
                 await page.waitForURL(new RegExp(`/sessions/${sessionId}`), { timeout: 30000 });
 
+                await page.goto(`${process.env.WEB_URL}/sessions/${sessionId}?tab=overview`, { waitUntil: 'domcontentloaded' });
+                await page.getByRole('tab', { name: 'Overview', exact: true }).waitFor({ state: 'visible', timeout: 30000 });
+
                 for (const [label, route] of [
-                  ['Overview', 'overview'],
                   ['Transcript', 'transcript'],
                   ['Events', 'events'],
                   ['Trace', 'trace'],
                   ['Evaluation', 'evaluation'],
                   ['Details', 'details'],
+                  ['Overview', 'overview'],
                 ]) {
                   const tab = page.getByRole('tab', { name: label, exact: true });
                   await tab.click();
