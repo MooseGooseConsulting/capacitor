@@ -67,10 +67,12 @@ drains when a new hook process happens to run can strand those records.
 
 ## Vendor model
 
-The inherited client knows these capture families: Claude Code, Codex, Cursor,
-Copilot, Gemini, Kiro, Kimi, Pi, OpenCode, and Antigravity. Their on-disk
-formats and live-hook affordances vary materially; the catalog must not be
-used as a compatibility guarantee.
+Observed data and the target inventory cover these capture families: Claude
+Code, Codex, Cursor, Copilot, Gemini, Kiro, Kimi, Pi, OpenCode, and
+Antigravity. The checked-in inherited importer registry omits Kimi; its
+importer is documented as recovery work to port from another repository branch.
+Their on-disk formats and live-hook affordances vary materially; the catalog
+must not be used as a compatibility guarantee.
 
 Current server-library source includes normalizers for Claude, an ACP-oriented
 set of dialects, and Antigravity. PostgreSQL/API integration work also includes

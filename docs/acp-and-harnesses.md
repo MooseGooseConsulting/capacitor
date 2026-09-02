@@ -25,7 +25,7 @@ The current backend recovery work is not evidence that the whole fleet-hosting p
 
 ## Harness inventory
 
-The inherited client recognizes ten historical import sources: Claude, Codex, Cursor, Copilot, Gemini, Kiro, Kimi, Pi, OpenCode, and Antigravity. The historical live-harness catalog contains the same set except Kimi. This is source inventory, **not** a current compatibility guarantee.
+The observed historical surface names ten import sources: Claude, Codex, Cursor, Copilot, Gemini, Kiro, Kimi, Pi, OpenCode, and Antigravity. The checked-in inherited client, however, registers only nine importers: every name in that list except Kimi. [The retained backlog](../reference/BACKLOG.md) identifies a Kimi importer on a different repository branch as work to port; this checkout has neither that importer nor a Kimi live harness. Kimi is therefore a target/backlog source, not inherited implementation. None of the names is a current compatibility guarantee.
 
 | Vendor family | Historical source shape | Requirement for Capacitor |
 | --- | --- | --- |
@@ -35,7 +35,7 @@ The inherited client recognizes ten historical import sources: Claude, Codex, Cu
 | Copilot | Vendor-specific hooks/transport and limited local transcript evidence | Do not infer complete on-disk import from hook support. |
 | Gemini | Vendor-specific JSONL/hook data | ACP capability advertisement needs live lifecycle validation. |
 | Kiro | CLI/OpenCode-derived stores and other surfaces | Treat CLI and editor-extension data as separate formats. |
-| Kimi | Two distinct on-disk layouts | Historic import-only source; no live-harness claim without a new implementation and test. |
+| Kimi | Two distinct on-disk layouts | Target/backlog import source; port the external importer before making an import claim. No live-harness claim without a new implementation and test. |
 | OpenCode | SQLite/Drizzle data model | Import and hosted ACP behavior are separate work. |
 | Pi | Vendor-specific session data | Hosting remains runtime/platform dependent. |
 | Antigravity | Vendor-specific data and RPC-style runtime history | Preserve plural workspace evidence where it exists. |

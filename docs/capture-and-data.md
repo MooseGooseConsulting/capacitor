@@ -91,7 +91,7 @@ The same rule applies to machines. `machine_id` is first-class session metadata,
 
 ## Enrichment and normalizer acceptance
 
-The supported inventory is Claude, Codex, Cursor, Copilot, Gemini, Kiro, Kimi, Pi, OpenCode, and Antigravity. That list states sources worth supporting; it does not grant automatic support to every payload labeled with one of those names.
+The target vendor inventory is Claude, Codex, Cursor, Copilot, Gemini, Kiro, Kimi, Pi, OpenCode, and Antigravity. The checked-in inherited importer registry does not include Kimi; its importer is recovery work to port, not an existing capability. The inventory states sources worth supporting, not a claim that every payload from one of them already works.
 
 A vendor normalizer is accepted only when all of the following are true:
 
