@@ -1,6 +1,6 @@
 @namespace Capacitor.Web.Components.Sessions
 
-<a class="session-card-link" href="@($"/sessions/{Session.SessionId}")">
+<a class="session-card-link" href="@($"/sessions/{Uri.EscapeDataString(Session.SessionId)}")">
     <MudPaper Outlined="true" Class="session-card">
         <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="session-card-heading">
             <span class="status-dot @StatusClass" aria-label="@($"{DisplayStatus} session")"></span>

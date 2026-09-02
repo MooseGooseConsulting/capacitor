@@ -33,6 +33,10 @@
     margin-top: 1rem;
 }
 
+.load-more-sessions {
+    margin-top: 1rem;
+}
+
 .empty-state {
     align-items: center;
     color: #717b8c;
