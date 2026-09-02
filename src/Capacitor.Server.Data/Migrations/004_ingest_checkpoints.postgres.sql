@@ -27,12 +27,12 @@ CREATE TABLE IF NOT EXISTS session_usage_checkpoints (
     session_id                  VARCHAR(64) NOT NULL,
     agent_id                    VARCHAR(64) NOT NULL DEFAULT '',
     vendor                      VARCHAR(32) NOT NULL,
-    input_tokens                BIGINT NOT NULL DEFAULT 0,
-    output_tokens               BIGINT NOT NULL DEFAULT 0,
-    cache_read_tokens           BIGINT NOT NULL DEFAULT 0,
-    cache_write_tokens          BIGINT NOT NULL DEFAULT 0,
+    input_tokens                BIGINT,
+    output_tokens               BIGINT,
+    cache_read_tokens           BIGINT,
+    cache_write_tokens          BIGINT,
     reasoning_tokens            BIGINT,
-    cost_usd                    NUMERIC(10, 6) NOT NULL DEFAULT 0,
+    cost_usd                    NUMERIC(10, 6),
     last_line_number            INTEGER NOT NULL DEFAULT -1,
     PRIMARY KEY (session_id, agent_id, vendor)
 );

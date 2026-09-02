@@ -63,16 +63,16 @@ public class UniversalAcpNormalizer : INormalizer {
     static List<SessionEventRecord> NormalizePiAssistant(string vendor, string sessionId, string? agentId, int lineNumber, string rawLine, DateTimeOffset timestamp, JsonElement message) {
         var model = message.Str("model");
         var usage = message.Obj("usage");
-        var inputTokens = usage?.Num("input") ?? 0;
-        var outputTokens = usage?.Num("output") ?? 0;
+        var inputTokens = usage?.Num("input");
+        var outputTokens = usage?.Num("output");
         var result = new List<SessionEventRecord>();
         var usageAttached = false;
 
         SessionEventRecord Emit(string eventType, string? content = null, string? toolName = null, string? toolInput = null) {
             var record = Frame(vendor, sessionId, agentId, lineNumber, rawLine, timestamp, eventType,
                 content: content, toolName: toolName, toolInput: toolInput, model: model,
-                inputTokens: usageAttached ? 0 : inputTokens,
-                outputTokens: usageAttached ? 0 : outputTokens);
+                inputTokens: usageAttached ? null : inputTokens,
+                outputTokens: usageAttached ? null : outputTokens);
             usageAttached = true;
             return record;
         }
@@ -115,8 +115,8 @@ public class UniversalAcpNormalizer : INormalizer {
             case "gemini": {
                 var model = root.Str("model");
                 var tokens = root.Obj("tokens");
-                var inputTokens = tokens?.Num("input") ?? 0;
-                var outputTokens = tokens?.Num("output") ?? 0;
+                var inputTokens = tokens?.Num("input");
+                var outputTokens = tokens?.Num("output");
                 var result = new List<SessionEventRecord>();
 
                 if (root.Str("content") is { Length: > 0 } content)
@@ -127,8 +127,8 @@ public class UniversalAcpNormalizer : INormalizer {
                     foreach (var call in toolCalls.EnumerateArray())
                         result.Add(Frame(vendor, sessionId, agentId, lineNumber, rawLine, timestamp, "ToolCall",
                             toolName: call.Str("name"), toolInput: call.Obj("args")?.GetRawText(), model: model,
-                            inputTokens: result.Count == 0 ? inputTokens : 0,
-                            outputTokens: result.Count == 0 ? outputTokens : 0));
+                            inputTokens: result.Count == 0 ? inputTokens : null,
+                            outputTokens: result.Count == 0 ? outputTokens : null));
 
                 if (result.Count == 0)
                     result.Add(Frame(vendor, sessionId, agentId, lineNumber, rawLine, timestamp, "AssistantTurn",
@@ -183,7 +183,7 @@ public class UniversalAcpNormalizer : INormalizer {
     static SessionEventRecord Frame(
             string vendor, string sessionId, string? agentId, int lineNumber, string rawLine, DateTimeOffset timestamp, string eventType,
             string? model = null, string? content = null, string? toolName = null, string? toolInput = null,
-            string? toolOutput = null, bool isError = false, long inputTokens = 0, long outputTokens = 0) =>
+            string? toolOutput = null, bool isError = false, long? inputTokens = null, long? outputTokens = null) =>
         new SessionEventRecord {
             SessionId = sessionId,
             AgentId = agentId ?? string.Empty,

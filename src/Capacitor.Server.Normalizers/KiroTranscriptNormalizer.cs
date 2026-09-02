@@ -61,14 +61,14 @@ public sealed class KiroTranscriptNormalizer : INormalizer {
             return Frame(sessionId, agentId, lineNumber, rawLine, timestamp, eventType,
                 eventId: eventId, itemId: itemId, model: usage.Model, content: content,
                 toolName: toolName, toolInput: toolInput, toolOutput: toolOutput, toolExitCode: toolExitCode,
-                isError: isError, inputTokens: attachUsage ? usage.InputTokens : 0,
-                outputTokens: attachUsage ? usage.OutputTokens : 0,
-                cacheReadTokens: attachUsage ? usage.CacheReadTokens : 0,
-                cacheWriteTokens: attachUsage ? usage.CacheWriteTokens : 0,
+                isError: isError, inputTokens: attachUsage ? usage.InputTokens : null,
+                outputTokens: attachUsage ? usage.OutputTokens : null,
+                cacheReadTokens: attachUsage ? usage.CacheReadTokens : null,
+                cacheWriteTokens: attachUsage ? usage.CacheWriteTokens : null,
                 reasoningTokens: attachUsage ? usage.ReasoningTokens : null,
                 contextUsedTokens: attachUsage ? usage.ContextUsedTokens : null,
                 contextWindowTokens: attachUsage ? usage.ContextWindowTokens : null,
-                costUsd: attachUsage ? usage.CostUsd : 0m);
+                costUsd: attachUsage ? usage.CostUsd : null);
         }
 
         if (data.Arr("content") is { } blocks) {
@@ -137,10 +137,10 @@ public sealed class KiroTranscriptNormalizer : INormalizer {
         var source = usage ?? data;
 
         return new Usage(
-            source.Num("input_token_count") ?? source.Num("input_tokens") ?? 0,
-            source.Num("output_token_count") ?? source.Num("output_tokens") ?? 0,
-            source.Num("cache_read_tokens") ?? 0,
-            source.Num("cache_write_tokens") ?? 0,
+            source.Num("input_token_count") ?? source.Num("input_tokens"),
+            source.Num("output_token_count") ?? source.Num("output_tokens"),
+            source.Num("cache_read_tokens"),
+            source.Num("cache_write_tokens"),
             source.Num("reasoning_tokens"),
             source.Num("context_used_tokens"),
             source.Num("context_window_tokens"),
@@ -205,10 +205,10 @@ public sealed class KiroTranscriptNormalizer : INormalizer {
             : item.IsString ? item.GetString() : item.GetRawText();
     }
 
-    static decimal Decimal(JsonElement value, string property) =>
+    static decimal? Decimal(JsonElement value, string property) =>
         value.Prop(property) is { } number && number.ValueKind == JsonValueKind.Number && number.TryGetDecimal(out var result)
             ? result
-            : 0m;
+            : null;
 
     static int? ToInt(long? value) =>
         value is { } number && number >= int.MinValue && number <= int.MaxValue ? (int)number : null;
@@ -217,9 +217,9 @@ public sealed class KiroTranscriptNormalizer : INormalizer {
         string sessionId, string? agentId, int lineNumber, string rawLine, DateTimeOffset timestamp, string eventType,
         string? eventId = null, string? itemId = null, string? model = null, string? content = null,
         string? toolName = null, string? toolInput = null, string? toolOutput = null, int? toolExitCode = null,
-        bool isError = false, long inputTokens = 0, long outputTokens = 0, long cacheReadTokens = 0,
-        long cacheWriteTokens = 0, long? reasoningTokens = null, long? contextUsedTokens = null,
-        long? contextWindowTokens = null, decimal costUsd = 0m) =>
+        bool isError = false, long? inputTokens = null, long? outputTokens = null, long? cacheReadTokens = null,
+        long? cacheWriteTokens = null, long? reasoningTokens = null, long? contextUsedTokens = null,
+        long? contextWindowTokens = null, decimal? costUsd = null) =>
         new() {
             SessionId = sessionId,
             AgentId = agentId ?? string.Empty,
@@ -248,13 +248,13 @@ public sealed class KiroTranscriptNormalizer : INormalizer {
         };
 
     readonly record struct Usage(
-        long InputTokens,
-        long OutputTokens,
-        long CacheReadTokens,
-        long CacheWriteTokens,
+        long? InputTokens,
+        long? OutputTokens,
+        long? CacheReadTokens,
+        long? CacheWriteTokens,
         long? ReasoningTokens,
         long? ContextUsedTokens,
         long? ContextWindowTokens,
         string? Model,
-        decimal CostUsd);
+        decimal? CostUsd);
 }

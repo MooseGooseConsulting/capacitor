@@ -35,16 +35,16 @@ public record SessionEventRecord {
     public required DateTimeOffset Timestamp { get; init; }
 
     [JsonPropertyName("input_tokens")]
-    public long InputTokens { get; init; }
+    public long? InputTokens { get; init; }
 
     [JsonPropertyName("output_tokens")]
-    public long OutputTokens { get; init; }
+    public long? OutputTokens { get; init; }
 
     [JsonPropertyName("cache_read_tokens")]
-    public long CacheReadTokens { get; init; }
+    public long? CacheReadTokens { get; init; }
 
     [JsonPropertyName("cache_write_tokens")]
-    public long CacheWriteTokens { get; init; }
+    public long? CacheWriteTokens { get; init; }
 
     [JsonPropertyName("reasoning_tokens")]
     public long? ReasoningTokens { get; init; }
@@ -56,7 +56,7 @@ public record SessionEventRecord {
     public long? ContextWindowTokens { get; init; }
 
     [JsonPropertyName("cost_usd")]
-    public decimal CostUsd { get; init; }
+    public decimal? CostUsd { get; init; }
 
     [JsonPropertyName("item_id")]
     public string? ItemId { get; init; }

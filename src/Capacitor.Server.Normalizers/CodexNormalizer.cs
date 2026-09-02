@@ -85,12 +85,12 @@ public sealed class CodexNormalizer : INormalizer {
             usageAttached = true;
             return Frame(sessionId, agentId, lineNumber, rawLine, timestamp, type,
                 eventId: eventId, itemId: itemId, model: model, content: content,
-                inputTokens: attachUsage ? usage.InputTokens : 0,
-                outputTokens: attachUsage ? usage.OutputTokens : 0,
-                cacheReadTokens: attachUsage ? usage.CacheReadTokens : 0,
-                cacheWriteTokens: attachUsage ? usage.CacheWriteTokens : 0,
+                inputTokens: attachUsage ? usage.InputTokens : null,
+                outputTokens: attachUsage ? usage.OutputTokens : null,
+                cacheReadTokens: attachUsage ? usage.CacheReadTokens : null,
+                cacheWriteTokens: attachUsage ? usage.CacheWriteTokens : null,
                 reasoningTokens: attachUsage ? usage.ReasoningTokens : null,
-                costUsd: attachUsage ? usage.CostUsd : 0m);
+                costUsd: attachUsage ? usage.CostUsd : null);
         }
 
         if (payload.Arr("content") is { } blocks) {
@@ -131,12 +131,12 @@ public sealed class CodexNormalizer : INormalizer {
             usageAttached = true;
             return Frame(sessionId, agentId, lineNumber, rawLine, timestamp, "AssistantThinking",
                 eventId: eventId, itemId: itemId, model: model, content: content,
-                inputTokens: attachUsage ? usage.InputTokens : 0,
-                outputTokens: attachUsage ? usage.OutputTokens : 0,
-                cacheReadTokens: attachUsage ? usage.CacheReadTokens : 0,
-                cacheWriteTokens: attachUsage ? usage.CacheWriteTokens : 0,
+                inputTokens: attachUsage ? usage.InputTokens : null,
+                outputTokens: attachUsage ? usage.OutputTokens : null,
+                cacheReadTokens: attachUsage ? usage.CacheReadTokens : null,
+                cacheWriteTokens: attachUsage ? usage.CacheWriteTokens : null,
                 reasoningTokens: attachUsage ? usage.ReasoningTokens : null,
-                costUsd: attachUsage ? usage.CostUsd : 0m);
+                costUsd: attachUsage ? usage.CostUsd : null);
         }
 
         if (payload.Arr("summary") is { } summary) {
@@ -181,10 +181,10 @@ public sealed class CodexNormalizer : INormalizer {
     static Usage ReadUsage(JsonElement? usage) {
         if (usage is not { } value) return default;
         return new Usage(
-            value.Num("input_tokens") ?? 0,
-            value.Num("output_tokens") ?? 0,
-            value.Num("cached_input_tokens") ?? value.Num("cache_read_input_tokens") ?? 0,
-            value.Num("cache_write_input_tokens") ?? value.Num("cache_creation_input_tokens") ?? 0,
+            value.Num("input_tokens"),
+            value.Num("output_tokens"),
+            value.Num("cached_input_tokens") ?? value.Num("cache_read_input_tokens"),
+            value.Num("cache_write_input_tokens") ?? value.Num("cache_creation_input_tokens"),
             value.Num("reasoning_output_tokens") ?? value.Num("reasoning_tokens"),
             Decimal(value, "cost_usd"));
     }
@@ -206,10 +206,10 @@ public sealed class CodexNormalizer : INormalizer {
             : item.IsString ? item.GetString() : item.GetRawText();
     }
 
-    static decimal Decimal(JsonElement value, string property) =>
+    static decimal? Decimal(JsonElement value, string property) =>
         value.Prop(property) is { } number && number.ValueKind == JsonValueKind.Number && number.TryGetDecimal(out var result)
             ? result
-            : 0m;
+            : null;
 
     static int? ToInt(long? value) =>
         value is { } number && number >= int.MinValue && number <= int.MaxValue ? (int)number : null;
@@ -218,8 +218,8 @@ public sealed class CodexNormalizer : INormalizer {
         string sessionId, string? agentId, int lineNumber, string rawLine, DateTimeOffset timestamp, string eventType,
         string? eventId = null, string? itemId = null, string? model = null, string? content = null,
         string? toolName = null, string? toolInput = null, string? toolOutput = null, int? toolExitCode = null,
-        bool isError = false, long inputTokens = 0, long outputTokens = 0, long cacheReadTokens = 0,
-        long cacheWriteTokens = 0, long? reasoningTokens = null, decimal costUsd = 0m) =>
+        bool isError = false, long? inputTokens = null, long? outputTokens = null, long? cacheReadTokens = null,
+        long? cacheWriteTokens = null, long? reasoningTokens = null, decimal? costUsd = null) =>
         new() {
             SessionId = sessionId,
             AgentId = agentId ?? string.Empty,
@@ -246,10 +246,10 @@ public sealed class CodexNormalizer : INormalizer {
         };
 
     readonly record struct Usage(
-        long InputTokens,
-        long OutputTokens,
-        long CacheReadTokens,
-        long CacheWriteTokens,
+        long? InputTokens,
+        long? OutputTokens,
+        long? CacheReadTokens,
+        long? CacheWriteTokens,
         long? ReasoningTokens,
-        decimal CostUsd);
+        decimal? CostUsd);
 }
