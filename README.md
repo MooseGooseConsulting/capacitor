@@ -58,15 +58,13 @@ A recovery branch, an unmerged pull request, a local stub, or a test database is
 evidence of work in progress. None defines the target product or proves that the
 standalone system exists.
 
-## Present boundary
+## Deployment boundary
 
-As of a read-only Blood Arrow Kubernetes inventory on 2026-09-02, context
-`k3d-cnpg-recovery` has Capacitor-named test jobs but no Capacitor Deployment,
-Service, or Ingress. There is therefore no deployed Capacitor API or web console and
-no production Capacitor service to call. The Blood Arrow PostgreSQL target is an
-isolated recovery/test database (`capacitor_test`), not a production deployment. A
-real import through that target and a browser rendering of the resulting session are
-required before claiming a data-to-console slice works.
+No branch, pull request, fixture, or test database establishes a deployed Capacitor
+API or web console. Before making a present-tense deployment claim, take a fresh
+read-only Blood Arrow inventory and verify a real import plus browser render against
+the target. The selected PostgreSQL target for that remote acceptance is the isolated
+recovery/test database `capacitor_test`, not a production deployment.
 
 The inherited client remains important: discovery, spooling, hooks, watchers,
 daemon behavior, and the wire payloads are source constraints to preserve while the

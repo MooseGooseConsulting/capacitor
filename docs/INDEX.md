@@ -32,27 +32,27 @@ separate milestone.
 
 ## Corpus inventory
 
-Counts below describe the 209 Markdown files at `origin/main` before this index and
-the session contract were added. A directory-level entry covers every Markdown file
-below that path unless individual files are called out; hidden repository directories
-are included.
+This directory map covers the complete pre-existing Markdown corpus, including hidden
+repository directories. A directory-level entry covers every Markdown file below that
+path unless individual files are called out. Re-inventory the repository when the
+corpus changes rather than treating a historical count as an authority claim.
 
-| Location | Existing files | What it contains | How to use it |
-|---|---:|---|---|
-| repository root | 6 | Brief, inherited client guidance, license/provenance, release notes | `PROMPT.md` is the standalone brief. `CLAUDE.md` preserves client invariants. `LICENSE.md` and `NOTICE.md` bind. `RELEASING.md` is inherited release process, not a deployment decision. |
-| `.github/` | 1 | Pull-request authoring template | Contribution-format guidance, not product or delivery authority. |
-| `.sdd/` | 11 | Delegated ACP implementation briefs and completion reports | Historical work artifacts for the inherited daemon and a separate server worktree. They neither establish a standalone backend nor define the web console. |
-| `reference/` | 8 | Product evidence, measured corrections, and the retained eval boundary | Primary product material. `FLEET.md` wins conflicts. `SURFACE.md` and its assets define the observed console. `CROSS-REPO-SESSIONS.md` and `REPEATING-CALLBACK-AUDIT.md` are measurements, not proposals. |
-| `reference/ui-assets/` | 3 Markdown files plus visual assets | Captured console tokens, component CSS, icon mapping, and 14 screenshots | Visual acceptance evidence. Do not substitute default MudBlazor styling or invent a different layout without recording a deliberate divergence. |
-| `docs/` | 8 | ACP/harness findings, historical design and change rationale | Useful source-specific constraints and evidence. They do not define the standalone web product. |
-| `docs/eval/` | 1 | Legacy evaluation acceptance harness material | Read alongside `reference/EVAL-DIRECTION.md`; the capability stays while inherited taxonomy may change. |
-| `docs/probes/` | 9 | Measured vendor and protocol probes | Each file is authoritative only for the fact its probe established. Preserve dates, conditions, and limits when relying on it. |
-| `docs/schema/` | 3 | Candidate wire, canonical-schema, and analytics-view designs | Derived design. It must be reconciled with the surface contract and measured reference findings before a migration or endpoint is written. |
-| `docs/superpowers/specs/` | 78 | Issue-specific inherited CLI, daemon, desktop, and harness designs | Implementation constraints for the named inherited area. They are not requirements for the Blazor web console. |
-| `docs/superpowers/plans/` | 68 | Historical implementation plans paired with the inherited specs | History and rationale; never substitute an old plan for a current product decision. |
-| `kcap/` | 11 | Shipped vendor plugin and skill documentation | Client behavior and operational reference. |
-| `npm/kcap/` | 1 | Inherited npm package guide | Packaging reference; it does not decide fleet distribution. |
-| `scripts/cursor-hook-probe/` | 1 | One-off probe guide | Operational reference for that probe only. |
+| Location | What it contains | How to use it |
+|---|---|---|
+| repository root | Brief, inherited client guidance, license/provenance, release notes | `PROMPT.md` is the standalone brief. `CLAUDE.md` preserves client invariants. `LICENSE.md` and `NOTICE.md` bind. `RELEASING.md` is inherited release process, not a deployment decision. |
+| `.github/` | Pull-request authoring template | Contribution-format guidance, not product or delivery authority. |
+| `.sdd/` | Delegated ACP implementation briefs and completion reports | Historical work artifacts for the inherited daemon and a separate server worktree. They neither establish a standalone backend nor define the web console. |
+| `reference/` | Product evidence, measured corrections, and the retained eval boundary | Primary product material. `FLEET.md` wins conflicts. `SURFACE.md` and its assets define the observed console. `CROSS-REPO-SESSIONS.md` and `REPEATING-CALLBACK-AUDIT.md` are measurements, not proposals. |
+| `reference/ui-assets/` | Captured console tokens, component CSS, icon mapping, and screenshots | Visual acceptance evidence. Do not substitute default MudBlazor styling or invent a different layout without recording a deliberate divergence. |
+| `docs/` | ACP/harness findings, historical design and change rationale | Useful source-specific constraints and evidence. They do not define the standalone web product. |
+| `docs/eval/` | Legacy evaluation acceptance harness material | Read alongside `reference/EVAL-DIRECTION.md`; the capability stays while inherited taxonomy may change. |
+| `docs/probes/` | Measured vendor and protocol probes | Each file is authoritative only for the fact its probe established. Preserve dates, conditions, and limits when relying on it. |
+| `docs/schema/` | Candidate wire, canonical-schema, and analytics-view designs | Derived design. It must be reconciled with the surface contract and measured reference findings before a migration or endpoint is written. |
+| `docs/superpowers/specs/` | Issue-specific inherited CLI, daemon, desktop, and harness designs | Implementation constraints for the named inherited area. They are not requirements for the Blazor web console. |
+| `docs/superpowers/plans/` | Historical implementation plans paired with the inherited specs | History and rationale; never substitute an old plan for a current product decision. |
+| `kcap/` | Shipped vendor plugin and skill documentation | Client behavior and operational reference. |
+| `npm/kcap/` | Inherited npm package guide | Packaging reference; it does not decide fleet distribution. |
+| `scripts/cursor-hook-probe/` | One-off probe guide | Operational reference for that probe only. |
 
 ## Schema and surface reconciliation
 

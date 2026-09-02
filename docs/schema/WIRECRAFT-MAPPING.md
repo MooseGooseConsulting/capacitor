@@ -7,7 +7,7 @@
 > a migration or read DTO from this file.
 
 This document maps client-side wire payloads (defined in
-`Capacitor.Cli.Core/Models.cs`) to candidate relational storage. It is not a 1:1
+`src/Capacitor.Cli.Core/Models.cs`) to candidate relational storage. It is not a 1:1
 mapping: a received transcript line is idempotent at its wire position, while one line
 may yield several ordered normalized/display events. Repository data supplied on the
 wire is evidence, not permission to overwrite the accumulated session association.

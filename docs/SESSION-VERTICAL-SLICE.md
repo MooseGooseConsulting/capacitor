@@ -42,12 +42,13 @@ original parser-first, then-console sequence is not adopted as a product require
 this slice is deliberately data-to-browser, so the necessary store and normalization
 work are built only in service of a visible Session.
 
-As of a read-only Blood Arrow Kubernetes inventory on 2026-09-02, context
-`k3d-cnpg-recovery` has Capacitor-named test jobs but no Capacitor Deployment,
-Service, or Ingress. Capacitor therefore has no deployed API or web console. Blood
-Arrow PostgreSQL database `capacitor_test` is an isolated recovery/test target, not a
-production Capacitor service. An unmerged server or dashboard branch is not a
-substitute for the acceptance path below.
+No branch, pull request, fixture, or test database establishes a deployed Capacitor
+API or web console. Before claiming an environment is live, take a fresh read-only
+Blood Arrow inventory and verify the real client import/hook path plus a browser render
+against the same persisted session. Blood Arrow PostgreSQL database `capacitor_test`
+is the isolated recovery/test target for that proof, not a production Capacitor
+service. An unmerged server or dashboard branch is not a substitute for the acceptance
+path below.
 
 ## The product slice
 
