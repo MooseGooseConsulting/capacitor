@@ -12,7 +12,7 @@
     <MudDivider Class="rail-divider" />
     <MudText Typo="Typo.overline" Class="rail-label">My projects</MudText>
     @if (MyProjects.Count == 0) {
-        <MudText Typo="Typo.caption" Class="rail-empty">No project sessions returned.</MudText>
+        <MudText Typo="Typo.caption" Class="rail-empty">Viewer identity is not provided by this API.</MudText>
     } else {
         @foreach (var repository in MyProjects) {
             <MudButton Variant="Variant.Text" FullWidth="true" OnClick="@(() => OnRepositoryChanged.InvokeAsync(repository))"
@@ -49,16 +49,13 @@
     [Parameter]
     public EventCallback<string?> OnRepositoryChanged { get; set; }
 
-    IReadOnlyList<string> MyProjects => Sessions
-        .Where(x => !string.IsNullOrWhiteSpace(x.RepoName) && !string.IsNullOrWhiteSpace(x.OwnerUserId) && string.Equals(x.RepoOwner, x.OwnerUserId, StringComparison.OrdinalIgnoreCase))
-        .Select(x => x.Repository)
-        .Distinct(StringComparer.OrdinalIgnoreCase)
-        .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
-        .ToArray();
+    // The read API does not carry a viewer identity, so ownership cannot be inferred from a
+    // session's owner. Until an explicit viewer contract exists, keep every repository honest.
+    IReadOnlyList<string> MyProjects => [];
 
     IReadOnlyDictionary<string, IReadOnlyList<string>> OtherRepositories => Sessions
-        .Where(x => !string.IsNullOrWhiteSpace(x.RepoOwner) && !MyProjects.Contains(x.Repository, StringComparer.OrdinalIgnoreCase))
-        .GroupBy(x => x.RepoOwner!, StringComparer.OrdinalIgnoreCase)
+        .Where(x => !string.IsNullOrWhiteSpace(x.RepoName))
+        .GroupBy(x => string.IsNullOrWhiteSpace(x.RepoOwner) ? "Unattributed" : x.RepoOwner!, StringComparer.OrdinalIgnoreCase)
         .ToDictionary(
             x => x.Key,
             x => (IReadOnlyList<string>)x.Select(y => y.Repository).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(y => y, StringComparer.OrdinalIgnoreCase).ToArray(),

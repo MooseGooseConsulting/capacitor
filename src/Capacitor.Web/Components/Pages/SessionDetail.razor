@@ -1,5 +1,7 @@
 @page "/sessions/{SessionId}"
 @inject ICapacitorSessionsClient SessionsClient
+@inject NavigationManager Navigation
+@implements IDisposable
 
 <PageTitle>@(_detail?.Session.Title ?? "Session") · Capacitor</PageTitle>
 
@@ -39,7 +41,7 @@
             </MudStack>
         </header>
 
-        <MudTabs Elevation="0" Rounded="true" Class="session-tabs">
+        <MudTabs Elevation="0" Rounded="true" Class="session-tabs" ActivePanelIndex="_activeTab" ActivePanelIndexChanged="SelectTabAsync">
             <MudTabPanel Text="Overview">
                 <MudGrid Spacing="2">
                     <MudItem xs="12" md="7">
@@ -62,19 +64,23 @@
                 </MudGrid>
             </MudTabPanel>
             <MudTabPanel Text="Transcript">
-                @if (TranscriptEvents(detail).Count == 0) {
+                @{ var transcriptEvents = TranscriptEvents(detail); }
+                @if (transcriptEvents.Count == 0) {
                     <EmptyTab Title="No transcript messages" Message="No normalized user, assistant, or thinking events have been persisted for this session." />
                 } else {
                     <MudStack Spacing="2">
-                        @foreach (var entry in TranscriptEvents(detail)) {
+                        @foreach (var entry in transcriptEvents) {
                             <MudPaper Outlined="true" Class="transcript-entry">
                                 <MudStack Row="true" Wrap="Wrap.Wrap" AlignItems="AlignItems.Center" Spacing="1">
                                     <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">@EventLabel(entry)</MudChip>
+                                    @if (!string.IsNullOrWhiteSpace(entry.AgentId)) {
+                                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">@entry.AgentId</MudChip>
+                                    }
                                     @if (!string.IsNullOrWhiteSpace(entry.Model)) {
                                         <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">@entry.Model</MudChip>
                                     }
                                     <MudSpacer />
-                                    <MudText Typo="Typo.caption" Class="muted">@entry.Timestamp.LocalDateTime.ToString("g")</MudText>
+                                    <MudText Typo="Typo.caption" Class="muted">@FormatUtc(entry.Timestamp)</MudText>
                                 </MudStack>
                                 @if (!string.IsNullOrWhiteSpace(entry.Content)) {
                                     <MudText Typo="Typo.body1" Class="transcript-content">@entry.Content</MudText>
@@ -94,6 +100,9 @@
                             <MudExpansionPanel Text="@EventLabel(entry)">
                                 <MudStack Spacing="1">
                                     <MudText Typo="Typo.caption" Class="event-accounting">@EventAccounting(entry)</MudText>
+                                    @if (!string.IsNullOrWhiteSpace(entry.AgentId)) {
+                                        <MudText Typo="Typo.caption"><strong>Agent:</strong> @entry.AgentId</MudText>
+                                    }
                                     @if (!string.IsNullOrWhiteSpace(entry.Content)) {
                                         <MudText Typo="Typo.body2" Class="pre-wrap">@entry.Content</MudText>
                                     }
@@ -128,7 +137,7 @@
                                 <MudStack Row="true" Wrap="Wrap.Wrap" AlignItems="AlignItems.Center" Spacing="1">
                                     <MudText Typo="Typo.subtitle2">@TraceLabel(entry)</MudText>
                                     @if (TraceTimestamp(entry) is { } timestamp) {
-                                        <MudText Typo="Typo.caption" Class="muted">@timestamp.LocalDateTime.ToString("g")</MudText>
+                                        <MudText Typo="Typo.caption" Class="muted">@FormatUtc(timestamp)</MudText>
                                     }
                                     <MudSpacer />
                                     <MudText Typo="Typo.caption">@TraceMetrics(entry)</MudText>
@@ -159,7 +168,7 @@
                             <MudText Typo="Typo.body1" Class="detail-copy">@evaluation.Summary</MudText>
                         }
                         @if (evaluation.EvaluatedAt is { } evaluatedAt) {
-                            <MudText Typo="Typo.caption" Class="muted">Evaluated @evaluatedAt.LocalDateTime.ToString("g")</MudText>
+                            <MudText Typo="Typo.caption" Class="muted">Evaluated @FormatUtc(evaluatedAt)</MudText>
                         }
                         @if (detail.Evaluation.Verdicts.Count > 0) {
                             <MudText Typo="Typo.caption" Class="muted">@detail.Evaluation.Verdicts.Count persisted verdict@(detail.Evaluation.Verdicts.Count == 1 ? string.Empty : "s")</MudText>
@@ -190,19 +199,58 @@
     [Parameter]
     public required string SessionId { get; set; }
 
+    [SupplyParameterFromQuery(Name = "tab")]
+    public string? Tab { get; set; }
+
     SessionDetailResponse? _detail;
     ApiFailure? _failure;
     bool _isLoading = true;
+    int _activeTab;
+    string? _loadedSessionId;
+    CancellationTokenSource? _loadCancellation;
+    long _requestVersion;
 
-    protected override async Task OnParametersSetAsync() => await LoadAsync();
+    protected override async Task OnParametersSetAsync() {
+        _activeTab = TabIndex(Tab);
+        if (!string.Equals(_loadedSessionId, SessionId, StringComparison.Ordinal)) {
+            _loadedSessionId = SessionId;
+            await LoadAsync();
+        }
+    }
+
+    Task SelectTabAsync(int tabIndex) {
+        _activeTab = tabIndex;
+        Navigation.NavigateTo(Navigation.GetUriWithQueryParameter("tab", TabName(tabIndex)), replace: true);
+        return Task.CompletedTask;
+    }
 
     async Task LoadAsync() {
+        var sessionId = SessionId;
+        var version = Interlocked.Increment(ref _requestVersion);
+        _loadCancellation?.Cancel();
+        _loadCancellation?.Dispose();
+        var cancellation = new CancellationTokenSource();
+        _loadCancellation = cancellation;
+
         _isLoading = true;
         _failure = null;
-        var response = await SessionsClient.GetSessionAsync(SessionId);
+        ApiResult<SessionDetailResponse> response;
+        try {
+            response = await SessionsClient.GetSessionAsync(sessionId, cancellation.Token);
+        } catch (OperationCanceledException) when (cancellation.IsCancellationRequested) {
+            return;
+        }
+
+        if (version != _requestVersion || !string.Equals(sessionId, SessionId, StringComparison.Ordinal)) return;
+
         _isLoading = false;
         _detail = response.Value;
         _failure = response.Failure;
+    }
+
+    public void Dispose() {
+        _loadCancellation?.Cancel();
+        _loadCancellation?.Dispose();
     }
 
     static IReadOnlyList<SessionEvent> TranscriptEvents(SessionDetailResponse detail) => detail.Events
@@ -222,7 +270,7 @@
     };
     static string Summary(SessionDetailHeader session) => "Captured from " + (session.Vendor ?? "an unknown vendor")
         + (string.IsNullOrWhiteSpace(session.Model) ? "." : " using " + session.Model + ".")
-        + (session.StartedAt is { } startedAt ? " Started " + startedAt.LocalDateTime.ToString("g") + "." : string.Empty);
+        + (session.StartedAt is { } startedAt ? " Started " + FormatUtc(startedAt) + "." : string.Empty);
     static string EventLabel(SessionEvent entry) => entry.EventType.Replace("_", " ", StringComparison.Ordinal);
     static string EventAccounting(SessionEvent entry) => FormatTokens(entry.InputTokens) + " in → " + FormatTokens(entry.OutputTokens)
         + " out · cache r" + FormatTokens(entry.CacheReadTokens) + " w" + FormatTokens(entry.CacheWriteTokens)
@@ -253,5 +301,22 @@
         _ => TimeSpan.FromMilliseconds(milliseconds).ToString("m\\:ss")
     };
     static string ValueOrNotReported(string? value) => string.IsNullOrWhiteSpace(value) ? "Not reported" : value;
-    static string FormatDate(DateTimeOffset? value) => value is { } date ? date.LocalDateTime.ToString("g") : "Not reported";
+    static string FormatDate(DateTimeOffset? value) => value is { } date ? FormatUtc(date) : "Not reported";
+    static string FormatUtc(DateTimeOffset value) => value.ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss 'UTC'");
+    static int TabIndex(string? tab) => tab?.ToLowerInvariant() switch {
+        "transcript" => 1,
+        "events" => 2,
+        "trace" => 3,
+        "evaluation" => 4,
+        "details" => 5,
+        _ => 0
+    };
+    static string TabName(int tabIndex) => tabIndex switch {
+        1 => "transcript",
+        2 => "events",
+        3 => "trace",
+        4 => "evaluation",
+        5 => "details",
+        _ => "overview"
+    };
 }
