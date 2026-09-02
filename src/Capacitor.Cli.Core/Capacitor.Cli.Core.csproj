@@ -17,6 +17,7 @@
         <InternalsVisibleTo Include="Capacitor.Cli.Tests.Integration" />
         <InternalsVisibleTo Include="Capacitor.App.Tests.Unit" />
         <InternalsVisibleTo Include="Capacitor.Tests.Helpers" />
+        <InternalsVisibleTo Include="Capacitor.Server.Api" />
         <!-- Used when referenced as a submodule from the server repo -->
         <InternalsVisibleTo Include="Capacitor.Server.TestHelpers" />
         <InternalsVisibleTo Include="Capacitor.Server.Tests" />

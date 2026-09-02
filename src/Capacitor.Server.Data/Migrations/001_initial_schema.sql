@@ -30,7 +30,9 @@ CREATE TABLE IF NOT EXISTS session_events (
     is_error            BOOLEAN NOT NULL DEFAULT FALSE,
     content             TEXT,
     raw_payload         TEXT,
-    PRIMARY KEY (session_id, agent_id, line_number)
+    -- A single transcript line can normalize into multiple logical events.
+    -- `logical_seq` is therefore part of the event identity, not merely metadata.
+    PRIMARY KEY (session_id, agent_id, line_number, logical_seq)
 );
 
 CREATE TABLE IF NOT EXISTS session_watermarks (
@@ -185,6 +187,7 @@ CREATE TABLE IF NOT EXISTS daemons (
 CREATE TABLE IF NOT EXISTS dead_letter_entries (
     entry_id                    VARCHAR(64) PRIMARY KEY,
     session_id                  VARCHAR(64) NOT NULL,
+    agent_id                    VARCHAR(64) NOT NULL DEFAULT '',
     vendor                      VARCHAR(32) NOT NULL,
     line_number                 INTEGER NOT NULL,
     raw_line                    TEXT NOT NULL,
@@ -192,8 +195,23 @@ CREATE TABLE IF NOT EXISTS dead_letter_entries (
     received_at                 VARCHAR(35) NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS session_usage_checkpoints (
+    session_id                  VARCHAR(64) NOT NULL,
+    agent_id                    VARCHAR(64) NOT NULL DEFAULT '',
+    vendor                      VARCHAR(32) NOT NULL,
+    input_tokens                BIGINT NOT NULL DEFAULT 0,
+    output_tokens               BIGINT NOT NULL DEFAULT 0,
+    cache_read_tokens           BIGINT NOT NULL DEFAULT 0,
+    cache_write_tokens          BIGINT NOT NULL DEFAULT 0,
+    reasoning_tokens            BIGINT,
+    cost_usd                    NUMERIC(10, 6) NOT NULL DEFAULT 0,
+    PRIMARY KEY (session_id, agent_id, vendor)
+);
+
 CREATE INDEX IF NOT EXISTS idx_session_events_lookup ON session_events(session_id, timestamp);
 CREATE INDEX IF NOT EXISTS idx_session_events_vendor_model ON session_events(vendor, model);
 CREATE INDEX IF NOT EXISTS idx_sessions_repo ON sessions(repo_hash, started_at);
 CREATE INDEX IF NOT EXISTS idx_sessions_owner ON sessions(owner_user_id, started_at);
 CREATE INDEX IF NOT EXISTS idx_sessions_machine ON sessions(machine_id, started_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_dead_letter_entries_stream_line
+    ON dead_letter_entries(session_id, agent_id, line_number);

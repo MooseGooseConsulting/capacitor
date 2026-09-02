@@ -4,7 +4,7 @@ namespace Capacitor.Server.Data.Entities;
 
 /// <summary>
 /// Immutable record representing a single canonical event in a session stream.
-/// Keyed on (SessionId, AgentId, LineNumber).
+/// Keyed on (SessionId, AgentId, LineNumber, LogicalSeq).
 /// </summary>
 public record SessionEventRecord {
     [JsonPropertyName("session_id")]
