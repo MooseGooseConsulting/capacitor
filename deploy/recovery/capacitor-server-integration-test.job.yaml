@@ -38,7 +38,10 @@ spec:
               db_user=$(tr -d '\r\n' < /var/run/capacitor-test-db/username)
               db_password=$(tr -d '\r\n' < /var/run/capacitor-test-db/password)
               export CAPACITOR_TEST_POSTGRES_CONNECTION_STRING="Host=pg18-core-recovery-rw.data-platform.svc.cluster.local;Port=5432;Database=capacitor_test;Username='$db_user';Password='$db_password';SSL Mode=Disable"
-              dotnet test test/Capacitor.Server.Api.Tests.Integration/Capacitor.Server.Api.Tests.Integration.csproj --no-logo --verbosity normal
+              # TUnit's generated Microsoft Testing Platform executable is invoked
+              # directly. This avoids a dotnet-test bridge defect that can report
+              # zero discovered tests despite generated TUnit registrations.
+              dotnet run --project test/Capacitor.Server.Api.Tests.Integration/Capacitor.Server.Api.Tests.Integration.csproj --configuration Debug
       volumes:
         - name: database-credentials
           secret:
