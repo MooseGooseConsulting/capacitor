@@ -364,9 +364,9 @@ public class PostgresSessionRepository : ISessionRepository {
                 cmd.Parameters.AddWithValue(session.LastEventAt.HasValue ? EventTimestamp.ToUtcString(session.LastEventAt.Value) : (object)DBNull.Value);
                 cmd.Parameters.AddWithValue(session.DurationMin);
                 cmd.Parameters.AddWithValue(session.EventCount);
-                cmd.Parameters.AddWithValue((object?)session.ToolCount ?? DBNull.Value);
-                cmd.Parameters.AddWithValue((object?)session.TotalTokens ?? DBNull.Value);
-                cmd.Parameters.AddWithValue((object?)session.TotalCostUsd ?? DBNull.Value);
+                cmd.Parameters.AddWithValue(NpgsqlDbType.Integer, session.ToolCount.HasValue ? session.ToolCount.Value : DBNull.Value);
+                cmd.Parameters.AddWithValue(NpgsqlDbType.Bigint, session.TotalTokens.HasValue ? session.TotalTokens.Value : DBNull.Value);
+                cmd.Parameters.AddWithValue(NpgsqlDbType.Numeric, session.TotalCostUsd.HasValue ? session.TotalCostUsd.Value : DBNull.Value);
                 cmd.Parameters.AddWithValue((object?)session.PreviousSessionId ?? DBNull.Value);
                 cmd.Parameters.AddWithValue((object?)session.NextSessionId ?? DBNull.Value);
                 cmd.Parameters.AddWithValue((object?)session.PrimaryPhase ?? DBNull.Value);
@@ -728,9 +728,9 @@ public class PostgresSessionRepository : ISessionRepository {
         cmd.Parameters.AddWithValue(lastEventAt.HasValue ? EventTimestamp.ToUtcString(lastEventAt.Value) : (object)DBNull.Value);
         cmd.Parameters.AddWithValue(durationMin);
         cmd.Parameters.AddWithValue(eventCount);
-        cmd.Parameters.AddWithValue((object?)toolCount ?? DBNull.Value);
-        cmd.Parameters.AddWithValue((object?)totalTokens ?? DBNull.Value);
-        cmd.Parameters.AddWithValue((object?)totalCostUsd ?? DBNull.Value);
+        cmd.Parameters.AddWithValue(NpgsqlDbType.Integer, toolCount.HasValue ? toolCount.Value : DBNull.Value);
+        cmd.Parameters.AddWithValue(NpgsqlDbType.Bigint, totalTokens.HasValue ? totalTokens.Value : DBNull.Value);
+        cmd.Parameters.AddWithValue(NpgsqlDbType.Numeric, totalCostUsd.HasValue ? totalCostUsd.Value : DBNull.Value);
 
         await cmd.ExecuteNonQueryAsync(ct);
     }
