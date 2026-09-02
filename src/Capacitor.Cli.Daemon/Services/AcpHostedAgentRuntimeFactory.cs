@@ -828,7 +828,7 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
         // Every vendor — borrowed-snapshot review included — spawns the ordinary configured binary.
         // Resolving a borrowed reviewer through an exact-build record instead made a vendor
         // auto-update hard-fail the launch. See
-        // docs/superpowers/specs/2026-07-27-ai1528-trust-by-default-borrowed-review-design.md.
+        // docs/history/pre-recovery/superpowers/specs/2026-07-27-ai1528-trust-by-default-borrowed-review-design.md.
         var binaryPath = descriptor.ResolveBinaryPath(config);
 
         // The read boundary. Only a borrowed snapshot is wrapped: every other launch either has no
@@ -954,7 +954,7 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
     /// vendor that does not declare independent-snapshot containment is a wiring bug). It is
     /// deliberately NOT a build-identity check: capability is advertised for whatever build is
     /// installed, so nothing here may consult a version record. See
-    /// docs/superpowers/specs/2026-07-27-ai1528-trust-by-default-borrowed-review-design.md.</summary>
+    /// docs/history/pre-recovery/superpowers/specs/2026-07-27-ai1528-trust-by-default-borrowed-review-design.md.</summary>
     internal static void ValidateBorrowedArtifact(RuntimeStartContext ctx, ResolvedBorrowedReviewPolicy policy) {
         if (!ctx.IsReviewFlow || !ctx.IsBorrowedSnapshot) return;
         if (policy.Containment != AcpBorrowedReviewContainment.IndependentSnapshot)

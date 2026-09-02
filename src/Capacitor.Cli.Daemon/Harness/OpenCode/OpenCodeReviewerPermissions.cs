@@ -15,7 +15,7 @@ namespace Capacitor.Cli.Daemon.Harness.OpenCode;
 /// <para><b>Deny-all first, then exactly what a reviewer needs.</b> <c>{"*":"allow"}</c> also produces
 /// a frame-free launch and is one line shorter, and it would give the reviewer shell and write tools —
 /// broader than Kiro's read-only trust list, on a posture nobody asked for. Measured
-/// (<c>docs/probes/2026-08-07-opencode-acp/</c> §6b) with the control that makes the claim mean
+/// (<c>docs/history/pre-recovery/probes/2026-08-07-opencode-acp/</c> §6b) with the control that makes the claim mean
 /// something: flipping <c>bash</c> to <c>allow</c> makes the shell actually run, so the denial is
 /// attributable to the rule rather than to a model that chose not to shell out.</para>
 ///

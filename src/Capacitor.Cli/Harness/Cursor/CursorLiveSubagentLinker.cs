@@ -46,7 +46,7 @@ namespace Capacitor.Cli.Harness.Cursor;
 /// revival must trigger from the PARENT's subagentStart/subagentStop — and must also add the
 /// event to CursorHooksParser.CursorHookEvents and CursorHookEventMap, neither of which lists
 /// it today. See
-/// docs/superpowers/specs/2026-07-30-ai1505-cursor-subagent-classification-design.md
+/// docs/history/pre-recovery/superpowers/specs/2026-07-30-ai1505-cursor-subagent-classification-design.md
 /// </para>
 /// </summary>
 public static class CursorLiveSubagentLinker {
@@ -177,7 +177,7 @@ public static class CursorLiveSubagentLinker {
             //    top-level session — duplication, not a graceful fallback.
             //
             // A known, accepted corrupt-state risk; remedies are recorded in
-            // docs/superpowers/specs/2026-07-30-ai1505-cursor-subagent-classification-design.md
+            // docs/history/pre-recovery/superpowers/specs/2026-07-30-ai1505-cursor-subagent-classification-design.md
             // (D2a). It has no producer on the measured cursor-agent contract, because the
             // only caller sits behind a guard that never opens there.
         }

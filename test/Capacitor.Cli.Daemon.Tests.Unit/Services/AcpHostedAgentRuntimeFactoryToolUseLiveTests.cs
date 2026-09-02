@@ -17,7 +17,7 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 /// directly here instead of through the (SignalR-backed) forwarder.
 ///
 /// Also exercises the permission bridge for real: the python probe backing
-/// <c>docs/ai-688-cursor-prototype-findings.md</c>'s "Tool-using turn" section
+/// <c>docs/history/pre-recovery/ai-688-cursor-prototype-findings.md</c>'s "Tool-using turn" section
 /// showed Cursor DOES send a real <c>session/request_permission</c> before running an
 /// un-allowlisted shell command, so this test's <see cref="AutoApproveServerConnection"/> answers
 /// it with a genuine "selected" decision (unlike <c>AcpHostedAgentRuntimeFactoryLiveTests</c>'s

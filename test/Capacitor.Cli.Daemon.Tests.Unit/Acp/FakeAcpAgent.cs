@@ -522,7 +522,7 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
     /// JSON-RPC error (see <see cref="FailNextSetConfigOption"/>) or a probe-shaped success result
     /// echoing back the requested <c>value</c> as the <c>model</c> config option's
     /// <c>currentValue</c>, mirroring the real agent's confirmed response shape
-    /// (<c>docs/ai-688-cursor-prototype-findings.md</c>). The request itself is already captured in
+    /// (<c>docs/history/pre-recovery/ai-688-cursor-prototype-findings.md</c>). The request itself is already captured in
     /// <see cref="ReceivedCalls"/> by <see cref="DispatchLineAsync"/> before this runs.
     /// </summary>
     async Task HandleSetConfigOptionAsync(JsonElement id, JsonElement? @params, CancellationToken ct) {
@@ -556,7 +556,7 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
     /// <summary>
     /// Answers a <c>session/set_model</c> request — either the scripted JSON-RPC error (see
     /// <see cref="FailNextSetModel"/>) or the probe-confirmed success shape: an EMPTY object
-    /// (<c>docs/probes/2026-08-05-kiro-model-override/</c> measured Kiro answering
+    /// (<c>docs/history/pre-recovery/probes/2026-08-05-kiro-model-override/</c> measured Kiro answering
     /// <c>{"result":{}}</c>), unlike <c>session/set_config_option</c>'s configOptions echo. The
     /// request itself is already captured in <see cref="ReceivedCalls"/> by
     /// <c>DispatchLineAsync</c> before this runs.

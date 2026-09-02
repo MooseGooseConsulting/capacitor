@@ -104,7 +104,7 @@ public class AcpVendorDescriptorTests {
         await Assert.That(descriptor.ReviewFlowMcpTransport)
             .IsEqualTo(AcpReviewFlowMcpTransport.SessionNew);
 
-        // SetModelSelector, not ConfigOptionModelSelector: probe-measured (docs/probes/
+        // SetModelSelector, not ConfigOptionModelSelector: probe-measured (docs/history/pre-recovery/probes/
         // 2026-08-05-kiro-model-override/, kiro-cli 2.16.0) — session/set_config_option does not
         // exist on Kiro (-32601 Method not found), while session/set_model succeeds AND takes
         // effect: the very next turn's backend request carried the requested modelId, the reply
@@ -388,7 +388,7 @@ public class AcpVendorDescriptorTests {
     }
 
     /// <summary>Reconnect eligibility is a PROBE-VERIFIED per-vendor fact (the 2026-08-04 C0
-    /// re-probe, docs/probes/2026-08-04-acp-reconnect-c0/), never inferred from the advertised
+    /// re-probe, docs/history/pre-recovery/probes/2026-08-04-acp-reconnect-c0/), never inferred from the advertised
     /// loadSession capability — all four vendors advertise it, two measurably cannot honor it
     /// across a crashed owner. Flipping Kiro or Gemini requires a passing probe re-run.</summary>
     [Test]

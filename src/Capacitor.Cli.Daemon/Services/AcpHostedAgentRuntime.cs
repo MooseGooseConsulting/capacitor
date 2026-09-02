@@ -42,7 +42,7 @@ namespace Capacitor.Cli.Daemon.Services;
 /// <c>system_note</c>. The full protocol — incarnation identity, the two-transition send-admission
 /// section, corpse retirement, the activation latch, incident chaining, and the interaction
 /// router — is the design spec at
-/// <c>docs/superpowers/specs/2026-08-04-ai1325-acp-reconnect-resume-design.md</c>; the region
+/// <c>docs/history/pre-recovery/superpowers/specs/2026-08-04-ai1325-acp-reconnect-resume-design.md</c>; the region
 /// comments below reference its section numbers.
 /// </summary>
 internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscriptSource {
@@ -928,7 +928,7 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
 
         try {
             // Advertise NO client fs/terminal: cursor-agent does file/shell ops itself and never asks
-            // the client to serve them (rationale: docs/ai-687-fs-terminal-capability-decision-design.md).
+            // the client to serve them (rationale: docs/history/pre-recovery/ai-687-fs-terminal-capability-decision-design.md).
             // Any unadvertised request is declined -32601 by AcpConnection, never falsely acknowledged.
             // Elicitation IS advertised (form mode only, never url) — the end-to-end multi-select
             // lane shipped on both sides, so agents may now send elicitation/create; the bridge's
@@ -1986,7 +1986,7 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
         }
     }
 
-    // ── Reconnect/resume (skip-whole-replay — docs/superpowers/specs/2026-08-04-ai1325-acp-reconnect-resume-design.md) ──
+    // ── Reconnect/resume (skip-whole-replay — docs/history/pre-recovery/superpowers/specs/2026-08-04-ai1325-acp-reconnect-resume-design.md) ──
 
     /// <summary>Whether a crash on the INSTALLED incarnation may open a reconnect incident. Caller
     /// holds the reconnect lock. Conjunctive with the construction-time gate (probe-verified

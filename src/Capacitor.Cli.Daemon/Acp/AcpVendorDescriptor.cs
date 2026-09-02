@@ -136,7 +136,7 @@ internal sealed record AcpVendorDescriptor {
     /// (relaunch → <c>initialize</c> → <c>session/load</c>, replay suppressed). This is a
     /// PROBE-VERIFIED fact, never inferred from the vendor's advertised <c>loadSession</c>
     /// capability — all four registered vendors advertise it, and two measurably cannot honor it
-    /// across a crashed owner (<c>docs/probes/2026-08-04-acp-reconnect-c0/</c>): Kiro refuses with a
+    /// across a crashed owner (<c>docs/history/pre-recovery/probes/2026-08-04-acp-reconnect-c0/</c>): Kiro refuses with a
     /// durable stale-owner lock ("Session is active in another process", identical at 0/15/60s), and
     /// Gemini never persists a crash-killed session ("No previous sessions found"). Flipping a
     /// vendor to <see langword="true"/> requires a passing re-run of that probe, because the resume
@@ -247,7 +247,7 @@ internal static class AcpVendorDescriptors {
         SupportsBorrowedReviewFlow: true,
         BorrowedReviewContainment: AcpBorrowedReviewContainment.IndependentSnapshot,
         UnattendedInteractionPolicy: AcpUnattendedInteractionPolicy.Fail,
-        // Probe-verified 2026-08-04 (docs/probes/2026-08-04-acp-reconnect-c0/): session/load works
+        // Probe-verified 2026-08-04 (docs/history/pre-recovery/probes/2026-08-04-acp-reconnect-c0/): session/load works
         // across a SIGKILLed owner, the response-after-replay barrier holds, and a loaded session
         // prompts normally. Note the same probe found Cursor's replay REWRITES toolCallIds and
         // drops the interrupted turn — both irrelevant to the suppress-the-replay resume, but they
@@ -292,7 +292,7 @@ internal static class AcpVendorDescriptors {
         // If the platform special case were ever dropped, this default disables borrowed review
         // rather than silently permitting an unverified surface — the safe direction to fail.
         UnattendedInteractionPolicy: AcpUnattendedInteractionPolicy.AutoApprove,
-        // Probe-verified 2026-08-04 (docs/probes/2026-08-04-acp-reconnect-c0/): session/load works
+        // Probe-verified 2026-08-04 (docs/history/pre-recovery/probes/2026-08-04-acp-reconnect-c0/): session/load works
         // across a SIGKILLed owner, the barrier holds, toolCallIds are stable, and — unlike
         // Cursor — Copilot PERSISTS a mid-turn-killed prompt agent-side, which is why the
         // interrupted-turn disposition keys on local send facts, never on replay content.
@@ -330,7 +330,7 @@ internal static class AcpVendorDescriptors {
     /// Copilot's flag needs an equivalent call-level probe against Copilot, not this result.</para>
     ///
     /// <para><see cref="SetModelSelector"/>, not <see cref="ConfigOptionModelSelector"/>: measured
-    /// (<c>docs/probes/2026-08-05-kiro-model-override/</c>, kiro-cli 2.16.0), Kiro answers
+    /// (<c>docs/history/pre-recovery/probes/2026-08-05-kiro-model-override/</c>, kiro-cli 2.16.0), Kiro answers
     /// <c>session/set_config_option</c> with <c>-32601 Method not found</c> but honours
     /// <c>session/set_model</c> at effect level — the evidence the earlier
     /// <see cref="NoOpModelSelector"/> deferral was waiting for (detail on
@@ -369,7 +369,7 @@ internal static class AcpVendorDescriptors {
         ModelSelector:       SetModelSelector.Instance,
         SupportsMcpServers:  true,
         ReviewFlowMcpTransport: AcpReviewFlowMcpTransport.SessionNew,
-        // Measured INELIGIBLE 2026-08-04 (docs/probes/2026-08-04-acp-reconnect-c0/): Kiro advertises
+        // Measured INELIGIBLE 2026-08-04 (docs/history/pre-recovery/probes/2026-08-04-acp-reconnect-c0/): Kiro advertises
         // loadSession but refuses session/load after a SIGKILLed owner with a DURABLE stale-owner
         // lock — "Failed to start session: Session is active in another process (PID <dead>)",
         // byte-identical at 0s/+15s/+45s, so bounded-backoff retries cannot clear it. Flip only
@@ -381,7 +381,7 @@ internal static class AcpVendorDescriptors {
     /// gated unattended review-flow reviewer.
     ///
     /// <para><b>Every claim here is measured against <c>opencode</c> 1.18.9</b>
-    /// (<c>docs/probes/2026-08-07-opencode-acp/</c>). <c>opencode acp</c> speaks ACP protocolVersion 1
+    /// (<c>docs/history/pre-recovery/probes/2026-08-07-opencode-acp/</c>). <c>opencode acp</c> speaks ACP protocolVersion 1
     /// over stdio and advertises <c>loadSession</c> plus <c>sessionCapabilities {close, fork, list,
     /// resume}</c>.</para>
     ///
@@ -445,7 +445,7 @@ internal static class AcpVendorDescriptors {
     /// measured-INELIGIBLE. OpenCode advertises <c>loadSession</c> and a <c>resume</c> session
     /// capability, and nothing here has measured <c>session/load</c> across a SIGKILLed owner or the
     /// response-after-replay barrier. Flipping it requires a passing run of
-    /// <c>docs/probes/2026-08-04-acp-reconnect-c0/</c>, not the advertisement.</para></summary>
+    /// <c>docs/history/pre-recovery/probes/2026-08-04-acp-reconnect-c0/</c>, not the advertisement.</para></summary>
     public static readonly AcpVendorDescriptor OpenCode = new(
         Vendor:              "opencode",
         ResolveBinaryPath:   cfg => cfg.OpenCodePath,
@@ -520,7 +520,7 @@ internal static class AcpVendorDescriptors {
     /// session that reports the requested model while running another. <c>ResolveDefaultModel:
     /// null</c> alone is not enough, because <c>ResolveRequestedModel</c> prioritises a per-launch
     /// model and would reach a live selector anyway. Kiro's probe
-    /// (<c>docs/probes/2026-08-05-kiro-model-override/</c>) is the template for flipping this: it
+    /// (<c>docs/history/pre-recovery/probes/2026-08-05-kiro-model-override/</c>) is the template for flipping this: it
     /// found Kiro rejects <c>session/set_config_option</c> outright but honours
     /// <c>session/set_model</c> at effect level — Gemini needs its own equivalent effect-level
     /// measurement (which method, and does the turn actually run on it) before carrying
@@ -551,7 +551,7 @@ internal static class AcpVendorDescriptors {
         // so receiving one means the launch contract regressed (a dropped flag, a vendor change) and the
         // honest response is to reap the reviewer rather than auto-approve whatever it asked for (§3.4).
         UnattendedInteractionPolicy: AcpUnattendedInteractionPolicy.Fail,
-        // Measured INELIGIBLE 2026-08-04 (docs/probes/2026-08-04-acp-reconnect-c0/): Gemini
+        // Measured INELIGIBLE 2026-08-04 (docs/history/pre-recovery/probes/2026-08-04-acp-reconnect-c0/): Gemini
         // advertises loadSession but a crash-killed session is never persisted — session/load
         // refuses with "No previous sessions found for this project", so there is nothing to
         // resume. Gemini also self-re-execs (a sandbox wrapper spawns an inner process with

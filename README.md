@@ -20,6 +20,7 @@ Owning the server removes that gate.
 | | |
 |---|---|
 | `PROMPT.md` | the brief — what to build and how to judge it done |
+| `docs/README.md` | current Capacitor architecture, recovery, dashboard, ingestion, and testing authority |
 | `reference/SURFACE.md` | everything observable about the system, both halves, mapped |
 | `reference/WAVES.md` | a proposed decomposition, explicitly offered as a hypothesis to challenge |
 | `reference/ui-assets/` | console fonts, favicons, stylesheets (placeholders) |
@@ -27,16 +28,10 @@ Owning the server removes that gate.
 
 ## Status
 
-Fork point committed. Nothing new built yet.
+Recovery is in progress. There is no deployed alpha service, public ingress,
+or production backend. PostgreSQL is the selected recovery/test backend, and
+the first delivery is the data-first web Sessions experience backed by
+persisted transcript enrichment—not agent launch, terminal control, or Flows.
 
-Pivot work still outstanding, and deliberately left to the build so it is done
-with full context rather than half-done now:
-
-- **Telemetry** — `src/Capacitor.Cli.Core/Telemetry/` is a 14-file PostHog client
-  reporting to kcap. Cut or repoint.
-- **Hosted defaults** — a bare profile slug expands to `{slug}.kcap.ai`; tenant
-  provisioning calls kcap's API.
-- **Auth** — WorkOS OAuth. A profile with `auth_provider: null` resolves to
-  provider `None` and posts unauthenticated; that is the way in.
-- **Update check** and **`kcap feedback`** both reach kcap.
-- **Naming and marks** — product name, favicons, Solina typeface.
+Read [the current documentation](docs/README.md) before treating historical
+plans, probe results, or inherited product behavior as a current commitment.

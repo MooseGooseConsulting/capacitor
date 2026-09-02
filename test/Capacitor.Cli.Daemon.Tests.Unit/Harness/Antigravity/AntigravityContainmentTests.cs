@@ -34,7 +34,7 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Harness.Antigravity;
 /// <para><b>The positive control is deliberately not run.</b> The same turn under the operator's real
 /// <c>HOME</c> DOES create a kcap log and a watcher — that was measured during the probe (agy's own
 /// hook contract fires in print mode) and is written down in
-/// <c>docs/probes/2026-08-06-agy-reviewer/findings.md</c>. Running it here would record a real session
+/// <c>docs/history/pre-recovery/probes/2026-08-06-agy-reviewer/findings.md</c>. Running it here would record a real session
 /// against the operator's server and spawn a watcher over the reviewer's conversation, which is the
 /// exact damage the containment exists to prevent — so the control stays a recorded measurement, not
 /// a test case.</para>

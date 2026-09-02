@@ -8,7 +8,7 @@ namespace Capacitor.Cli.Daemon.Harness.Kiro;
 ///
 /// <para><b>Why an isolated home at all.</b> Kiro inherits the operator's GLOBAL
 /// <c>~/.kiro/settings/mcp.json</c> servers into every ACP session — measured with a positive control
-/// in <c>docs/probes/2026-08-05-kiro-reviewer-trust/</c>. One of them is the flows server, which
+/// in <c>docs/history/pre-recovery/probes/2026-08-05-kiro-reviewer-trust/</c>. One of them is the flows server, which
 /// would let a reviewer start nested review flows. Pointing <c>KIRO_HOME</c> at an empty directory
 /// initializes ZERO global servers while the injected result channel still starts. The credential is
 /// NOT under <c>KIRO_HOME</c>, so this suppresses configuration without touching authentication —

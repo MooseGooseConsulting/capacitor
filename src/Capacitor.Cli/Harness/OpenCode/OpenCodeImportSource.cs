@@ -15,7 +15,7 @@ namespace Capacitor.Cli.Harness.OpenCode;
 /// Roots are main sessions; child sessions (parent_id set) are imported as subagents
 /// of their parent. Completeness is tracked client-side (the import ledger) since the
 /// server exposes no ended signal; repair replays above the server HWM (idempotent by
-/// prt_ id). See docs/superpowers/specs/2026-06-26-opencode-import-design.md.
+/// prt_ id). See docs/history/pre-recovery/superpowers/specs/2026-06-26-opencode-import-design.md.
 /// </summary>
 internal sealed class OpenCodeImportSource : IImportSource {
     readonly string               _dbPath;

@@ -16,7 +16,7 @@ namespace Capacitor.Cli.Daemon.Acp;
 /// (<see cref="BorrowedReviewRuntimeRoots"/>) so the vendor can start without them.</para>
 ///
 /// <para>Design, probe results and the live evidence:
-/// <c>docs/superpowers/specs/2026-07-29-ai1584-borrowed-reviewer-sandbox-grants-design.md</c> in
+/// <c>docs/history/pre-recovery/superpowers/specs/2026-07-29-ai1584-borrowed-reviewer-sandbox-grants-design.md</c> in
 /// kcap-server.</para>
 /// </summary>
 internal static class BorrowedReviewSandbox {

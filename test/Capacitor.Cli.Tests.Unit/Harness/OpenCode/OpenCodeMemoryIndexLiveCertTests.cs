@@ -18,7 +18,7 @@ namespace Capacitor.Cli.Tests.Unit.Harness.OpenCode;
 ///
 /// <para><b>Verified experimental-API baseline: opencode 1.18.9.</b> That is the build against which
 /// the system-transform contract was measured
-/// (<c>docs/probes/2026-08-07-opencode-acp/</c> established the ACP surface; the transform contract
+/// (<c>docs/history/pre-recovery/probes/2026-08-07-opencode-acp/</c> established the ACP surface; the transform contract
 /// itself was read out of the 1.18.9 binary and is recorded here): the hook is triggered from
 /// <c>LLMRequestPrep.prepare</c> once per LLM request with
 /// <c>({sessionID, model}, {system: string[]})</c>, the array arrives holding ONE pre-joined element,

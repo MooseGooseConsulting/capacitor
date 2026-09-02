@@ -16,7 +16,7 @@ internal sealed record CursorBorrowedReviewArtifact(string Version, string Launc
 /// binary. No caller may use <see cref="TryMatchValidatedBuild"/> to decide capability, to select a
 /// launcher path, or to derive any runtime state; its only production caller is the manually
 /// invoked maintainer validation workflow. See
-/// docs/superpowers/specs/2026-07-27-ai1528-trust-by-default-borrowed-review-design.md.
+/// docs/history/pre-recovery/superpowers/specs/2026-07-27-ai1528-trust-by-default-borrowed-review-design.md.
 ///
 /// <para><b>Version form.</b> <see cref="Version"/> is the <i>version-directory name</i> the launcher
 /// resolves into (<c>~/.local/share/cursor-agent/versions/&lt;name&gt;/cursor-agent</c>) — that is

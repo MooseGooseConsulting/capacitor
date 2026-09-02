@@ -27,7 +27,7 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 /// <b>Gated</b> behind <c>KCAP_ACP_LIVE=1</c> so CI (no <c>cursor-agent</c> binary, no Cursor
 /// account) never runs this, and no ordinary local test run silently spends a real Cursor turn.
 /// Requires: <c>cursor-agent</c> on PATH, authenticated, Team-tier (or higher) subscription — see
-/// <c>docs/ai-688-cursor-prototype-findings.md</c>'s "Free tier" plan-limit gotcha (on Free, every
+/// <c>docs/history/pre-recovery/ai-688-cursor-prototype-findings.md</c>'s "Free tier" plan-limit gotcha (on Free, every
 /// model just returns "Upgrade your plan to continue" and no real turn runs, which would make this
 /// test fail even though the daemon code path is correct).
 /// </summary>

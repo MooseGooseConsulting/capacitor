@@ -277,7 +277,7 @@ public class AgentOrchestratorBorrowLaunchTests {
     }
 
     // ── Borrowed-snapshot regression net (two distinct checkouts) ─────────────────────────
-    // docs/superpowers/specs/2026-07-27-ai1528-trust-by-default-borrowed-review-design.md
+    // docs/history/pre-recovery/superpowers/specs/2026-07-27-ai1528-trust-by-default-borrowed-review-design.md
     //
     // TWO checkouts are mandatory. The orchestrator snapshots the borrow cwd's own canonical git
     // root, deliberately INDEPENDENT of the launch command's registered RepoPath, so a test pointing

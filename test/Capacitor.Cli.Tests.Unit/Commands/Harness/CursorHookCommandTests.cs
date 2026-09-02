@@ -707,10 +707,10 @@ public class CursorHookCommandTests {
     // ---------------------------------------------------------------------------------
     // Measured payload contract. A Cursor sessionStart payload carries a NULL
     // transcript_path (verified against cursor-agent 2026.07.23-e383d2b; probe logs archived
-    // under docs/probes/2026-07-30-cursor-subagent-hooks/), which is why the transcript-derived
+    // under docs/history/pre-recovery/probes/2026-07-30-cursor-subagent-hooks/), which is why the transcript-derived
     // subagent-classification arm has no producer. These pin that contract so the arm cannot be
     // quietly assumed live again. See
-    // docs/superpowers/specs/2026-07-30-ai1505-cursor-subagent-classification-design.md
+    // docs/history/pre-recovery/superpowers/specs/2026-07-30-ai1505-cursor-subagent-classification-design.md
     // ---------------------------------------------------------------------------------
 
     [Test, NotInParallel]

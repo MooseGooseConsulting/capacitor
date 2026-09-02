@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/check-linear-ids.sh — see docs/superpowers/specs/2026-07-17-ai1392-linear-id-comment-sweep-design.md
+# scripts/check-linear-ids.sh — see docs/history/pre-recovery/superpowers/specs/2026-07-17-ai1392-linear-id-comment-sweep-design.md
 # Exit: 0 clean, 1 = violation found, 2 = checker failure (never "clean").
 # Portable POSIX ERE only — no PCRE, no `grep -P`, no `git grep -P` anywhere in
 # this script. Verified on BSD grep (macOS stock /usr/bin/grep, BSD grep
@@ -109,5 +109,5 @@ fi
 [ -z "$violations" ] && exit 0
 
 echo "$violations"
-echo "::error::Linear issue ID token found in tracked C# source. Rewrite per docs/superpowers/specs/2026-07-17-ai1392-linear-id-comment-sweep-design.md. Suppression (// linear-id-ok: <reason>) is for synthetic ID-shaped test data under test/ ONLY — any hit under src/ is always a violation regardless of the marker, and a genuine internal reference must be escalated to an owner before merge, never suppressed."
+echo "::error::Linear issue ID token found in tracked C# source. Rewrite per docs/history/pre-recovery/superpowers/specs/2026-07-17-ai1392-linear-id-comment-sweep-design.md. Suppression (// linear-id-ok: <reason>) is for synthetic ID-shaped test data under test/ ONLY — any hit under src/ is always a violation regardless of the marker, and a genuine internal reference must be escalated to an owner before merge, never suppressed."
 exit 1
