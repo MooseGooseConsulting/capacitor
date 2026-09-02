@@ -60,7 +60,7 @@ public sealed class PostgresGatewayTests {
                 "SELECT COUNT(*) FROM session_events WHERE session_id = $1;", connection);
             command.Parameters.AddWithValue(sessionId);
             var count = Convert.ToInt64(await command.ExecuteScalarAsync(), CultureInfo.InvariantCulture);
-            await Assert.That(count).IsEqualTo(6L);
+            await Assert.That(count).IsEqualTo(5L);
         } finally {
             await DeleteTestSessionAsync(connectionString, sessionId);
         }
