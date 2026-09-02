@@ -96,6 +96,13 @@ public interface ISessionWatermarkRepository {
 public interface ISessionRepository {
     Task<SessionHeaderRecord> GetOrCreatePlaceholderAsync(string sessionId, string vendor, string? ownerUserId = null, CancellationToken ct = default);
     Task<SessionHeaderRecord> GetOrCreatePlaceholderAsync(string sessionId, string vendor, string? ownerUserId, string? defaultVisibility, CancellationToken ct = default);
+    Task<SessionHeaderRecord> GetOrCreatePlaceholderAsync(
+        string sessionId,
+        string vendor,
+        string? ownerUserId,
+        string? defaultVisibility,
+        DateTimeOffset? observedStartedAt,
+        CancellationToken ct = default);
     Task<SessionHeaderRecord?> GetSessionAsync(string sessionId, CancellationToken ct = default);
     Task<bool> CompleteSessionAsync(string sessionId, DateTimeOffset endedAt, CancellationToken ct = default);
     Task<SessionSearchPage> SearchSessionsAsync(SessionSearchQuery query, CancellationToken ct = default);

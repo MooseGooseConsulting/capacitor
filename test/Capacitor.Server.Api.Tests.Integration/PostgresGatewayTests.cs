@@ -68,6 +68,46 @@ public sealed class PostgresGatewayTests {
     }
 
     [Test, NotInParallel]
+    public async Task Gateway_keeps_the_first_observed_start_timestamp_when_session_start_repeats() {
+        var connectionString = RequireRecoveryConnectionString();
+        var sessionId = $"first-start-{Guid.NewGuid():N}";
+        var firstObserved = DateTimeOffset.Parse("2026-01-02T03:04:05Z", CultureInfo.InvariantCulture);
+        var repeatedObserved = firstObserved.AddMinutes(10);
+        using var environment = EnvScope.Exclusive("ConnectionStrings__Capacitor", connectionString);
+
+        try {
+            using var factory = new GatewayFactory();
+            using var client = factory.CreateClient();
+
+            var first = await client.PostAsJsonAsync("/hooks/session-start/opencode", new {
+                session_id = sessionId,
+                user_id = "integration-test",
+                started_at = firstObserved
+            });
+            await Assert.That(first.StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+            var repeated = await client.PostAsJsonAsync("/hooks/session-start/opencode", new {
+                session_id = sessionId,
+                user_id = "integration-test",
+                started_at = repeatedObserved
+            });
+            await Assert.That(repeated.StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+            await using var connection = new NpgsqlConnection(connectionString);
+            await connection.OpenAsync();
+            await using var command = new NpgsqlCommand(
+                "SELECT started_at FROM sessions WHERE session_id = $1;", connection);
+            command.Parameters.AddWithValue(sessionId);
+            var stored = Convert.ToString(await command.ExecuteScalarAsync(), CultureInfo.InvariantCulture);
+            await Assert.That(stored).IsNotNull();
+            await Assert.That(DateTimeOffset.Parse(stored!, CultureInfo.InvariantCulture).ToUniversalTime())
+                .IsEqualTo(firstObserved.ToUniversalTime());
+        } finally {
+            await DeleteTestSessionAsync(connectionString, sessionId);
+        }
+    }
+
+    [Test, NotInParallel]
     public async Task Gateway_exposes_the_postgres_backed_sessions_dashboard_read_surface() {
         var connectionString = RequireRecoveryConnectionString();
         var sessionId = $"dashboard-{Guid.NewGuid():N}";

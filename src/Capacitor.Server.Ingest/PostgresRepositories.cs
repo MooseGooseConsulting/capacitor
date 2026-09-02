@@ -63,10 +63,20 @@ public class PostgresSessionRepository : ISessionRepository {
     }
 
     public Task<SessionHeaderRecord> GetOrCreatePlaceholderAsync(string sessionId, string vendor, string? ownerUserId = null, CancellationToken ct = default) =>
-        GetOrCreatePlaceholderAsync(sessionId, vendor, ownerUserId, defaultVisibility: null, ct);
+        GetOrCreatePlaceholderAsync(sessionId, vendor, ownerUserId, defaultVisibility: null, observedStartedAt: null, ct: ct);
 
     public async Task<SessionHeaderRecord> GetOrCreatePlaceholderAsync(string sessionId, string vendor, string? ownerUserId, string? defaultVisibility, CancellationToken ct = default) {
-        var now = DateTimeOffset.UtcNow;
+        return await GetOrCreatePlaceholderAsync(sessionId, vendor, ownerUserId, defaultVisibility, observedStartedAt: null, ct: ct);
+    }
+
+    public async Task<SessionHeaderRecord> GetOrCreatePlaceholderAsync(
+        string sessionId,
+        string vendor,
+        string? ownerUserId,
+        string? defaultVisibility,
+        DateTimeOffset? observedStartedAt,
+        CancellationToken ct = default) {
+        var startedAt = observedStartedAt ?? DateTimeOffset.UtcNow;
         var visibility = string.IsNullOrEmpty(defaultVisibility) ? "private" : defaultVisibility;
         await using (var conn = await _dataSource.OpenConnectionAsync(ct)) {
             await using var cmd = conn.CreateCommand();
@@ -83,7 +93,7 @@ public class PostgresSessionRepository : ISessionRepository {
             cmd.Parameters.AddWithValue(ownerUserId ?? "anonymous");
             cmd.Parameters.AddWithValue("active");
             cmd.Parameters.AddWithValue(visibility);
-            cmd.Parameters.AddWithValue(EventTimestamp.ToUtcString(now));
+            cmd.Parameters.AddWithValue(EventTimestamp.ToUtcString(startedAt));
             await cmd.ExecuteNonQueryAsync(ct);
         }
 
@@ -446,7 +456,7 @@ public class PostgresSessionRepository : ISessionRepository {
             UPDATE sessions SET
                 owner_user_id = COALESCE($2::varchar, owner_user_id),
                 visibility = COALESCE(NULLIF(visibility, ''), $3::varchar),
-                started_at = COALESCE($4::varchar, started_at),
+                started_at = COALESCE(started_at, $4::varchar),
                 model = COALESCE($5::varchar, model),
                 slug = COALESCE($6::varchar, slug),
                 previous_session_id = COALESCE($7::varchar, previous_session_id),

@@ -140,6 +140,50 @@ public sealed class IngestRepositoryTests : IDisposable {
     }
 
     [Test]
+    public async Task Session_start_keeps_the_first_observed_started_at() {
+        const string sessionId = "sess-first-start-observation";
+        var firstObserved = DateTimeOffset.Parse("2026-01-02T03:04:05Z");
+        var repeatedObserved = firstObserved.AddMinutes(10);
+
+        await _sessions.GetOrCreatePlaceholderAsync(
+            sessionId,
+            "opencode",
+            "user-1",
+            "private",
+            firstObserved);
+        await _sessions.PatchSessionStartAsync(sessionId, "user-1", "private", new SessionStartPatch(
+            firstObserved,
+            Model: null,
+            Slug: null,
+            PreviousSessionId: null,
+            RepoHash: null,
+            RepoOwner: null,
+            RepoName: null,
+            Branch: null,
+            PrNumber: null,
+            PrTitle: null,
+            PrUrl: null,
+            PrHeadRef: null));
+        await _sessions.PatchSessionStartAsync(sessionId, "user-1", "private", new SessionStartPatch(
+            repeatedObserved,
+            Model: null,
+            Slug: null,
+            PreviousSessionId: null,
+            RepoHash: null,
+            RepoOwner: null,
+            RepoName: null,
+            Branch: null,
+            PrNumber: null,
+            PrTitle: null,
+            PrUrl: null,
+            PrHeadRef: null));
+
+        var stored = await _sessions.GetSessionAsync(sessionId);
+        await Assert.That(stored).IsNotNull();
+        await Assert.That(stored!.StartedAt.ToUniversalTime()).IsEqualTo(firstObserved.ToUniversalTime());
+    }
+
+    [Test]
     public async Task Transcript_before_session_start_creates_placeholder_and_keeps_the_batch() {
         var sessionId = "sess-transcript-first";
         var events = new List<SessionEventRecord> {
