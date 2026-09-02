@@ -43,9 +43,10 @@ wire is evidence, not permission to overwrite the accumulated session associatio
 
 ### Destination Mapping:
 1. **Durable transcript receipt:**
-   * `(session_id, agent_id, line_number)` $\leftarrow$ `batch.SessionId`,
-     `batch.AgentId ?? ""`, and `batch.LineNumbers[i]` (0-based transcript index;
-     do not invent 1-based positions)
+   * `(machine_id, session_id, agent_id, line_number)` $\leftarrow$ the authenticated
+     machine identity, `batch.SessionId`, `batch.AgentId ?? ""`, and
+     `batch.LineNumbers[i]` (0-based transcript index; do not invent 1-based
+     positions). Do not assume an agent-supplied session id is fleet-global.
    * `vendor` $\leftarrow$ `batch.Vendor ?? "claude"`
    * raw payload $\leftarrow$ `batch.Lines[i]`, retained before normalization
    * the receipt key is the client-resume idempotency boundary.
@@ -55,7 +56,9 @@ wire is evidence, not permission to overwrite the accumulated session associatio
    * a line that produces multiple events has a stable `logical_seq`; browser Event
      and Trace ordering must not depend on insertion order.
 3. **`session_watermarks`:**
-   * `(session_id, agent_id)` $\leftarrow$ updated to `max(line_number)` (0-based)
+   * `(machine_id, session_id, agent_id)` $\leftarrow$ updated to
+     `max(line_number)` (0-based); resume is scoped to the authenticated machine
+     recording, not an ambiguous fleet-wide agent session id.
 4. **Session repository projection:**
    * `batch.Repository` is one observed association. Accumulate event-level
      repository evidence and derive a primary repository rather than replacing prior

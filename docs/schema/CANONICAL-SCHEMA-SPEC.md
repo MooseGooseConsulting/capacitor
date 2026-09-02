@@ -11,10 +11,12 @@ This document preserves an earlier schema synthesis. It is useful design materia
 but its original title overstated its authority. In particular, its one-repository
 session shape and deferred `logical_seq` conflict with the measured cross-repository
 evidence and the event/trace read model. The vertical-slice contract resolves those
-requirements: a receipt remains idempotent at `(session_id, agent_id, line_number)`;
+requirements: a receipt remains idempotent at `(machine_id, session_id, agent_id,
+line_number)` because agent-supplied session IDs are not proven fleet-global;
 normalized events have a stable in-line ordinal and source reference; repository
 evidence is event-level with a many-repository session projection; repeated lifecycle
-callbacks are first-write-wins facts.
+callbacks are first-write-wins facts, while subagent facts remain distinguished by
+`agent_id`.
 
 The DDL below must not be applied as-is until those corrections are represented in a
 reviewed migration that is traced to the browser fields it serves. The target is a

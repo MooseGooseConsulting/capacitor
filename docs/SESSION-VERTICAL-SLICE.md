@@ -108,7 +108,7 @@ source is not zero, an empty string, or invented sample data.
 
 | Visible contract | Evidence source | Persisted/projection requirement |
 |---|---|---|
-| session identity, title, status, relative start | `SURFACE` session list and detail header | Stable session identity; lifecycle status; first observed start; title provenance and update time. |
+| session identity, title, status, relative start | `SURFACE` session list and detail header | A stable machine-scoped recording identity; lifecycle status; first observed start; title provenance and update time. Agent-supplied session IDs are not assumed globally unique across fleet nodes. |
 | work item, PR, and repository labels | `SURFACE`; wire repository metadata; cross-repo measurement | Preserve supplied associations. Project a primary repository for the captured rail by highest observed event count, but retain every observed repository and the event evidence that supports it. |
 | vendor and model chips | `SURFACE`; client transcript payload | Preserve source vendor and model per event; session-level values are derived summaries, never a replacement for event values. |
 | token flow, cache read/write, cost, context occupancy | `SURFACE` transcript/card/trace observations | Store values with source/provenance and roll up only when the underlying event semantics support the total. Unknown context/cost remains unavailable. |
@@ -126,12 +126,18 @@ These are the minimum data-shape corrections that must precede a migration or pu
 read contract. They resolve the conflicts in the existing schema notes without
 pretending an unimplemented DDL is a live system.
 
-- **Receipt and normalized event are different things.** A received transcript line is
-  idempotent at `(session_id, agent_id, line_number)`, which is the client resume
-  contract. One line may yield zero, one, or several normalized/display events. The
-  latter therefore need a stable in-line ordinal (`logical_seq`) and a reference back
-  to the receipt. A watermark acknowledges the source receipt, not an arbitrary
-  number of projected events.
+- **Fleet identity scopes a receipt.** An agent-supplied `session_id` is not proven
+  globally unique across machines. The canonical recording identity and every
+  transcript receipt therefore include `machine_id`; a receipt is idempotent at
+  `(machine_id, session_id, agent_id, line_number)`. A public session route must use
+  an unambiguous recording identifier, rather than silently selecting one of two
+  machine collisions. Replacing this with a global-ID assumption requires a measured
+  multi-machine proof and an enforced client/server invariant.
+- **Receipt and normalized event are different things.** A received transcript line
+  at that receipt key is the client resume contract. One line may yield zero, one, or
+  several normalized/display events. The latter therefore need a stable in-line
+  ordinal (`logical_seq`) and a reference back to the receipt. A watermark
+  acknowledges the source receipt, not an arbitrary number of projected events.
 - **Ordering is explicit.** The Events and Trace projections sort source-derived rows
   by their source position and `logical_seq`; lifecycle rows use a stable derived key
   and a documented ordering rule. Do not rely on database insertion order.
@@ -141,14 +147,16 @@ pretending an unimplemented DDL is a live system.
   remain null; it must not be backfilled from a session's launch cwd. The visible
   repository rail can use the primary projection while a session remains discoverable
   through every associated repository.
-- **Lifecycle repeats are one fact.** Derive lifecycle identity from vendor, session,
-  and lifecycle kind, not changing request timestamps or body shape. First observed
-  start facts win; an absent value in a repeated callback never clears a known fact.
-  Inventory and platform on those callbacks are machine facts, so they upsert the
-  machine record by `machine_id` rather than append to a session. Recovery can replay
-  hundreds of valid duplicate lifecycle posts: rate handling must tolerate that burst,
-  and a 429 response must carry `Retry-After` so the client can spool and retry rather
-  than loop permanently.
+- **Lifecycle repeats are one fact, but child lifecycles are distinct.** A repeatable
+  top-level session callback is identified by `(machine_id, vendor, session_id,
+  lifecycle_kind)`, never by its changing timestamp or body shape. A subagent start
+  or stop additionally includes `agent_id`, so siblings cannot collapse into one
+  lifecycle fact. First observed start facts win; an absent value in a repeated
+  callback never clears a known fact. Inventory and platform on those callbacks are
+  machine facts, so they upsert the machine record by `machine_id` rather than append
+  to a session. Recovery can replay hundreds of valid duplicate lifecycle posts: rate
+  handling must tolerate that burst, and a 429 response must carry `Retry-After` so
+  the client can spool and retry rather than loop permanently.
 - **Raw source survives enrichment.** Keep enough original payload and provenance to
   compare normalization with the oracle and to reprocess after a normalizer changes.
   Derived fields carry their source/normalizer version where useful; no normalizer is
