@@ -36,6 +36,18 @@
                 @if (!string.IsNullOrWhiteSpace(detail.Session.Model)) {
                     <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">@detail.Session.Model</MudChip>
                 }
+                <span class="unavailable-session-action" data-session-action="share"
+                      title="Sharing is unavailable because the recovery Sessions API does not provide authenticated sharing.">
+                    <MudButton Variant="Variant.Outlined" Size="Size.Small" Disabled="true" StartIcon="@Icons.Material.Filled.Share">Share unavailable</MudButton>
+                </span>
+                <span class="unavailable-session-action" data-session-action="copy-link"
+                      title="Copy link is unavailable because this recovery workspace has no authenticated share-link contract.">
+                    <MudButton Variant="Variant.Outlined" Size="Size.Small" Disabled="true" StartIcon="@Icons.Material.Filled.ContentCopy">Copy link unavailable</MudButton>
+                </span>
+                <span class="unavailable-session-action" data-session-action="delete"
+                      title="Deletion is unavailable because the recovery Sessions API is read-only for captured session data.">
+                    <MudButton Variant="Variant.Outlined" Size="Size.Small" Disabled="true" StartIcon="@Icons.Material.Filled.DeleteOutline">Delete unavailable</MudButton>
+                </span>
                 <MudButton Variant="Variant.Outlined" Size="Size.Small" OnClick="LoadAsync" StartIcon="@Icons.Material.Filled.Refresh">Refresh</MudButton>
             </MudStack>
         </header>
@@ -53,10 +65,10 @@
                         <MudPaper Outlined="true" Class="detail-panel">
                             <MudText Typo="Typo.subtitle1">Rollup</MudText>
                             <MudGrid Spacing="1" Class="rollup-grid">
-                                <MudItem xs="6"><Metric Label="Events" Value="@detail.Session.EventCount.ToString("N0")" /></MudItem>
-                                <MudItem xs="6"><Metric Label="Tools" Value="@detail.Session.ToolCount.ToString("N0")" /></MudItem>
-                                <MudItem xs="6"><Metric Label="Tokens" Value="@FormatTokens(detail.Session.TotalTokens)" /></MudItem>
-                                <MudItem xs="6"><Metric Label="Cost" Value="@FormatCost(detail.Session.TotalCostUsd)" /></MudItem>
+                                <MudItem xs="6"><Metric Label="Events" Value="@detail.Events.Count.ToString("N0")" /></MudItem>
+                                <MudItem xs="6"><Metric Label="Tools" Value="@FormatCount(detail.Session.ToolCount)" IsAvailable="@(detail.Session.ToolCount is not null)" /></MudItem>
+                                <MudItem xs="6"><Metric Label="Tokens" Value="@FormatTokens(detail.Session.TotalTokens ?? 0)" IsAvailable="@(detail.Session.TotalTokens is not null && HasRecordedTokenUsage(detail.Events))" /></MudItem>
+                                <MudItem xs="6"><Metric Label="Cost" Value="@FormatCost(detail.Session.TotalCostUsd ?? 0m)" IsAvailable="@(detail.Session.TotalCostUsd is not null && HasRecordedCost(detail.Events))" /></MudItem>
                             </MudGrid>
                         </MudPaper>
                     </MudItem>
@@ -311,9 +323,18 @@
         + (string.IsNullOrWhiteSpace(session.Model) ? "." : " using " + session.Model + ".")
         + (session.StartedAt is { } startedAt ? " Started " + FormatUtc(startedAt) + "." : string.Empty);
     static string EventLabel(SessionEvent entry) => entry.EventType.Replace("_", " ", StringComparison.Ordinal);
-    static string EventAccounting(SessionEvent entry) => FormatTokens(entry.InputTokens) + " in → " + FormatTokens(entry.OutputTokens)
-        + " out · cache r" + FormatTokens(entry.CacheReadTokens) + " w" + FormatTokens(entry.CacheWriteTokens)
-        + " · " + FormatCost(entry.CostUsd);
+    static string EventAccounting(SessionEvent entry) {
+        var values = new List<string>();
+        if (HasRecordedTokenUsage(entry)) {
+            values.Add(FormatTokens(entry.InputTokens) + " in → " + FormatTokens(entry.OutputTokens)
+                + " out · cache r" + FormatTokens(entry.CacheReadTokens) + " w" + FormatTokens(entry.CacheWriteTokens));
+        } else {
+            values.Add("Token usage unavailable");
+        }
+
+        values.Add(HasRecordedCost(entry) ? FormatCost(entry.CostUsd) : "Cost unavailable");
+        return string.Join(" · ", values);
+    }
     static string TraceLabel(TraceEntry entry) => entry.Turn is { } turn
         ? "Turn " + turn.TurnIndex
         : entry.Event is { } traceEvent ? EventLabel(traceEvent) : entry.Kind ?? "Trace event";
@@ -323,11 +344,28 @@
         if (entry.Event is { } traceEvent) return EventAccounting(traceEvent);
         if (entry.Turn is not { } turn) return "No rollup metrics";
 
-        var values = new List<string> { FormatTokens(turn.InputTokens) + " in → " + FormatTokens(turn.OutputTokens) + " out" };
+        var values = new List<string>();
+        if (HasRecordedTokenUsage(turn.Events)) {
+            values.Add(FormatTokens(turn.InputTokens) + " in → " + FormatTokens(turn.OutputTokens) + " out");
+        } else {
+            values.Add("Token usage unavailable");
+        }
         if (turn.ToolCount > 0) values.Add(turn.ToolCount + (turn.ToolCount == 1 ? " tool" : " tools"));
         if (turn.DurationMilliseconds is { } duration) values.Add(FormatDuration(duration));
+        values.Add(HasRecordedCost(turn.Events) ? FormatCost(turn.CostUsd) : "Cost unavailable");
         return string.Join(" · ", values);
     }
+    static string FormatCount(int? value) => value is { } count ? count.ToString("N0") : string.Empty;
+    static bool HasRecordedTokenUsage(IEnumerable<SessionEvent> events) => events.Any(HasRecordedTokenUsage);
+    static bool HasRecordedCost(IEnumerable<SessionEvent> events) => events.Any(HasRecordedCost);
+    static bool HasRecordedTokenUsage(SessionEvent entry) => HasSourceField(entry, "input_tokens")
+        || HasSourceField(entry, "output_tokens")
+        || HasSourceField(entry, "cached_input_tokens")
+        || HasSourceField(entry, "cache_read_input_tokens")
+        || HasSourceField(entry, "cache_write_input_tokens")
+        || HasSourceField(entry, "cache_creation_input_tokens");
+    static bool HasRecordedCost(SessionEvent entry) => HasSourceField(entry, "cost_usd") || HasSourceField(entry, "costUsd");
+    static bool HasSourceField(SessionEvent entry, string field) => entry.RawPayload?.Contains($"\"{field}\"", StringComparison.OrdinalIgnoreCase) == true;
     static string FormatTokens(long value) => value switch {
         >= 1_000_000 => (value / 1_000_000d).ToString("0.#") + "M",
         >= 1_000 => (value / 1_000d).ToString("0.#") + "k",

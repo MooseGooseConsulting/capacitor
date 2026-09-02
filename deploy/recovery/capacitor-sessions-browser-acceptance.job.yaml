@@ -103,6 +103,36 @@ spec:
                 await page.goto(`${process.env.WEB_URL}/sessions/${sessionId}?tab=overview`, { waitUntil: 'domcontentloaded' });
                 await page.getByRole('tab', { name: 'Overview', exact: true }).waitFor({ state: 'visible', timeout: 30000 });
 
+                await page.locator('.detail-copy').filter({ hasText: 'Captured from codex using gpt-5.' }).waitFor({ state: 'visible', timeout: 30000 });
+                const tokenMetric = page.locator('[data-metric-label="Tokens"]');
+                assert.equal(await tokenMetric.getAttribute('data-metric-availability'), 'reported');
+                assert.equal((await tokenMetric.textContent()).trim(), '100');
+                const costMetric = page.locator('[data-metric-label="Cost"]');
+                assert.equal(await costMetric.getAttribute('data-metric-availability'), 'unavailable');
+                assert.equal((await costMetric.textContent()).trim(), 'Unavailable');
+
+                for (const [action, reason] of [
+                  ['share', 'authenticated sharing'],
+                  ['copy-link', 'share-link contract'],
+                  ['delete', 'read-only'],
+                ]) {
+                  const control = page.locator(`[data-session-action="${action}"]`);
+                  assert.match(await control.getAttribute('title'), new RegExp(reason));
+                  assert.equal(await control.getByRole('button').isDisabled(), true, `${action} must remain unavailable`);
+                }
+
+                await page.getByRole('tab', { name: 'Transcript', exact: true }).click();
+                await page.getByText('Show the captured Sessions dashboard import fixture.', { exact: true }).waitFor({ state: 'visible', timeout: 30000 });
+                await page.getByText('The dashboard should show this imported Codex session and its persisted transcript.', { exact: true }).waitFor({ state: 'visible', timeout: 30000 });
+                assert.equal((await page.locator('.transcript-entry').count()), 2, 'fixture transcript must persist both messages');
+                assert.ok((await page.locator('.transcript-entry .event-accounting').allTextContents())
+                  .every(text => text.includes('Token usage unavailable') && text.includes('Cost unavailable')),
+                  'missing per-message usage must remain unavailable');
+
+                await page.getByRole('tab', { name: 'Details', exact: true }).click();
+                await page.getByText(sessionId, { exact: true }).waitFor({ state: 'visible', timeout: 30000 });
+                await page.getByText('MooseGooseConsulting/capacitor', { exact: true }).last().waitFor({ state: 'visible', timeout: 30000 });
+
                 for (const [label, route] of [
                   ['Transcript', 'transcript'],
                   ['Events', 'events'],
