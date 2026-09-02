@@ -139,6 +139,65 @@ public class SqliteSessionRepository : ISessionRepository {
         };
     }
 
+    public async Task<SessionSearchPage> SearchSessionsAsync(SessionSearchQuery query, CancellationToken ct = default) {
+        var limit = Math.Clamp(query.Limit, 1, 200);
+        var offset = Math.Max(query.Offset, 0);
+        var text = string.IsNullOrWhiteSpace(query.Query) ? null : query.Query.Trim();
+        var repo = string.IsNullOrWhiteSpace(query.Repo) ? null : query.Repo.Trim();
+        var vendor = string.IsNullOrWhiteSpace(query.Vendor) ? null : query.Vendor.Trim();
+        var status = string.IsNullOrWhiteSpace(query.Status) ? null : query.Status.Trim();
+
+        const string where = @"
+            ($vendor IS NULL OR vendor = $vendor)
+            AND ($status IS NULL OR status = $status)
+            AND ($repo IS NULL OR repo_hash = $repo OR (repo_owner || '/' || repo_name) = $repo)
+            AND ($query IS NULL
+                 OR title LIKE '%' || $query || '%'
+                 OR EXISTS (
+                     SELECT 1 FROM session_events
+                     WHERE session_events.session_id = sessions.session_id
+                       AND content LIKE '%' || $query || '%'
+                 ))";
+
+        using var count = _connection.CreateCommand();
+        count.CommandText = $"SELECT COUNT(*) FROM sessions WHERE {where};";
+        AddSearchParameters(count, text, repo, vendor, status);
+        var total = Convert.ToInt64(await count.ExecuteScalarAsync(ct), CultureInfo.InvariantCulture);
+
+        var ids = new List<string>();
+        using (var select = _connection.CreateCommand()) {
+            select.CommandText = $@"
+                SELECT session_id FROM sessions
+                WHERE {where}
+                ORDER BY COALESCE(last_event_at, started_at) DESC, session_id DESC
+                LIMIT $limit OFFSET $offset;";
+            AddSearchParameters(select, text, repo, vendor, status);
+            select.Parameters.AddWithValue("$limit", limit);
+            select.Parameters.AddWithValue("$offset", offset);
+            using var reader = await select.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct)) ids.Add(reader.GetString(0));
+        }
+
+        var sessions = new List<SessionHeaderRecord>(ids.Count);
+        foreach (var id in ids) {
+            var session = await GetSessionAsync(id, ct);
+            if (session is not null) sessions.Add(session);
+        }
+        return new SessionSearchPage(sessions, total);
+    }
+
+    private static void AddSearchParameters(
+        SqliteCommand command,
+        string? text,
+        string? repo,
+        string? vendor,
+        string? status) {
+        command.Parameters.AddWithValue("$query", (object?)text ?? DBNull.Value);
+        command.Parameters.AddWithValue("$repo", (object?)repo ?? DBNull.Value);
+        command.Parameters.AddWithValue("$vendor", (object?)vendor ?? DBNull.Value);
+        command.Parameters.AddWithValue("$status", (object?)status ?? DBNull.Value);
+    }
+
     public async Task UpdateSessionAsync(SessionHeaderRecord session, CancellationToken ct = default) {
         using var tx = _connection.BeginTransaction();
         try {
@@ -364,6 +423,63 @@ public class SqliteSessionRepository : ISessionRepository {
             await tx.RollbackAsync(CancellationToken.None);
             throw;
         }
+    }
+
+    public async Task<SessionEvaluation?> GetLatestEvaluationAsync(string sessionId, CancellationToken ct = default) {
+        EvalRunRecord? run = null;
+        using (var runCommand = _connection.CreateCommand()) {
+            runCommand.CommandText = @"
+                SELECT eval_run_id, session_id, judge_model, overall_score, summary,
+                       retrospective_json, retrospective_prompt_version, evaluated_at
+                FROM eval_runs
+                WHERE session_id = $session_id
+                ORDER BY evaluated_at DESC, eval_run_id DESC
+                LIMIT 1;";
+            runCommand.Parameters.AddWithValue("$session_id", sessionId);
+            using var reader = await runCommand.ExecuteReaderAsync(ct);
+            if (await reader.ReadAsync(ct)) {
+                run = new EvalRunRecord {
+                    EvalRunId = reader.GetString(0),
+                    SessionId = reader.GetString(1),
+                    JudgeModel = reader.GetString(2),
+                    OverallScore = reader.GetInt32(3),
+                    Summary = reader.GetString(4),
+                    RetrospectiveJson = reader.IsDBNull(5) ? null : reader.GetString(5),
+                    RetrospectivePromptVersion = reader.IsDBNull(6) ? null : reader.GetString(6),
+                    EvaluatedAt = DateTimeOffset.Parse(reader.GetString(7), CultureInfo.InvariantCulture)
+                };
+            }
+        }
+
+        if (run is null) return null;
+
+        var verdicts = new List<EvalVerdictRecord>();
+        using (var verdictCommand = _connection.CreateCommand()) {
+            verdictCommand.CommandText = @"
+                SELECT eval_run_id, category, question_id, score, verdict, finding,
+                       evidence, recommendation, tools_used, prompt_version
+                FROM eval_verdicts
+                WHERE eval_run_id = $eval_run_id
+                ORDER BY category, question_id;";
+            verdictCommand.Parameters.AddWithValue("$eval_run_id", run.EvalRunId);
+            using var reader = await verdictCommand.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct)) {
+                verdicts.Add(new EvalVerdictRecord {
+                    EvalRunId = reader.GetString(0),
+                    Category = reader.GetString(1),
+                    QuestionId = reader.GetString(2),
+                    Score = reader.GetInt32(3),
+                    Verdict = reader.GetString(4),
+                    Finding = reader.GetString(5),
+                    Evidence = reader.IsDBNull(6) ? null : reader.GetString(6),
+                    Recommendation = reader.IsDBNull(7) ? null : reader.GetString(7),
+                    ToolsUsed = reader.IsDBNull(8) ? null : reader.GetInt32(8),
+                    PromptVersion = reader.IsDBNull(9) ? null : reader.GetString(9)
+                });
+            }
+        }
+
+        return new SessionEvaluation(run, verdicts);
     }
 
     public async Task UpdateRollupAsync(
