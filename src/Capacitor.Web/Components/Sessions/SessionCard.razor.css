@@ -5,20 +5,26 @@
 }
 
 .session-card {
-    background: #fff;
-    border-color: #e1e6ed;
-    border-radius: 10px;
-    padding: 1rem 1.1rem;
+    background: var(--capacitor-panel);
+    border: 1px solid transparent;
+    border-radius: .4rem;
+    padding: .65rem .7rem;
     transition: border-color .15s ease, box-shadow .15s ease;
 }
 
 .session-card-link:hover .session-card {
-    border-color: #91a9d6;
-    box-shadow: 0 6px 18px rgba(33, 59, 98, .08);
+    background: var(--capacitor-hover);
+    border-color: var(--capacitor-border);
+}
+
+.session-card-selected {
+    background: var(--capacitor-selected);
+    border-color: var(--capacitor-accent);
 }
 
 .session-title {
-    color: #1d2738;
+    color: var(--capacitor-text);
+    flex: 1 1 0;
     font-weight: 750;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -26,44 +32,55 @@
 }
 
 .session-identifiers {
-    color: #647084;
-    margin: .7rem 0 .85rem;
+    align-items: center;
+    color: var(--capacitor-muted);
+    display: flex;
+    flex-wrap: wrap;
+    font-size: .7rem;
+    gap: .28rem;
+    margin: .38rem 0 .45rem .88rem;
 }
 
 .session-metrics {
-    border-top: 1px solid #edf0f4;
-    padding-top: .8rem;
+    border-top: 1px solid var(--capacitor-border-muted);
+    color: var(--capacitor-muted);
+    display: flex;
+    font-size: .69rem;
+    gap: .7rem;
+    margin-left: .88rem;
+    padding-top: .45rem;
 }
 
-.metric-label {
-    color: #818b9c;
-    display: block;
-    font-size: .66rem;
-    font-weight: 700;
-    letter-spacing: .04em;
-    text-transform: uppercase;
-}
-
-.metric-value {
-    color: #344054;
-    font-weight: 650;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+.session-card-heading {
+    align-items: center;
+    display: flex;
+    gap: .38rem;
 }
 
 .muted {
-    color: #838d9b;
+    color: var(--capacitor-muted);
+}
+
+.session-started {
+    flex: 0 0 auto;
+    font-size: .68rem;
 }
 
 .status-dot {
-    background: #9aa3b1;
+    background: var(--capacitor-status-neutral);
     border-radius: 50%;
     display: inline-block;
     height: .55rem;
     width: .55rem;
 }
 
-.status-active, .status-running { background: #2d9d68; }
-.status-completed, .status-success { background: #5481d6; }
-.status-failed, .status-error { background: #cc4a4a; }
+.status-active, .status-running { background: var(--capacitor-status-active); }
+.status-completed, .status-success { background: var(--capacitor-status-complete); }
+.status-failed, .status-error { background: var(--capacitor-status-error); }
+
+.session-chip {
+    border: 1px solid var(--capacitor-border);
+    border-radius: 999px;
+    color: var(--capacitor-subtle-text);
+    padding: .04rem .32rem;
+}

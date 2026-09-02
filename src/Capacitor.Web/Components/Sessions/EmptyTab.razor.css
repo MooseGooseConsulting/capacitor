@@ -1,6 +1,9 @@
 .empty-tab {
     align-items: center;
-    color: #738093;
+    background: var(--capacitor-panel);
+    border: 1px dashed var(--capacitor-border);
+    border-radius: .5rem;
+    color: var(--capacitor-muted);
     display: flex;
     flex-direction: column;
     gap: .65rem;

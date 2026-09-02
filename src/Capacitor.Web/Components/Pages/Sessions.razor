@@ -1,68 +1,89 @@
 @page "/"
 @page "/sessions"
+@page "/sessions/{SessionId}"
 @inject ICapacitorSessionsClient SessionsClient
 @implements IDisposable
 
 <PageTitle>Sessions · Capacitor</PageTitle>
 
-<div class="sessions-surface">
+<div class="sessions-workspace">
     <SessionsRail Sessions="_sessions" SelectedRepository="_repository" OnRepositoryChanged="SelectRepositoryAsync" />
 
-    <main class="sessions-list" aria-live="polite">
+    <section class="sessions-list-pane" aria-label="Persisted sessions" aria-live="polite">
         <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="sessions-heading">
             <div>
-                <MudText Typo="Typo.h4">Sessions</MudText>
+                <MudText Typo="Typo.subtitle1">Sessions</MudText>
                 @if (_result is { } result) {
                     <MudText Typo="Typo.body2" Class="subdued">@result.Total.ToString("N0") persisted session@(result.Total == 1 ? string.Empty : "s")</MudText>
                 }
             </div>
-            <MudButton Variant="Variant.Outlined" OnClick="RefreshAsync" StartIcon="@Icons.Material.Filled.Refresh">Refresh</MudButton>
+            <MudIconButton Icon="@Icons.Material.Filled.Refresh" OnClick="RefreshAsync" aria-label="Refresh persisted sessions" />
         </MudStack>
 
-        <MudStack Row="true" Wrap="Wrap.Wrap" Spacing="1" Class="session-search">
+        <MudStack Row="true" Spacing="1" Class="session-search">
             <MudTextField @bind-Value="_query" Placeholder="Search titles and transcript content" Variant="Variant.Outlined"
                           Immediate="true" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
                           Class="search-field" />
-            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SearchAsync">Search</MudButton>
+            <MudIconButton Icon="@Icons.Material.Filled.Search" OnClick="SearchAsync" aria-label="Search persisted sessions" />
             @if (!string.IsNullOrWhiteSpace(_repository)) {
                 <MudChip T="string" Color="Color.Primary" OnClose="@(() => ClearRepositoryAsync())">@_repository</MudChip>
             }
         </MudStack>
 
-        @if (_isLoading) {
-            <MudStack Spacing="2" Class="session-state">
-                @for (var i = 0; i < 4; i++) {
-                    <MudSkeleton SkeletonType="SkeletonType.Rectangle" Height="142px" />
+        <div class="session-list-scroll">
+            @if (_isLoading) {
+                <MudStack Spacing="1" Class="session-state">
+                    @for (var i = 0; i < 4; i++) {
+                        <MudSkeleton SkeletonType="SkeletonType.Rectangle" Height="104px" />
+                    }
+                </MudStack>
+            } else if (_failure is { } failure) {
+                <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Class="session-state">
+                    <MudText Typo="Typo.subtitle2">Sessions are not available from the API.</MudText>
+                    <MudText Typo="Typo.body2">@failure.Message</MudText>
+                    <MudButton Variant="Variant.Text" Color="Color.Primary" OnClick="RefreshAsync">Try again</MudButton>
+                </MudAlert>
+            } else if (_result is { Sessions.Count: 0 }) {
+                <section class="empty-state session-state">
+                    <MudIcon Icon="@Icons.Material.Filled.Inbox" Size="Size.Large" />
+                    <MudText Typo="Typo.subtitle2">No persisted sessions match this view.</MudText>
+                    <MudText Typo="Typo.body2">Import or capture transcripts through the API, then refresh this list.</MudText>
+                </section>
+            } else if (_result is { } result) {
+                <div class="session-card-list">
+                    @foreach (var session in result.Sessions) {
+                        <SessionCard Session="session" IsSelected="@string.Equals(session.SessionId, SessionId, StringComparison.Ordinal)" />
+                    }
+                </div>
+                @if (result.Sessions.Count < result.Total) {
+                    <MudButton Variant="Variant.Outlined" OnClick="LoadMoreAsync" Class="load-more-sessions">
+                        Load more sessions
+                    </MudButton>
                 }
-            </MudStack>
-        } else if (_failure is { } failure) {
-            <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Class="session-state">
-                <MudText Typo="Typo.subtitle2">Sessions are not available from the API.</MudText>
-                <MudText Typo="Typo.body2">@failure.Message</MudText>
-                <MudButton Variant="Variant.Text" Color="Color.Primary" OnClick="RefreshAsync">Try again</MudButton>
-            </MudAlert>
-        } else if (_result is { Sessions.Count: 0 }) {
-            <MudPaper Outlined="true" Class="empty-state session-state">
-                <MudIcon Icon="@Icons.Material.Filled.Inbox" Size="Size.Large" />
-                <MudText Typo="Typo.h6">No persisted sessions match this view.</MudText>
-                <MudText Typo="Typo.body2">Import or capture transcripts through the API, then refresh this list.</MudText>
-            </MudPaper>
-        } else if (_result is { } result) {
-            <MudStack Spacing="1">
-                @foreach (var session in result.Sessions) {
-                    <SessionCard Session="session" />
-                }
-            </MudStack>
-            @if (result.Sessions.Count < result.Total) {
-                <MudButton Variant="Variant.Outlined" OnClick="LoadMoreAsync" Class="load-more-sessions">
-                    Load more sessions
-                </MudButton>
             }
+        </div>
+    </section>
+
+    <section class="session-detail-pane" aria-label="Selected session">
+        @if (string.IsNullOrWhiteSpace(SessionId)) {
+            <div class="session-selection-empty">
+                <MudIcon Icon="@Icons.Material.Filled.ChatBubbleOutline" Size="Size.Large" />
+                <MudText Typo="Typo.h6">Select a session to view it</MudText>
+                <MudText Typo="Typo.body2">Choose a persisted session from the list to inspect its conversation and details.</MudText>
+            </div>
+        } else {
+            <SessionDetail SessionId="@SessionId" Tab="@Tab" />
         }
-    </main>
+    </section>
 </div>
 
 @code {
+    [Parameter]
+    public string? SessionId { get; set; }
+
+    [SupplyParameterFromQuery(Name = "tab")]
+    public string? Tab { get; set; }
+
     SessionSearchResponse? _result;
     ApiFailure? _failure;
     bool _isLoading = true;

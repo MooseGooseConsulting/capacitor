@@ -1,59 +1,47 @@
 @namespace Capacitor.Web.Components.Sessions
 
 <a class="session-card-link" href="@($"/sessions/{Uri.EscapeDataString(Session.SessionId)}")">
-    <MudPaper Outlined="true" Class="session-card">
-        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="session-card-heading">
+    <article class="@CardClass" aria-current="@(IsSelected ? "page" : null)">
+        <div class="session-card-heading">
             <span class="status-dot @StatusClass" aria-label="@($"{DisplayStatus} session")"></span>
-            <MudText Typo="Typo.subtitle2" Class="session-title">@DisplayTitle</MudText>
-            <MudSpacer />
+            <span class="session-title">@DisplayTitle</span>
             @if (Session.StartedAt is { } startedAt) {
-                <MudText Typo="Typo.caption" Class="muted">@RelativeTime(startedAt)</MudText>
+                <span class="muted session-started">@RelativeTime(startedAt)</span>
             }
-        </MudStack>
+        </div>
 
-        <MudStack Row="true" Wrap="Wrap.Wrap" Spacing="1" Class="session-identifiers">
-            <MudText Typo="Typo.caption">@Session.Repository</MudText>
+        <div class="session-identifiers">
+            <span>@Session.Repository</span>
             @if (Session.PrNumber is { } prNumber) {
-                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">PR #@prNumber</MudChip>
+                <span class="session-chip">PR #@prNumber</span>
             }
             @if (!string.IsNullOrWhiteSpace(Session.Vendor)) {
-                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">@Session.Vendor</MudChip>
+                <span class="session-chip">@Session.Vendor</span>
             }
             @if (!string.IsNullOrWhiteSpace(Session.Model)) {
-                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">@Session.Model</MudChip>
+                <span class="session-chip">@Session.Model</span>
             }
-        </MudStack>
+        </div>
 
-        <MudGrid Spacing="1" Class="session-metrics">
-            <MudItem xs="12" sm="6" md="3">
-                <Metric Label="Tokens" Value="@TokenFlow" />
-            </MudItem>
-            <MudItem xs="12" sm="6" md="3">
-                <Metric Label="Context" Value="@ContextOccupancy" />
-            </MudItem>
-            <MudItem xs="4" sm="4" md="2">
-                <Metric Label="Diff" Value="@Diff" />
-            </MudItem>
-            <MudItem xs="4" sm="4" md="2">
-                <Metric Label="Tools" Value="@Session.ToolCount.ToString("N0")" />
-            </MudItem>
-            <MudItem xs="4" sm="4" md="2">
-                <Metric Label="Errors" Value="Not reported" />
-            </MudItem>
-        </MudGrid>
-    </MudPaper>
+        <div class="session-metrics">
+            <span>@TokenFlow</span>
+            <span>@Session.ToolCount.ToString("N0") tool@(Session.ToolCount == 1 ? string.Empty : "s")</span>
+        </div>
+    </article>
 </a>
 
 @code {
     [Parameter, EditorRequired]
     public SessionSummary Session { get; set; } = default!;
 
+    [Parameter]
+    public bool IsSelected { get; set; }
+
     string DisplayTitle => string.IsNullOrWhiteSpace(Session.Title) ? "Untitled session" : Session.Title;
     string DisplayStatus => string.IsNullOrWhiteSpace(Session.Status) ? "unknown" : Session.Status;
     string StatusClass => $"status-{DisplayStatus.ToLowerInvariant()}";
     string TokenFlow => Session.TotalTokens > 0 ? $"{Compact(Session.TotalTokens)} total" : "Not reported";
-    const string ContextOccupancy = "Not reported";
-    const string Diff = "Not reported";
+    string CardClass => IsSelected ? "session-card session-card-selected" : "session-card";
 
     static string Compact(long value) => value switch {
         >= 1_000_000 => $"{value / 1_000_000d:0.#}M",
