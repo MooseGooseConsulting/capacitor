@@ -65,6 +65,11 @@ spec:
           command: ["/bin/sh", "-ec"]
           args:
             - |
+              # The container supplies the pinned browser binaries and OS dependencies;
+              # install only the matching Node library into this disposable Job filesystem.
+              mkdir -p /tmp/browser-acceptance
+              cd /tmp/browser-acceptance
+              npm install --no-save --ignore-scripts playwright@1.58.2
               node <<'EOF'
               const assert = require('node:assert/strict');
               const { chromium } = require('playwright');
