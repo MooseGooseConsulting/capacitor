@@ -177,4 +177,79 @@ public class NormalizerTests {
         await Assert.That(events[0].CacheReadTokens).IsEqualTo(10);
         await Assert.That(events[0].Timestamp).IsEqualTo(DateTimeOffset.Parse("2026-06-01T12:00:00.000Z", System.Globalization.CultureInfo.InvariantCulture));
     }
+
+    [Test]
+    public async Task CodexNormalizer_normalizes_response_item_assistant_content_and_usage() {
+        const string rawLine = """{"timestamp":"2026-08-11T09:00:16.000Z","type":"response_item","payload":{"id":"msg-1","type":"message","role":"assistant","model":"gpt-5-codex","content":[{"type":"output_text","text":"I found the issue."},{"type":"reasoning","text":"Inspect the call path."}],"usage":{"input_tokens":120,"cached_input_tokens":40,"output_tokens":22,"reasoning_output_tokens":9,"cost_usd":0.0042}}}""";
+
+        var events = _router.Normalize("codex", "sess-codex", "", 14, rawLine);
+
+        await Assert.That(events.Count).IsEqualTo(2);
+        await Assert.That(events[0].EventType).IsEqualTo("AssistantTurn");
+        await Assert.That(events[0].Content).IsEqualTo("I found the issue.");
+        await Assert.That(events[0].Model).IsEqualTo("gpt-5-codex");
+        await Assert.That(events[0].InputTokens).IsEqualTo(120);
+        await Assert.That(events[0].CacheReadTokens).IsEqualTo(40);
+        await Assert.That(events[0].ReasoningTokens).IsEqualTo(9);
+        await Assert.That(events[0].CostUsd).IsEqualTo(0.0042m);
+        await Assert.That(events[0].LogicalSeq).IsEqualTo(0);
+        await Assert.That(events[1].EventType).IsEqualTo("AssistantThinking");
+        await Assert.That(events[1].InputTokens).IsEqualTo(0);
+        await Assert.That(events[1].LogicalSeq).IsEqualTo(1);
+        await Assert.That(events[1].RawPayload).IsEqualTo(rawLine);
+    }
+
+    [Test]
+    public async Task CodexNormalizer_normalizes_tool_call_output_and_token_count() {
+        const string output = """{"timestamp":"2026-08-11T09:01:01.000Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call-1","output":"permission denied","exit_code":126,"status":"failed"}}""";
+        const string tokens = """{"timestamp":"2026-08-11T09:01:02.000Z","type":"event_msg","payload":{"type":"token_count","info":{"model":"gpt-5-codex","total_token_usage":{"input_tokens":500,"cached_input_tokens":200,"output_tokens":30,"reasoning_output_tokens":11}}}}""";
+
+        var toolResult = _router.Normalize("codex", "sess-codex", "", 15, output);
+        var usage = _router.Normalize("codex", "sess-codex", "", 16, tokens);
+
+        await Assert.That(toolResult).Count().IsEqualTo(1);
+        await Assert.That(toolResult[0].EventType).IsEqualTo("ToolResult");
+        await Assert.That(toolResult[0].ItemId).IsEqualTo("call-1");
+        await Assert.That(toolResult[0].ToolOutput).IsEqualTo("permission denied");
+        await Assert.That(toolResult[0].ToolExitCode).IsEqualTo(126);
+        await Assert.That(toolResult[0].IsError).IsTrue();
+        await Assert.That(usage).Count().IsEqualTo(1);
+        await Assert.That(usage[0].EventType).IsEqualTo("UsageBackfill");
+        await Assert.That(usage[0].InputTokens).IsEqualTo(500);
+        await Assert.That(usage[0].CacheReadTokens).IsEqualTo(200);
+        await Assert.That(usage[0].ReasoningTokens).IsEqualTo(11);
+    }
+
+    [Test]
+    public async Task KiroTranscriptNormalizer_normalizes_native_assistant_text_tool_use_and_enriched_usage() {
+        const string rawLine = """{"version":"v1","timestamp":"2026-06-10T20:23:50.000Z","kind":"AssistantMessage","data":{"message_id":"a2","content":[{"kind":"text","data":"done"},{"kind":"toolUse","data":{"name":"write","input":{"path":"/work/a.txt","content":"x"}}}],"_kcap_usage":{"input_token_count":120,"output_token_count":21,"model":"claude-haiku-4.5"}}}""";
+
+        var events = _router.Normalize("kiro", "sess-kiro", "", 6, rawLine);
+
+        await Assert.That(events.Count).IsEqualTo(2);
+        await Assert.That(events[0].EventType).IsEqualTo("AssistantTurn");
+        await Assert.That(events[0].Content).IsEqualTo("done");
+        await Assert.That(events[0].ItemId).IsEqualTo("a2");
+        await Assert.That(events[0].Model).IsEqualTo("claude-haiku-4.5");
+        await Assert.That(events[0].InputTokens).IsEqualTo(120);
+        await Assert.That(events[0].OutputTokens).IsEqualTo(21);
+        await Assert.That(events[0].Timestamp).IsEqualTo(DateTimeOffset.Parse("2026-06-10T20:23:50.000Z", System.Globalization.CultureInfo.InvariantCulture));
+        await Assert.That(events[1].EventType).IsEqualTo("ToolCall");
+        await Assert.That(events[1].ToolName).IsEqualTo("write");
+        await Assert.That(events[1].ToolInput).Contains("/work/a.txt");
+        await Assert.That(events[1].LogicalSeq).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task KiroTranscriptNormalizer_normalizes_live_usage_backfill_without_treating_credits_as_usd() {
+        const string rawLine = """{"kind":"KiroUsageBackfilled","data":{"message_id":"msg-42","credits":1.5,"context_usage_percentage":37.0}}""";
+
+        var events = _router.Normalize("kiro", "sess-kiro", "", 2_000_000_000, rawLine);
+
+        await Assert.That(events.Count).IsEqualTo(1);
+        await Assert.That(events[0].EventType).IsEqualTo("UsageBackfill");
+        await Assert.That(events[0].ItemId).IsEqualTo("msg-42");
+        await Assert.That(events[0].CostUsd).IsEqualTo(0m);
+        await Assert.That(events[0].RawPayload).IsEqualTo(rawLine);
+    }
 }
