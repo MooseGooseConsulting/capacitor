@@ -15,10 +15,12 @@ back to SQLite, a local temporary database, or a mock database.
 
 The test driver reaches Blood Arrow through the host and a short-lived remote
 port-forward to `pg18-core-recovery-rw`; build/test execution occurs in the
-remote environment. It obtains the password through `doppler run` from
-`homelab/dev` using `CAPACITOR_TEST_DB_PASSWORD`. Commands, logs, artifacts,
-and Git contain only secret names, never secret values or full connection
-strings.
+remote environment. Its password is injected from the remote Kubernetes
+basic-auth Secret `data-platform/capacitor-test-db-credentials`. Doppler
+`homelab/dev` secret `CAPACITOR_TEST_DB_PASSWORD` is the source of truth used
+to provision or rotate that Secret, not a value printed or stored by the test
+driver. Commands, logs, artifacts, and Git contain only secret names, never
+secret values or full connection strings.
 
 Provisioning gives Capacitor its own role, database, and Kubernetes basic-auth
 Secret. Tests never use the shared `app` role. No test deletes, resets, or
