@@ -215,14 +215,23 @@ public sealed record TraceEntry {
     [JsonPropertyName("kind")]
     public string? Kind { get; init; }
 
-    [JsonPropertyName("label")]
-    public string? Label { get; init; }
-
     [JsonPropertyName("turn")]
-    public int? Turn { get; init; }
+    public TraceTurn? Turn { get; init; }
 
-    [JsonPropertyName("timestamp")]
-    public DateTimeOffset? Timestamp { get; init; }
+    [JsonPropertyName("event")]
+    public SessionEvent? Event { get; init; }
+}
+
+/// <summary>Aggregate emitted by the persisted-session API for one user turn.</summary>
+public sealed record TraceTurn {
+    [JsonPropertyName("turn_index")]
+    public int TurnIndex { get; init; }
+
+    [JsonPropertyName("started_at")]
+    public DateTimeOffset StartedAt { get; init; }
+
+    [JsonPropertyName("ended_at")]
+    public DateTimeOffset EndedAt { get; init; }
 
     [JsonPropertyName("duration_ms")]
     public long? DurationMilliseconds { get; init; }
@@ -233,11 +242,20 @@ public sealed record TraceEntry {
     [JsonPropertyName("output_tokens")]
     public long OutputTokens { get; init; }
 
+    [JsonPropertyName("cache_read_tokens")]
+    public long CacheReadTokens { get; init; }
+
+    [JsonPropertyName("cache_write_tokens")]
+    public long CacheWriteTokens { get; init; }
+
+    [JsonPropertyName("cost_usd")]
+    public decimal CostUsd { get; init; }
+
     [JsonPropertyName("tool_count")]
     public int ToolCount { get; init; }
 
-    [JsonPropertyName("content")]
-    public string? Content { get; init; }
+    [JsonPropertyName("events")]
+    public IReadOnlyList<SessionEvent> Events { get; init; } = [];
 }
 
 /// <summary>The latest persisted evaluation, if this session has been evaluated.</summary>

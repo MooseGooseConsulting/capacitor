@@ -127,14 +127,14 @@
                             <MudPaper Outlined="true" Class="trace-entry">
                                 <MudStack Row="true" Wrap="Wrap.Wrap" AlignItems="AlignItems.Center" Spacing="1">
                                     <MudText Typo="Typo.subtitle2">@TraceLabel(entry)</MudText>
-                                    @if (entry.Timestamp is { } timestamp) {
+                                    @if (TraceTimestamp(entry) is { } timestamp) {
                                         <MudText Typo="Typo.caption" Class="muted">@timestamp.LocalDateTime.ToString("g")</MudText>
                                     }
                                     <MudSpacer />
                                     <MudText Typo="Typo.caption">@TraceMetrics(entry)</MudText>
                                 </MudStack>
-                                @if (!string.IsNullOrWhiteSpace(entry.Content)) {
-                                    <MudText Typo="Typo.body2" Class="pre-wrap">@entry.Content</MudText>
+                                @if (!string.IsNullOrWhiteSpace(TraceContent(entry))) {
+                                    <MudText Typo="Typo.body2" Class="pre-wrap">@TraceContent(entry)</MudText>
                                 }
                             </MudPaper>
                         }
@@ -224,11 +224,18 @@
     static string EventAccounting(SessionEvent entry) => FormatTokens(entry.InputTokens) + " in → " + FormatTokens(entry.OutputTokens)
         + " out · cache r" + FormatTokens(entry.CacheReadTokens) + " w" + FormatTokens(entry.CacheWriteTokens)
         + " · " + FormatCost(entry.CostUsd);
-    static string TraceLabel(TraceEntry entry) => entry.Turn is { } turn ? "Turn " + turn : entry.Label ?? entry.Kind ?? "Trace event";
+    static string TraceLabel(TraceEntry entry) => entry.Turn is { } turn
+        ? "Turn " + turn.TurnIndex
+        : entry.Event is { } @event ? EventLabel(@event) : entry.Kind ?? "Trace event";
+    static DateTimeOffset? TraceTimestamp(TraceEntry entry) => entry.Turn?.StartedAt ?? entry.Event?.Timestamp;
+    static string? TraceContent(TraceEntry entry) => entry.Event?.Content;
     static string TraceMetrics(TraceEntry entry) {
-        var values = new List<string> { FormatTokens(entry.InputTokens) + " in → " + FormatTokens(entry.OutputTokens) + " out" };
-        if (entry.ToolCount > 0) values.Add(entry.ToolCount + (entry.ToolCount == 1 ? " tool" : " tools"));
-        if (entry.DurationMilliseconds is { } duration) values.Add(FormatDuration(duration));
+        if (entry.Event is { } @event) return EventAccounting(@event);
+        if (entry.Turn is not { } turn) return "No rollup metrics";
+
+        var values = new List<string> { FormatTokens(turn.InputTokens) + " in → " + FormatTokens(turn.OutputTokens) + " out" };
+        if (turn.ToolCount > 0) values.Add(turn.ToolCount + (turn.ToolCount == 1 ? " tool" : " tools"));
+        if (turn.DurationMilliseconds is { } duration) values.Add(FormatDuration(duration));
         return string.Join(" · ", values);
     }
     static string FormatTokens(long value) => value switch {
