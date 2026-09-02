@@ -69,12 +69,13 @@ spec:
               const assert = require('node:assert/strict');
               const { chromium } = require('playwright');
 
-              const sessionId = process.env.SESSION_ID;
-              const browser = await chromium.launch({ headless: true });
-              const context = await browser.newContext({ viewport: { width: 1600, height: 1200 } });
-              const page = await context.newPage();
+              (async () => {
+                const sessionId = process.env.SESSION_ID;
+                const browser = await chromium.launch({ headless: true });
+                const context = await browser.newContext({ viewport: { width: 1600, height: 1200 } });
+                const page = await context.newPage();
 
-              try {
+                try {
                 await page.goto(`${process.env.WEB_URL}/sessions`, { waitUntil: 'domcontentloaded' });
                 await page.locator(`a.session-card-link[href="/sessions/${sessionId}"]`).waitFor({ state: 'visible', timeout: 30000 });
 
@@ -103,8 +104,12 @@ spec:
                 }
 
                 console.log(`Browser acceptance passed for imported session ${sessionId}.`);
-              } finally {
-                await context.close();
-                await browser.close();
-              }
+                } finally {
+                  await context.close();
+                  await browser.close();
+                }
+              })().catch(error => {
+                console.error(error);
+                process.exitCode = 1;
+              });
               EOF
