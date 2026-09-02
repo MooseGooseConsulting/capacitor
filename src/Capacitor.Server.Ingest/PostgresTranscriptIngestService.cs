@@ -392,7 +392,7 @@ public sealed class PostgresTranscriptIngestService : ITranscriptIngest {
         await using var reader = await command.ExecuteReaderAsync(ct);
         if (!await reader.ReadAsync(ct) || reader.IsDBNull(0)) return null;
         var lastAccepted = reader.GetInt32(0);
-        var firstRejected = reader.IsDBNull(1) ? null : reader.GetInt32(1);
+        int? firstRejected = reader.IsDBNull(1) ? null : reader.GetInt32(1);
         var last = firstRejected is { } rejected && rejected <= lastAccepted ? rejected - 1 : lastAccepted;
         return last >= startLine ? last : null;
     }
