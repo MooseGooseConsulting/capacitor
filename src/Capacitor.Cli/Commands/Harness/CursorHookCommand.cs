@@ -298,7 +298,7 @@ public sealed class CursorHookCommand(ConfigRoot config, ProfileContext profiles
             // So the "decision made once at the child's own sessionStart" this was designed
             // around never happens. Subagent nesting is delivered by `kcap import --cursor` plus
             // the server-side adoption sweep, over complete transcripts. See
-            // docs/superpowers/specs/2026-07-30-ai1505-cursor-subagent-classification-design.md
+            // docs/history/pre-recovery/superpowers/specs/2026-07-30-ai1505-cursor-subagent-classification-design.md
             string? subagentParentId  = null;
             string? subagentAgentType = null;
             if (sessionId is not null) {
@@ -310,7 +310,7 @@ public sealed class CursorHookCommand(ConfigRoot config, ProfileContext profiles
                 // TryLoadLink gate above is NOT inert — it runs on every event and still
                 // consumes a marker persisted by another surface or an older build.)
                 // Kept as the landing site for a native subagentStart revival; see
-                // docs/superpowers/specs/2026-07-30-ai1505-cursor-subagent-classification-design.md
+                // docs/history/pre-recovery/superpowers/specs/2026-07-30-ai1505-cursor-subagent-classification-design.md
                 // for why the trigger must move to the parent's hooks.
                 } else if (eventName == "sessionStart" && !string.IsNullOrEmpty(transcriptPath)) {
                     try {
@@ -604,7 +604,7 @@ public sealed class CursorHookCommand(ConfigRoot config, ProfileContext profiles
                 // the vendor contract must stay visible so a future reader knows what to
                 // re-check. Evidence, the re-probe procedure, and the untested Cursor IDE gap
                 // are in
-                // docs/superpowers/specs/2026-07-30-ai1505-cursor-subagent-classification-design.md
+                // docs/history/pre-recovery/superpowers/specs/2026-07-30-ai1505-cursor-subagent-classification-design.md
                 new SessionMemoryLifecycle(SessionStartHarness.Cursor, sessionId, LifecycleInstanceId: null,
                     IsTopLevel: true, ClassificationAuthoritative: true, SessionLifecycleReason.New,
                     CallbackMayRepeat: false),
@@ -647,7 +647,7 @@ public sealed class CursorHookCommand(ConfigRoot config, ProfileContext profiles
     /// the sessionStart/sessionEnd arms below can never fire from a real child, which never
     /// emits either event — a native revival must be driven by the PARENT's subagentStart /
     /// subagentStop instead. See
-    /// docs/superpowers/specs/2026-07-30-ai1505-cursor-subagent-classification-design.md
+    /// docs/history/pre-recovery/superpowers/specs/2026-07-30-ai1505-cursor-subagent-classification-design.md
     /// </para>
     /// </summary>
     internal async Task<int> HandleSubagentChildEventAsync(
@@ -700,7 +700,7 @@ public sealed class CursorHookCommand(ConfigRoot config, ProfileContext profiles
         // marker, so the loss is NOT diagnosable from the running system. Accepted to preserve
         // start-before-content ordering; the child's live capture is recovered only by
         // `kcap import --cursor` plus the server-side adoption sweep. The full state table is in
-        // docs/superpowers/specs/2026-07-30-ai1505-cursor-subagent-classification-design.md (D2a).
+        // docs/history/pre-recovery/superpowers/specs/2026-07-30-ai1505-cursor-subagent-classification-design.md (D2a).
         if (!isStart && !_markers.HasSubagentStartAck(childSessionId)) {
             return 0;
         }

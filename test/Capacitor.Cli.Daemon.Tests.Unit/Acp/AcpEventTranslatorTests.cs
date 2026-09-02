@@ -10,7 +10,7 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Acp;
 /// synthesized-lifecycle builders — no ACP wire/process/runtime involved (see
 /// <see cref="AcpHostedAgentRuntimeTests"/> for the <see cref="AcpSessionUpdate"/> reduction this
 /// translator consumes). Every case is constructed directly against a hand-built
-/// <see cref="AcpSessionUpdate"/>, per §2.2 of <c>docs/ai688-option-b-canonical-surfacing-design.md</c>.
+/// <see cref="AcpSessionUpdate"/>, per §2.2 of <c>docs/history/pre-recovery/ai688-option-b-canonical-surfacing-design.md</c>.
 /// </summary>
 public class AcpEventTranslatorTests {
     const string TimestampIso = "2026-07-08T12:00:00Z";

@@ -314,7 +314,7 @@ public class DaemonRunnerCursorAvailabilityTests {
     }
 
     // === Trust-by-default borrowed-review advertisement ===
-    // (docs/superpowers/specs/2026-07-27-ai1528-trust-by-default-borrowed-review-design.md)
+    // (docs/history/pre-recovery/superpowers/specs/2026-07-27-ai1528-trust-by-default-borrowed-review-design.md)
     //
     // These replace an earlier test that pinned the opposite rule ("a Cursor build that doesn't
     // match the validated-build record advertises BorrowedReviewSupported=false"). That gate is the

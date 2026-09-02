@@ -11,7 +11,7 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Acp;
 
 /// <summary>
 /// <see cref="AcpInteractionBridge"/> parses an inbound <c>session/request_permission</c>
-/// (spec-derived shape, NOT probe-confirmed — see <c>docs/acp-probe-findings.md</c>) or capability-
+/// (spec-derived shape, NOT probe-confirmed — see <c>docs/history/pre-recovery/acp-probe-findings.md</c>) or capability-
 /// gated <c>elicitation/create</c> server request, forwards it to an injected
 /// "ask the server" delegate (standing in for <see cref="Capacitor.Cli.Daemon.Services.ServerConnection.RequestAcpInteractionAsync"/>),
 /// and maps the returned <see cref="AcpInteractionDecision"/> back to the ACP JSON-RPC result
@@ -152,7 +152,7 @@ public class AcpInteractionBridgeTests {
     /// typed as a non-nullable <c>PermissionOptionDto[]</c>, but System.Text.Json does NOT enforce
     /// non-nullable-reference annotations at deserialize time — an <c>options</c> field OMITTED
     /// entirely from the wire frame (the ACP spec for this method is spec-derived, NOT
-    /// probe-confirmed; see <c>docs/acp-probe-findings.md</c>) yields <c>parsed.Options == null</c>.
+    /// probe-confirmed; see <c>docs/history/pre-recovery/acp-probe-findings.md</c>) yields <c>parsed.Options == null</c>.
     /// PRE-FIX this NRE'd inside <c>.Select(...)</c>/<c>MapPermissionDecision</c>, which
     /// <c>HandlePermissionAsync</c>'s own try/catch does NOT cover (it only wraps the
     /// deserialize step and the <c>requestInteraction</c> call) — so the exception propagated all

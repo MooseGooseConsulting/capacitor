@@ -65,7 +65,7 @@ public class AcpHostedAgentRuntimeModelSelectionTests {
         }
     }
 
-    // Mirrors the Team-tier availableModels list from docs/ai-688-cursor-prototype-findings.md
+    // Mirrors the Team-tier availableModels list from docs/history/pre-recovery/ai-688-cursor-prototype-findings.md
     // (trimmed to the entries these tests actually reference).
     static readonly (string ModelId, string Name)[] TeamAvailableModels = [
         ("default[]", "default"),
@@ -83,7 +83,7 @@ public class AcpHostedAgentRuntimeModelSelectionTests {
         return fake.ReceivedCalls;
     }
 
-    // The probe-measured Kiro shape (docs/probes/2026-08-05-kiro-model-override/): bare ids,
+    // The probe-measured Kiro shape (docs/history/pre-recovery/probes/2026-08-05-kiro-model-override/): bare ids,
     // modelId == name.
     static readonly (string ModelId, string Name)[] KiroAvailableModels = [
         ("auto", "auto"),

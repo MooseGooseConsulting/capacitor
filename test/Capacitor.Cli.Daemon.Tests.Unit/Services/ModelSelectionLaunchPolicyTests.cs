@@ -90,7 +90,7 @@ public class ModelSelectionLaunchPolicyTests {
 
     /// <summary>Pinned per-vendor so flipping a selector cannot quietly re-open the
     /// reported-vs-running mismatch. Kiro flipped to true on the probe that verified
-    /// <c>session/set_model</c> at effect level (docs/probes/2026-08-05-kiro-model-override/);
+    /// <c>session/set_model</c> at effect level (docs/history/pre-recovery/probes/2026-08-05-kiro-model-override/);
     /// Gemini is now the vendor this policy exists for — its write half stays unverified.</summary>
     [Test]
     public async Task DescriptorSelectors_ReportSelectionCapabilityPerVendor() {

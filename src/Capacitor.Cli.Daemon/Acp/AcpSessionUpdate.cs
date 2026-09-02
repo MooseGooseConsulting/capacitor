@@ -4,7 +4,7 @@ namespace Capacitor.Cli.Daemon.Acp;
 
 /// <summary>
 /// Discriminator for <see cref="AcpSessionUpdate.Kind"/>, mirroring the <c>sessionUpdate</c> string
-/// values documented in <c>docs/acp-probe-findings.md</c>. <see cref="AgentMessageChunk"/>,
+/// values documented in <c>docs/history/pre-recovery/acp-probe-findings.md</c>. <see cref="AgentMessageChunk"/>,
 /// <see cref="AvailableCommands"/>, and <see cref="SessionInfo"/> are probe-confirmed;
 /// <see cref="AgentThoughtChunk"/>, <see cref="ToolCall"/>, <see cref="ToolCallUpdate"/>, and
 /// <see cref="Plan"/> are spec-derived but not yet observed on the wire (see the probe doc's

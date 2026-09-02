@@ -1389,7 +1389,7 @@ public static partial class DaemonRunner {
             // never of the installed build's identity. Gating this on an exact-build match made an
             // ordinary vendor auto-update silently withdraw the capability (and the server then
             // resolved workspace_mode=fallback, reviewing a stale committed base with nobody told).
-            // See docs/superpowers/specs/2026-07-27-ai1528-trust-by-default-borrowed-review-design.md.
+            // See docs/history/pre-recovery/superpowers/specs/2026-07-27-ai1528-trust-by-default-borrowed-review-design.md.
             var borrowedSupported = factory.SupportsBorrowedReviewFlow;
             // Reviewer MODEL override support: advertised true ONLY when this vendor — already known
             // installed + unattended-certified by ComputeUnattendedVendors above — also carries a
@@ -1425,7 +1425,7 @@ public static partial class DaemonRunner {
     /// version-drift detection this design rejects), and no equivalent line is emitted per launch.
     /// Pure over the computed capabilities — same reasoning as
     /// <see cref="ShouldWarnCursorUnavailable"/> — so it is testable without booting the DI host.
-    /// See docs/superpowers/specs/2026-07-27-ai1528-trust-by-default-borrowed-review-design.md.
+    /// See docs/history/pre-recovery/superpowers/specs/2026-07-27-ai1528-trust-by-default-borrowed-review-design.md.
     /// </summary>
     internal static void LogUnattendedVendorIdentities(
             ILogger logger, IEnumerable<UnattendedVendorCapability> capabilities) {

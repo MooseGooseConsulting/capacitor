@@ -15,7 +15,7 @@ namespace Capacitor.Cli.Daemon.Harness.OpenCode;
 /// <c>session/new.mcpServers</c> still starts.</para>
 ///
 /// <para><b>Credentials are NOT under it</b> — measured
-/// (<c>docs/probes/2026-08-07-opencode-acp/</c> §5): an empty config dir still completes
+/// (<c>docs/history/pre-recovery/probes/2026-08-07-opencode-acp/</c> §5): an empty config dir still completes
 /// <c>initialize</c> and <c>session/new</c> with the account's full model list. That is the fact this
 /// approach depends on, and it is why the Kiro-shaped answer transfers to OpenCode at all; without it,
 /// isolating configuration would have disabled the reviewer.</para>

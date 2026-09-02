@@ -42,7 +42,7 @@ internal sealed class AcpRpcException : Exception {
 ///   exit early on a single bad line (a wire hiccup would otherwise silently wedge every pending
 ///   and future <see cref="RequestAsync"/> call).
 ///
-/// Per the probe (<c>docs/acp-probe-findings.md</c>), ACP has no per-request
+/// Per the probe (<c>docs/history/pre-recovery/acp-probe-findings.md</c>), ACP has no per-request
 /// <c>$/cancelRequest</c> frame — cancellation is session-level via the <c>session/cancel</c>
 /// notification, which the runtime sends through <see cref="NotifyAsync"/>. Cancelling the
 /// <see cref="CancellationToken"/> passed to <see cref="RequestAsync"/> only abandons the pending

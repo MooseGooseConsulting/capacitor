@@ -7,7 +7,7 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 
 /// <summary>
 /// Round-dispatch grace (server-side design doc
-/// docs/superpowers/specs/2026-08-10-ai1842-round-dispatch-grace-design.md in kcap-server):
+/// docs/history/pre-recovery/superpowers/specs/2026-08-10-ai1842-round-dispatch-grace-design.md in kcap-server):
 /// delivered <c>SendInput</c> must advance the same per-agent <see cref="AgentActivityClock"/> that
 /// PTY output, ACP envelopes, and turn transitions already advance (see
 /// <c>AgentActivityClockTests.PTY_output_chunk_advances_the_agents_activity_clock</c> for the

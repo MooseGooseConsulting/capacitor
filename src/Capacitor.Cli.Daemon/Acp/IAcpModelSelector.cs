@@ -97,7 +97,7 @@ file static class SessionModelResolution {
 /// session/set_config_option {sessionId, configId: "model", value} and awaits it. Every failure
 /// mode (missing/unparsable `models`, no match, a JSON-RPC error response) is caught and logged,
 /// never fatal — matches the "model selection is a nice-to-have, never a launch precondition"
-/// contract from docs/ai-688-cursor-prototype-findings.md.
+/// contract from docs/history/pre-recovery/ai-688-cursor-prototype-findings.md.
 /// </summary>
 internal sealed class ConfigOptionModelSelector : IAcpModelSelector {
     public static readonly ConfigOptionModelSelector Instance = new();
@@ -137,7 +137,7 @@ internal sealed class ConfigOptionModelSelector : IAcpModelSelector {
 /// cancellation shape (the catch below cannot swallow <see cref="OperationCanceledException"/>) —
 /// only the wire write differs: <c>session/set_model {sessionId, modelId}</c>.
 ///
-/// <para>Carried by Kiro on direct measurement (<c>docs/probes/2026-08-05-kiro-model-override/</c>,
+/// <para>Carried by Kiro on direct measurement (<c>docs/history/pre-recovery/probes/2026-08-05-kiro-model-override/</c>,
 /// kiro-cli 2.16.0): Kiro answers <c>session/set_config_option</c> with <c>-32601 Method not
 /// found</c>, while <c>session/set_model</c> succeeds AND takes effect — the next turn's backend
 /// request carried the requested <c>modelId</c>, the reply self-identified as it, and Kiro's own

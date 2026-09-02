@@ -8,7 +8,7 @@ namespace Capacitor.Cli.Core.Acp;
 /// server-initiated requests like <c>session/request_permission</c> / <c>fs/*</c>). <see cref="Params"/>
 /// stays a <see cref="JsonElement"/> so this layer is non-polymorphic and AOT/trim-safe — the
 /// connection layer parses it into a typed shape once the method is known. Wire
-/// shape confirmed by the probe in <c>docs/acp-probe-findings.md</c>:
+/// shape confirmed by the probe in <c>docs/history/pre-recovery/acp-probe-findings.md</c>:
 /// <c>{"jsonrpc":"2.0","id":1,"method":"initialize","params":{...}}</c>.
 /// </summary>
 public sealed record AcpRequest(

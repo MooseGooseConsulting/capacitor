@@ -11,7 +11,7 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Acp;
 /// Option B task 2: exercises <see cref="AcpHostedAgentRuntime"/>'s chunk aggregation +
 /// serialized single-flight prompt-turn worker end-to-end against <see cref="FakeAcpAgent"/>, via the
 /// ordered <see cref="AcpHostedAgentRuntime.Envelopes"/> transcript (§2.1 of
-/// <c>docs/ai688-option-b-canonical-surfacing-design.md</c>). Mirrors the
+/// <c>docs/history/pre-recovery/ai688-option-b-canonical-surfacing-design.md</c>). Mirrors the
 /// <c>AcpHostedAgentRuntimeTests</c> harness pattern; no real <c>cursor-agent acp</c> process.
 /// </summary>
 public class AcpTranscriptAggregationTests {

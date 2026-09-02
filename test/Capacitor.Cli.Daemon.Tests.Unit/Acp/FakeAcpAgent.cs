@@ -522,7 +522,7 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
     /// JSON-RPC error (see <see cref="FailNextSetConfigOption"/>) or a probe-shaped success result
     /// echoing back the requested <c>value</c> as the <c>model</c> config option's
     /// <c>currentValue</c>, mirroring the real agent's confirmed response shape
-    /// (<c>docs/ai-688-cursor-prototype-findings.md</c>). The request itself is already captured in
+    /// (<c>docs/history/pre-recovery/ai-688-cursor-prototype-findings.md</c>). The request itself is already captured in
     /// <see cref="ReceivedCalls"/> by <see cref="DispatchLineAsync"/> before this runs.
     /// </summary>
     async Task HandleSetConfigOptionAsync(JsonElement id, JsonElement? @params, CancellationToken ct) {
@@ -556,7 +556,7 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
     /// <summary>
     /// Answers a <c>session/set_model</c> request — either the scripted JSON-RPC error (see
     /// <see cref="FailNextSetModel"/>) or the probe-confirmed success shape: an EMPTY object
-    /// (<c>docs/probes/2026-08-05-kiro-model-override/</c> measured Kiro answering
+    /// (<c>docs/history/pre-recovery/probes/2026-08-05-kiro-model-override/</c> measured Kiro answering
     /// <c>{"result":{}}</c>), unlike <c>session/set_config_option</c>'s configOptions echo. The
     /// request itself is already captured in <see cref="ReceivedCalls"/> by
     /// <c>DispatchLineAsync</c> before this runs.
@@ -615,7 +615,7 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
         if (method == "initialize") _initializeReceived.TrySetResult();
     }
 
-    // ---- probe-confirmed canned response shapes (docs/acp-probe-findings.md) ----
+    // ---- probe-confirmed canned response shapes (docs/history/pre-recovery/acp-probe-findings.md) ----
 
     static readonly JsonElement ProbeConfirmedInitializeResult = JsonDocument.Parse("""
         {
@@ -733,15 +733,15 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
     // ---- spec-derived (NOT probe-confirmed) helper builders ----
     //
     // The probe account was plan-gated before any tool-call turn completed, so none of the
-    // variants below were ever observed on the wire (see docs/acp-probe-findings.md, "sessionUpdate
+    // variants below were ever observed on the wire (see docs/history/pre-recovery/acp-probe-findings.md, "sessionUpdate
     // variants observed" and "Recommended follow-up"). They are built from the published ACP spec
-    // only. Re-verify each against docs/acp-probe-findings.md's "Recommended follow-up" once a
+    // only. Re-verify each against docs/history/pre-recovery/acp-probe-findings.md's "Recommended follow-up" once a
     // non-plan-gated probe run is available, before relying on their exact field shapes in
     // production mapping code.
 
     /// <summary>
     /// Spec-derived, NOT yet verified against cursor-agent (the probe account was plan-gated before
-    /// any tool-call turn completed) — re-verify against docs/acp-probe-findings.md "Recommended
+    /// any tool-call turn completed) — re-verify against docs/history/pre-recovery/acp-probe-findings.md "Recommended
     /// follow-up" once available. Shape: <c>{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"..."}}</c>.
     /// </summary>
     public static JsonElement BuildAgentThoughtChunkUpdate(string text) {
@@ -752,7 +752,7 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
 
     /// <summary>
     /// Spec-derived, NOT yet verified against cursor-agent (the probe account was plan-gated before
-    /// any tool-call turn completed) — re-verify against docs/acp-probe-findings.md "Recommended
+    /// any tool-call turn completed) — re-verify against docs/history/pre-recovery/acp-probe-findings.md "Recommended
     /// follow-up" once available. Shape: <c>{"sessionUpdate":"tool_call","toolCallId":"...","title":"...","kind":"...","status":"...","rawInput":{...}}</c>
     /// (<c>rawInput</c> only when <paramref name="rawInputJson"/> is non-null — task 1's
     /// <c>AcpSessionUpdate.Reduce()</c> extraction target for <c>ToolInputJson</c>).
@@ -780,7 +780,7 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
 
     /// <summary>
     /// Spec-derived, NOT yet verified against cursor-agent (the probe account was plan-gated before
-    /// any tool-call turn completed) — re-verify against docs/acp-probe-findings.md "Recommended
+    /// any tool-call turn completed) — re-verify against docs/history/pre-recovery/acp-probe-findings.md "Recommended
     /// follow-up" once available. Shape: <c>{"sessionUpdate":"tool_call_update","toolCallId":"...","status":"...","content":[{"type":"content","content":{"type":"text","text":"..."}}],"rawOutput":{...}}</c>
     /// — <c>content</c>/<c>rawOutput</c> are included only when <paramref name="resultText"/>/
     /// <paramref name="rawOutputJson"/> are non-null (task 1's
@@ -818,7 +818,7 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
 
     /// <summary>
     /// Spec-derived, NOT yet verified against cursor-agent (the probe account was plan-gated before
-    /// any tool-call turn completed) — re-verify against docs/acp-probe-findings.md "Recommended
+    /// any tool-call turn completed) — re-verify against docs/history/pre-recovery/acp-probe-findings.md "Recommended
     /// follow-up" once available. Shape: <c>{"sessionUpdate":"plan","entries":[...]}</c>, where
     /// <paramref name="entriesJson"/> is the raw JSON text of the entries array (kept as a raw string
     /// since the ACP spec's plan-entry shape is not yet pinned down by this probe).
@@ -830,7 +830,7 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
 
     /// <summary>
     /// Spec-derived, NOT yet verified against cursor-agent — <c>session/request_permission</c> was
-    /// never observed in the probe (see docs/acp-probe-findings.md "Permission / elicitation
+    /// never observed in the probe (see docs/history/pre-recovery/acp-probe-findings.md "Permission / elicitation
     /// requests"); re-verify once a non-plan-gated probe run is available. Builds the FULL
     /// server→client request frame (has its own <paramref name="id"/> and method, unlike the
     /// <c>update</c>-variant helpers above): params shape

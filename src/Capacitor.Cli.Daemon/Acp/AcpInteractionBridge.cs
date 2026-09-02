@@ -166,7 +166,7 @@ internal sealed partial class AcpInteractionBridge(
         // Qodo daemon-review Q1 (fail-safe hole): System.Text.Json does NOT enforce
         // SessionRequestPermissionParams.Options' non-nullable C# annotation — an omitted OR
         // explicit-null `options` field on the wire (this shape is spec-derived, NOT
-        // probe-confirmed; see docs/acp-probe-findings.md) deserializes to `parsed.Options == null`,
+        // probe-confirmed; see docs/history/pre-recovery/acp-probe-findings.md) deserializes to `parsed.Options == null`,
         // which used to NRE inside `.Select(...)` below and propagate all the way out to
         // AcpConnection.HandleServerRequestAsync's generic catch-all (-32603) instead of this
         // bridge's well-formed `cancelled`. Normalize once, up front, filtering out any null

@@ -8,7 +8,7 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 
 /// <summary>
 /// Exercises <see cref="AcpHostedAgentRuntime"/>'s crash reconnect/resume (skip-whole-replay —
-/// the design spec at <c>docs/superpowers/specs/2026-08-04-ai1325-acp-reconnect-resume-design.md</c>
+/// the design spec at <c>docs/history/pre-recovery/superpowers/specs/2026-08-04-ai1325-acp-reconnect-resume-design.md</c>
 /// in this repo) against
 /// <see cref="FakeAcpAgent"/> incarnations: the original child plus one fake per resume candidate,
 /// spawned through the same <see cref="AcpReconnectSupport.Spawn"/> seam production uses. Attempt

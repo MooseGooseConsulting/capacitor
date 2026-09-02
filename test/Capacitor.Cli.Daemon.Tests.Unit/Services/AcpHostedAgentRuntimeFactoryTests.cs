@@ -209,7 +209,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
                     "SupportsModelSelection must not spawn a process."));
 
         // Kiro reports true since the probe that verified session/set_model at effect level
-        // (docs/probes/2026-08-05-kiro-model-override/); Gemini keeps the false arm of this
+        // (docs/history/pre-recovery/probes/2026-08-05-kiro-model-override/); Gemini keeps the false arm of this
         // mutation guard — its write half stays unverified, so it still carries NoOpModelSelector.
         await Assert.That(Build(AcpVendorDescriptors.Kiro).SupportsModelSelection).IsTrue();
         await Assert.That(Build(AcpVendorDescriptors.Gemini).SupportsModelSelection).IsFalse();
@@ -1930,7 +1930,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
     }
 
     // ── Trust-by-default borrowed-snapshot launch ─────────────────────────────────────────────
-    // docs/superpowers/specs/2026-07-27-ai1528-trust-by-default-borrowed-review-design.md
+    // docs/history/pre-recovery/superpowers/specs/2026-07-27-ai1528-trust-by-default-borrowed-review-design.md
     //
     // A borrowed-snapshot Cursor launch used to resolve its binary through — and be re-gated on — an
     // exact-build record, so an ordinary Cursor auto-update turned the launch into a hard

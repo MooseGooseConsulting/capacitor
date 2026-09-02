@@ -114,7 +114,7 @@ public class CursorWatcherSpawnTests {
     // Two tests that asserted the same thing by invoking the divert's start arm with a child
     // `sessionStart` were removed: a real Cursor subagent child never fires that event, so they
     // encoded a trigger that cannot occur. See
-    // docs/superpowers/specs/2026-07-30-ai1505-cursor-subagent-classification-design.md
+    // docs/history/pre-recovery/superpowers/specs/2026-07-30-ai1505-cursor-subagent-classification-design.md
     [Test]
     public async Task Child_watcher_not_spawned_when_the_parent_session_is_quarantined() {
         using var tmp = new TempDir();
@@ -188,7 +188,7 @@ public class CursorWatcherSpawnTests {
             // would have left it), rather than producing one by driving the child's own
             // sessionStart. A real Cursor subagent child never fires sessionStart, so using it
             // as the vehicle would bake in a trigger that cannot occur — see
-            // docs/superpowers/specs/2026-07-30-ai1505-cursor-subagent-classification-design.md
+            // docs/history/pre-recovery/superpowers/specs/2026-07-30-ai1505-cursor-subagent-classification-design.md
             spool.Append(child, "subagent-start",
                 $$"""{"hook_event_name":"subagent_start","session_id":"{{parent}}","agent_id":"{{child}}","transcript_path":"{{childFile.Replace(@"\", @"\\")}}"}""");
 
@@ -267,7 +267,7 @@ public class CursorWatcherSpawnTests {
             // Seed the undelivered subagent-start DIRECTLY, as a prior transient POST failure
             // would have left it. Driving the child's own sessionStart to produce it would bake
             // in a trigger a real Cursor child never fires — see
-            // docs/superpowers/specs/2026-07-30-ai1505-cursor-subagent-classification-design.md
+            // docs/history/pre-recovery/superpowers/specs/2026-07-30-ai1505-cursor-subagent-classification-design.md
             spool.Append(child, "subagent-start",
                 $$"""{"hook_event_name":"subagent_start","session_id":"{{parent}}","agent_id":"{{child}}","transcript_path":"{{childFileEscaped}}"}""");
 

@@ -1364,7 +1364,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <para>Never disposed: emissions are fire-and-forget, so a waiter parked here during teardown
     /// must not fault on an <see cref="ObjectDisposedException"/> nobody observes.</para>
     ///
-    /// See docs/superpowers/specs/2026-08-10-ai1842-round-dispatch-grace-design.md (kcap-server) for
+    /// See docs/history/pre-recovery/superpowers/specs/2026-08-10-ai1842-round-dispatch-grace-design.md (kcap-server) for
     /// rationale.</summary>
     readonly SemaphoreSlim _statusReportOrderingGate = new(1, 1);
 

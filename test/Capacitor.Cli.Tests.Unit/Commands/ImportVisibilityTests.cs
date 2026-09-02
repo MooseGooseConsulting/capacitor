@@ -28,7 +28,7 @@ namespace Capacitor.Cli.Tests.Unit.Commands;
 /// <para>The rule the rows below pin, one for all nine sources
 /// (<c>ImportContext.VisibilityStampFor</c>): <c>ForcePrivate</c> stamps <c>private</c> on every
 /// status, and the Step-3 default lands on <c>New</c> alone. Reasoning in
-/// docs/superpowers/specs/2026-08-26-ai2222-private-stamp-design.md.</para>
+/// docs/history/pre-recovery/superpowers/specs/2026-08-26-ai2222-private-stamp-design.md.</para>
 /// Driven through each source's real <c>ImportSessionAsync</c> / <see cref="ImportCommand.ImportChainsAsync"/>
 /// / <see cref="ImportCommand.HandleImport"/> entry point — never through the private
 /// per-source <c>BuildSessionStartPayload</c> builders in isolation — per the spec's own

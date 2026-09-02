@@ -8,7 +8,7 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 
 /// <summary>
 /// Round-dispatch grace (server-side design doc
-/// docs/superpowers/specs/2026-08-10-ai1842-round-dispatch-grace-design.md in kcap-server), the two
+/// docs/history/pre-recovery/superpowers/specs/2026-08-10-ai1842-round-dispatch-grace-design.md in kcap-server), the two
 /// halves that sit on top of the delivered-input clock advance (see SendInputActivityClockTests.cs):
 ///
 /// <para><b>(1) The immediate out-of-cycle report.</b> One <c>DaemonStatusReport</c> per successfully

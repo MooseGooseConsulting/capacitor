@@ -218,7 +218,7 @@ public class CursorMemoryIndexLiveCertTests {
 
     /// <summary>
     /// cursor-agent's own <c>--print</c> output shape is NOT verified against a live process in
-    /// this repo (no prior probe recorded it — see <c>docs/acp-probe-findings.md</c>, which only
+    /// this repo (no prior probe recorded it — see <c>docs/history/pre-recovery/acp-probe-findings.md</c>, which only
     /// covers the JSON-RPC <c>acp</c> subcommand). Parses defensively: try JSON — either a single
     /// object or newline-delimited JSON objects (mirroring Claude's <c>stream-json</c> convention)
     /// — pulling the first string-valued <c>text</c>/<c>message</c>/<c>content</c> field found;

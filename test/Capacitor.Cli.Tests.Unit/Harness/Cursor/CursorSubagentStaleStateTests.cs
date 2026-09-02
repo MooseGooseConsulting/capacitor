@@ -18,7 +18,7 @@ namespace Capacitor.Cli.Tests.Unit.Harness.Cursor;
 /// None of these states has a producer on the measured cursor-agent contract — the arm that
 /// would write a marker never runs there — but consumption is NOT gated: TryLoadLink runs on
 /// every event, so a marker persisted by another surface or an older build is still read.
-/// See docs/superpowers/specs/2026-07-30-ai1505-cursor-subagent-classification-design.md (D2a).
+/// See docs/history/pre-recovery/superpowers/specs/2026-07-30-ai1505-cursor-subagent-classification-design.md (D2a).
 /// </para>
 /// <para>
 /// [NotInParallel] — and deliberately UNKEYED, matching CursorWatcherSpawnTests. The marker

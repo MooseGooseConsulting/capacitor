@@ -212,7 +212,7 @@ public class DaemonConfig {
     /// against <c>session/new</c>'s <c>availableModels</c> at launch time by
     /// <c>AcpModelResolver.Resolve</c> (Kiro's ids are bare, unlike Cursor's parameterized ones,
     /// but the resolution path is shared) and applied via <c>session/set_model</c> —
-    /// probe-verified at effect level (<c>docs/probes/2026-08-05-kiro-model-override/</c>).
+    /// probe-verified at effect level (<c>docs/history/pre-recovery/probes/2026-08-05-kiro-model-override/</c>).
     /// Overridable via <c>KCAP_KIRO_MODEL</c>, mirroring <see cref="CursorModel"/>.
     ///
     /// <para>Unlike <see cref="CursorModel"/> the default is NULL, deliberately: zero-configuration
@@ -310,7 +310,7 @@ public class DaemonConfig {
     /// Optional daemon-wide default model for hosted OpenCode agents, resolved against
     /// <c>session/new</c>'s selectable-model list at launch time by <c>AcpModelResolver.Resolve</c>
     /// and applied via <c>session/set_config_option</c> — probe-verified at effect level
-    /// (<c>docs/probes/2026-08-07-opencode-acp/</c> §2: the model self-identified as the requested id).
+    /// (<c>docs/history/pre-recovery/probes/2026-08-07-opencode-acp/</c> §2: the model self-identified as the requested id).
     /// Overridable via <c>KCAP_OPENCODE_MODEL</c>, mirroring <see cref="KiroModel"/>.
     ///
     /// <para>Ids are <c>provider/model</c> (e.g. <c>opencode/big-pickle</c>), and OpenCode publishes

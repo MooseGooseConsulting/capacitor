@@ -8,7 +8,7 @@ namespace Capacitor.Cli.Daemon.Acp;
 /// <see cref="AcpSessionUpdate"/> (daemon-local) to the daemon-local wire
 /// <see cref="AcpEventEnvelope"/> (Core — field-for-field mirror of the server's
 /// <c>Capacitor.Server.Core.Acp.AcpEventEnvelope</c>). Maps exactly ONE update to AT MOST one
-/// envelope (see <c>docs/ai688-option-b-canonical-surfacing-design.md</c>). Deliberately does
+/// envelope (see <c>docs/history/pre-recovery/ai688-option-b-canonical-surfacing-design.md</c>). Deliberately does
 /// NOT aggregate chunk streams, correlate multi-update tool-call state, assign real sequence
 /// numbers, or forward anything — those are handled elsewhere (aggregation/seq assignment is
 /// runtime-owned; <c>seq</c>/<c>timestampIso</c> below are caller-supplied

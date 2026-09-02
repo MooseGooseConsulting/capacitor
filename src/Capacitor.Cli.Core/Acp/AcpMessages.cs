@@ -9,7 +9,7 @@ namespace Capacitor.Cli.Core.Acp;
 /// go through source-gen (<see cref="JsonSerializer.SerializeToElement{T}(T, System.Text.Json.Serialization.Metadata.JsonTypeInfo{T})"/>
 /// against <see cref="CapacitorJsonContext"/>) instead of the reflection-based overloads, which are
 /// unsafe under NativeAOT. Field names/shapes are pinned to the probe-confirmed wire shapes in
-/// <c>docs/acp-probe-findings.md</c> — every property carries an explicit
+/// <c>docs/history/pre-recovery/acp-probe-findings.md</c> — every property carries an explicit
 /// <see cref="JsonPropertyNameAttribute"/> because the wire protocol uses camelCase while this
 /// context's default naming policy (set on <see cref="CapacitorJsonContext"/>) is snake_case.
 /// </summary>
@@ -118,7 +118,7 @@ public sealed record SessionNewParams(
 /// <c>session/update</c> notifications and, per the ACP spec's MUST, responds only after all
 /// conversation entries have streamed — the response is the reconnect path's closed-world
 /// end-of-replay barrier (probe-verified for Cursor and Copilot,
-/// <c>docs/probes/2026-08-04-acp-reconnect-c0/</c>).</summary>
+/// <c>docs/history/pre-recovery/probes/2026-08-04-acp-reconnect-c0/</c>).</summary>
 public sealed record SessionLoadParams(
     [property: JsonPropertyName("sessionId")]  string             SessionId,
     [property: JsonPropertyName("cwd")]        string             Cwd,
@@ -145,7 +145,7 @@ public sealed record SessionCancelParams(
 /// <c>session/set_config_option</c> params (model selection). Sent AFTER
 /// <c>session/new</c> resolves and BEFORE the first <c>session/prompt</c>, with the response
 /// awaited so the model is set before the turn starts. Wire shape probe-confirmed against real
-/// <c>cursor-agent</c> (<c>docs/ai-688-cursor-prototype-findings.md</c>): <see cref="ConfigId"/> is
+/// <c>cursor-agent</c> (<c>docs/history/pre-recovery/ai-688-cursor-prototype-findings.md</c>): <see cref="ConfigId"/> is
 /// the literal <c>"model"</c> (the field is named <c>configId</c> on the wire, NOT <c>id</c> — an
 /// earlier attempt using <c>id</c> got a Zod <c>invalid_type</c> error at path <c>configId</c>), and
 /// <see cref="Value"/> must be the EXACT, parameterized <c>modelId</c> from
@@ -165,7 +165,7 @@ public sealed record SetConfigOptionParams(
 /// that do not implement <c>session/set_config_option</c>. Sent at the same point in the handshake
 /// as <see cref="SetConfigOptionParams"/> (after <c>session/new</c>, before the first
 /// <c>session/prompt</c>, response awaited). Wire shape probe-confirmed against real
-/// <c>kiro-cli</c> 2.16.0 (<c>docs/probes/2026-08-05-kiro-model-override/</c>):
+/// <c>kiro-cli</c> 2.16.0 (<c>docs/history/pre-recovery/probes/2026-08-05-kiro-model-override/</c>):
 /// <see cref="ModelId"/> is an exact id from <see cref="SessionModelsInfo.AvailableModels"/>
 /// (Kiro's are bare, e.g. <c>deepseek-3.2</c> — resolved by
 /// <c>Capacitor.Cli.Core.Acp.AcpModelResolver</c> like Cursor's), and the success response is an
@@ -203,7 +203,7 @@ public sealed record AvailableModelDto(
 /// <summary>
 /// One entry in <c>session/new</c>'s <c>result.configOptions</c> — the SECOND shape an ACP agent may
 /// publish its selectable-model list in, alongside <see cref="SessionModelsInfo"/>. Probe-confirmed
-/// against real <c>opencode acp</c> 1.18.9 (<c>docs/probes/2026-08-07-opencode-acp/</c>), which
+/// against real <c>opencode acp</c> 1.18.9 (<c>docs/history/pre-recovery/probes/2026-08-07-opencode-acp/</c>), which
 /// returns no <c>models</c> object at all:
 /// <c>{"id":"model","currentValue":"opencode/big-pickle","options":[{"value":"…","name":"…"}]}</c>
 /// (plus sibling entries such as <c>mode</c> and, model-dependently, <c>effort</c>).
@@ -234,7 +234,7 @@ public sealed record ConfigOptionChoiceDto(
 /// via <c>Daemon.Acp.AcpConnection.OnServerRequest</c>). Spec-derived, NOT
 /// probe-confirmed: the probe never observed a real <c>session/request_permission</c> frame
 /// (the probe account's turn ended before any tool call — see
-/// <c>docs/acp-probe-findings.md</c> §"Permission / elicitation requests"). Mirrors the shape
+/// <c>docs/history/pre-recovery/acp-probe-findings.md</c> §"Permission / elicitation requests"). Mirrors the shape
 /// <c>Capacitor.Cli.Tests.Unit.Acp.FakeAcpAgent.BuildRequestPermissionFrame</c> already
 /// builds for tests. <see cref="ToolCall"/> stays an opaque <see cref="JsonElement"/> — its exact
 /// schema is unconfirmed and it is never re-serialized, only forwarded to the server as

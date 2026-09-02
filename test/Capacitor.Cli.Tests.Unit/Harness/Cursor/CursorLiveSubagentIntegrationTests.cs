@@ -24,7 +24,7 @@ namespace Capacitor.Cli.Tests.Unit.Harness.Cursor;
 /// false confidence that came with it. A native revival must be driven by the PARENT's
 /// subagentStart/subagentStop, so the stop-ordering invariant is deferred until that design
 /// defines how subagentStop is keyed and spooled. See
-/// docs/superpowers/specs/2026-07-30-ai1505-cursor-subagent-classification-design.md
+/// docs/history/pre-recovery/superpowers/specs/2026-07-30-ai1505-cursor-subagent-classification-design.md
 /// </para>
 /// </summary>
 [NotInParallel("HomeEnvVarMutation")]
