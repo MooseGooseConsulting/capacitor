@@ -360,7 +360,7 @@ public sealed class PostgresGatewayTests {
     }
 
     [Test, NotInParallel]
-    public async Task Gateway_retries_rejected_source_coordinates_without_retaining_a_raw_placeholder() {
+    public async Task Gateway_retries_rejected_source_coordinates_and_replaces_the_rejected_receipt() {
         var connectionString = RequireRecoveryConnectionString();
         var sessionId = $"retry-{Guid.NewGuid():N}";
         using var environment = EnvScope.Exclusive("ConnectionStrings__Capacitor", connectionString);
@@ -396,6 +396,101 @@ public sealed class PostgresGatewayTests {
                 WHERE session_id = $1 AND agent_id = '' AND line_number = 1;", connection);
             command.Parameters.AddWithValue(sessionId);
             await Assert.That((string?)await command.ExecuteScalarAsync()).IsEqualTo("UserMessage");
+
+            await using var receipt = new NpgsqlCommand(@"
+                SELECT normalization_status, raw_payload
+                FROM transcript_receipts
+                WHERE session_id = $1 AND agent_id = '' AND line_number = 1;", connection);
+            receipt.Parameters.AddWithValue(sessionId);
+            await using var receiptReader = await receipt.ExecuteReaderAsync();
+            await Assert.That(await receiptReader.ReadAsync()).IsTrue();
+            await Assert.That(receiptReader.GetString(0)).IsEqualTo("accepted");
+            await Assert.That(receiptReader.GetString(1)).Contains("corrected");
+        } finally {
+            await DeleteTestSessionAsync(connectionString, sessionId);
+        }
+    }
+
+    [Test, NotInParallel]
+    public async Task Gateway_preserves_zero_event_receipts_and_projects_all_event_repositories() {
+        var connectionString = RequireRecoveryConnectionString();
+        var sessionId = $"repository-evidence-{Guid.NewGuid():N}";
+        using var environment = EnvScope.Exclusive("ConnectionStrings__Capacitor", connectionString);
+
+        try {
+            using var factory = new GatewayFactory();
+            using var client = factory.CreateClient();
+            await Assert.That((await client.PostAsJsonAsync("/hooks/session-start", new {
+                session_id = sessionId,
+                user_id = "integration-test",
+                repository = new { owner = "example", repo_name = "launch-repository" }
+            })).StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+            // Claude metadata is a valid source line but deliberately emits no display event.
+            await Assert.That((await client.PostAsJsonAsync("/hooks/transcript", new {
+                session_id = sessionId,
+                vendor = "claude",
+                cwd = "C:\\work\\repo-a",
+                repository = new { owner = "example", repo_name = "repo-a" },
+                lines = new[] {
+                    """{"type":"user","isMeta":true,"timestamp":"2026-01-01T00:00:00Z","message":{"role":"user","content":"metadata only"}}"""
+                },
+                line_numbers = new[] { 0 }
+            })).StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+            await Assert.That((await client.PostAsJsonAsync("/hooks/transcript", new {
+                session_id = sessionId,
+                vendor = "claude",
+                cwd = "C:\\work\\repo-a",
+                repository = new { owner = "example", repo_name = "repo-a" },
+                lines = new[] {
+                    """{"type":"user","timestamp":"2026-01-01T00:00:01Z","message":{"role":"user","content":"one event in repo A"}}"""
+                },
+                line_numbers = new[] { 1 }
+            })).StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+            // One source line produces two events in repo B, making it the primary
+            // association by observed event count rather than the launch repository.
+            await Assert.That((await client.PostAsJsonAsync("/hooks/transcript", new {
+                session_id = sessionId,
+                vendor = "antigravity",
+                cwd = "C:\\work\\repo-b",
+                repository = new { owner = "example", repo_name = "repo-b" },
+                lines = new[] {
+                    """{"type":"PLANNER_RESPONSE","created_at":"2026-01-01T00:00:02Z","content":"two events in repo B","thinking":"reasoning"}"""
+                },
+                line_numbers = new[] { 2 }
+            })).StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+            foreach (var repository in new[] { "example/repo-a", "example/repo-b", "example/launch-repository" }) {
+                using var search = JsonDocument.Parse(await (await client.GetAsync(
+                    $"/api/sessions/search?repo={Uri.EscapeDataString(repository)}")).Content.ReadAsStringAsync());
+                await Assert.That(search.RootElement.GetProperty("hits").EnumerateArray().Any(hit =>
+                    hit.GetProperty("session_id").GetString() == sessionId)).IsTrue();
+            }
+
+            using (var detail = JsonDocument.Parse(await (await client.GetAsync($"/api/sessions/{sessionId}")).Content.ReadAsStringAsync())) {
+                await Assert.That(detail.RootElement.GetProperty("session").GetProperty("repo_name").GetString())
+                    .IsEqualTo("repo-b");
+            }
+
+            await using var connection = new NpgsqlConnection(connectionString);
+            await connection.OpenAsync();
+            await using var command = new NpgsqlCommand(@"
+                SELECT
+                    (SELECT normalization_status FROM transcript_receipts WHERE session_id = $1 AND line_number = 0),
+                    (SELECT raw_payload FROM transcript_receipts WHERE session_id = $1 AND line_number = 0),
+                    (SELECT cwd FROM session_events WHERE session_id = $1 AND line_number = 1),
+                    (SELECT COUNT(*) FROM session_repositories WHERE session_id = $1),
+                    (SELECT repo_name FROM session_repositories WHERE session_id = $1 AND is_primary);", connection);
+            command.Parameters.AddWithValue(sessionId);
+            await using var reader = await command.ExecuteReaderAsync();
+            await Assert.That(await reader.ReadAsync()).IsTrue();
+            await Assert.That(reader.GetString(0)).IsEqualTo("accepted");
+            await Assert.That(reader.GetString(1)).Contains("metadata only");
+            await Assert.That(reader.GetString(2)).IsEqualTo("C:\\work\\repo-a");
+            await Assert.That(reader.GetInt64(3)).IsEqualTo(3L);
+            await Assert.That(reader.GetString(4)).IsEqualTo("repo-b");
         } finally {
             await DeleteTestSessionAsync(connectionString, sessionId);
         }
@@ -507,6 +602,8 @@ public sealed class PostgresGatewayTests {
             "DELETE FROM work_item_sessions WHERE session_id = $1;",
             "DELETE FROM dead_letter_entries WHERE session_id = $1;",
             "DELETE FROM session_usage_checkpoints WHERE session_id = $1;",
+            "DELETE FROM session_repositories WHERE session_id = $1;",
+            "DELETE FROM transcript_receipts WHERE session_id = $1;",
             "DELETE FROM session_events WHERE session_id = $1;",
             "DELETE FROM session_watermarks WHERE session_id = $1;",
             "DELETE FROM sessions WHERE session_id = $1;"

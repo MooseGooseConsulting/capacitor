@@ -177,7 +177,13 @@ public class PostgresSessionRepository : ISessionRepository {
             FROM sessions
             WHERE ($1 IS NULL OR vendor = $1)
               AND ($2 IS NULL OR status = $2)
-              AND ($3 IS NULL OR repo_hash = $3 OR (repo_owner || '/' || repo_name) = $3)
+              AND ($3 IS NULL OR EXISTS (
+                    SELECT 1
+                    FROM session_repositories associations
+                    WHERE associations.session_id = sessions.session_id
+                      AND (associations.repo_hash = $3
+                           OR (associations.repo_owner || '/' || associations.repo_name) = $3)
+              ))
               AND ($4 IS NULL OR owner_user_id ILIKE '%' || $4 || '%')
               AND ($5 IS NULL
                    OR title ILIKE '%' || $5 || '%'
@@ -198,7 +204,13 @@ public class PostgresSessionRepository : ISessionRepository {
             FROM sessions
             WHERE ($1 IS NULL OR vendor = $1)
               AND ($2 IS NULL OR status = $2)
-              AND ($3 IS NULL OR repo_hash = $3 OR (repo_owner || '/' || repo_name) = $3)
+              AND ($3 IS NULL OR EXISTS (
+                    SELECT 1
+                    FROM session_repositories associations
+                    WHERE associations.session_id = sessions.session_id
+                      AND (associations.repo_hash = $3
+                           OR (associations.repo_owner || '/' || associations.repo_name) = $3)
+              ))
               AND ($4 IS NULL OR owner_user_id ILIKE '%' || $4 || '%')
               AND ($5 IS NULL
                    OR title ILIKE '%' || $5 || '%'
@@ -514,6 +526,30 @@ public class PostgresSessionRepository : ISessionRepository {
         cmd.Parameters.AddWithValue((object?)prTitle ?? DBNull.Value);
         cmd.Parameters.AddWithValue((object?)prUrl ?? DBNull.Value);
         cmd.Parameters.AddWithValue((object?)prHeadRef ?? DBNull.Value);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task RecordRepositoryAssociationAsync(
+        string sessionId,
+        RepositoryEvidence evidence,
+        CancellationToken ct = default) {
+        if (!evidence.HasRepository) return;
+
+        var now = EventTimestamp.ToUtcString(DateTimeOffset.UtcNow);
+        await using var conn = await _dataSource.OpenConnectionAsync(ct);
+        await using var cmd = new NpgsqlCommand(@"
+            INSERT INTO session_repositories (
+                session_id, repo_hash, repo_owner, repo_name, event_count, is_primary, created_at, updated_at
+            ) VALUES ($1, $2, $3, $4, 0, FALSE, $5, $5)
+            ON CONFLICT (session_id, repo_hash) DO UPDATE SET
+                repo_owner = COALESCE(EXCLUDED.repo_owner, session_repositories.repo_owner),
+                repo_name = COALESCE(EXCLUDED.repo_name, session_repositories.repo_name),
+                updated_at = EXCLUDED.updated_at;", conn);
+        cmd.Parameters.AddWithValue(sessionId);
+        cmd.Parameters.AddWithValue(evidence.RepoHash!);
+        cmd.Parameters.AddWithValue((object?)evidence.RepoOwner ?? DBNull.Value);
+        cmd.Parameters.AddWithValue((object?)evidence.RepoName ?? DBNull.Value);
+        cmd.Parameters.AddWithValue(now);
         await cmd.ExecuteNonQueryAsync(ct);
     }
 

@@ -9,7 +9,8 @@ public class SqliteEventStoreRepository : IEventStoreRepository {
         session_id, agent_id, line_number, logical_seq, event_id, event_type, vendor, model,
         timestamp, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
         reasoning_tokens, context_used_tokens, context_window_tokens, cost_usd, item_id,
-        tool_server, tool_name, tool_input, tool_output, tool_exit_code, is_error, content, raw_payload";
+        tool_server, tool_name, tool_input, tool_output, tool_exit_code, is_error, content, raw_payload,
+        cwd, repo_hash, repo_owner, repo_name";
 
     private readonly SqliteConnection _connection;
 
@@ -29,7 +30,8 @@ public class SqliteEventStoreRepository : IEventStoreRepository {
                     $session_id, $agent_id, $line_number, $logical_seq, $event_id, $event_type, $vendor, $model,
                     $timestamp, $input_tokens, $output_tokens, $cache_read_tokens, $cache_write_tokens,
                     $reasoning_tokens, $context_used_tokens, $context_window_tokens, $cost_usd, $item_id,
-                    $tool_server, $tool_name, $tool_input, $tool_output, $tool_exit_code, $is_error, $content, $raw_payload
+                    $tool_server, $tool_name, $tool_input, $tool_output, $tool_exit_code, $is_error, $content, $raw_payload,
+                    $cwd, $repo_hash, $repo_owner, $repo_name
                 )
                 ON CONFLICT(session_id, agent_id, line_number, logical_seq) DO NOTHING;
             ";
@@ -65,6 +67,10 @@ public class SqliteEventStoreRepository : IEventStoreRepository {
                 cmd.Parameters.AddWithValue("$is_error", ev.IsError ? 1 : 0);
                 cmd.Parameters.AddWithValue("$content", (object?)ev.Content ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("$raw_payload", (object?)ev.RawPayload ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$cwd", (object?)ev.Cwd ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$repo_hash", (object?)ev.RepoHash ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$repo_owner", (object?)ev.RepoOwner ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$repo_name", (object?)ev.RepoName ?? DBNull.Value);
 
                 inserted += await cmd.ExecuteNonQueryAsync(ct);
             }
@@ -180,6 +186,10 @@ public class SqliteEventStoreRepository : IEventStoreRepository {
         ToolExitCode = reader.IsDBNull(22) ? null : reader.GetInt32(22),
         IsError = reader.GetInt32(23) != 0,
         Content = reader.IsDBNull(24) ? null : reader.GetString(24),
-        RawPayload = reader.IsDBNull(25) ? null : reader.GetString(25)
+        RawPayload = reader.IsDBNull(25) ? null : reader.GetString(25),
+        Cwd = reader.IsDBNull(26) ? null : reader.GetString(26),
+        RepoHash = reader.IsDBNull(27) ? null : reader.GetString(27),
+        RepoOwner = reader.IsDBNull(28) ? null : reader.GetString(28),
+        RepoName = reader.IsDBNull(29) ? null : reader.GetString(29)
     };
 }

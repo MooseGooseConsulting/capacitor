@@ -9,7 +9,8 @@ public class PostgresEventStoreRepository : IEventStoreRepository {
         session_id, agent_id, line_number, logical_seq, event_id, event_type, vendor, model,
         timestamp, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
         reasoning_tokens, context_used_tokens, context_window_tokens, cost_usd, item_id,
-        tool_server, tool_name, tool_input, tool_output, tool_exit_code, is_error, content, raw_payload";
+        tool_server, tool_name, tool_input, tool_output, tool_exit_code, is_error, content, raw_payload,
+        cwd, repo_hash, repo_owner, repo_name";
 
     private readonly NpgsqlDataSource _dataSource;
 
@@ -29,7 +30,7 @@ public class PostgresEventStoreRepository : IEventStoreRepository {
             VALUES (
                 $1, $2, $3, $4, $5, $6, $7, $8,
                 $9, $10, $11, $12, $13, $14, $15, $16, $17, $18,
-                $19, $20, $21, $22, $23, $24, $25, $26
+                $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30
             )
             ON CONFLICT(session_id, agent_id, line_number, logical_seq) DO NOTHING;
         ";
@@ -62,6 +63,10 @@ public class PostgresEventStoreRepository : IEventStoreRepository {
             cmd.Parameters.AddWithValue(ev.IsError);
             cmd.Parameters.AddWithValue((object?)ev.Content ?? DBNull.Value);
             cmd.Parameters.AddWithValue((object?)ev.RawPayload ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)ev.Cwd ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)ev.RepoHash ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)ev.RepoOwner ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)ev.RepoName ?? DBNull.Value);
 
             inserted += await cmd.ExecuteNonQueryAsync(ct);
         }
@@ -176,6 +181,10 @@ public class PostgresEventStoreRepository : IEventStoreRepository {
         ToolExitCode = reader.IsDBNull(22) ? null : reader.GetInt32(22),
         IsError = reader.GetBoolean(23),
         Content = reader.IsDBNull(24) ? null : reader.GetString(24),
-        RawPayload = reader.IsDBNull(25) ? null : reader.GetString(25)
+        RawPayload = reader.IsDBNull(25) ? null : reader.GetString(25),
+        Cwd = reader.IsDBNull(26) ? null : reader.GetString(26),
+        RepoHash = reader.IsDBNull(27) ? null : reader.GetString(27),
+        RepoOwner = reader.IsDBNull(28) ? null : reader.GetString(28),
+        RepoName = reader.IsDBNull(29) ? null : reader.GetString(29)
     };
 }

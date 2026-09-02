@@ -84,4 +84,18 @@ public record SessionEventRecord {
 
     [JsonPropertyName("raw_payload")]
     public string? RawPayload { get; init; }
+
+    // Evidence belongs to the emitted event, never only to the session. A session can
+    // legitimately work across several repositories and directories.
+    [JsonPropertyName("cwd")]
+    public string? Cwd { get; init; }
+
+    [JsonPropertyName("repo_hash")]
+    public string? RepoHash { get; init; }
+
+    [JsonPropertyName("repo_owner")]
+    public string? RepoOwner { get; init; }
+
+    [JsonPropertyName("repo_name")]
+    public string? RepoName { get; init; }
 }

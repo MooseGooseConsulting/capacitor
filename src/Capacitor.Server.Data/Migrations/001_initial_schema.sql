@@ -30,7 +30,43 @@ CREATE TABLE IF NOT EXISTS session_events (
     is_error            BOOLEAN NOT NULL DEFAULT FALSE,
     content             TEXT,
     raw_payload         TEXT,
+    cwd                 TEXT,
+    repo_hash           VARCHAR(64),
+    repo_owner          VARCHAR(128),
+    repo_name           VARCHAR(128),
     PRIMARY KEY (session_id, agent_id, line_number)
+);
+
+-- The receipt is the source-resume boundary. Normalized events retain the same
+-- coordinates but are not a substitute: one receipt can emit no events or many.
+CREATE TABLE IF NOT EXISTS transcript_receipts (
+    session_id              VARCHAR(64) NOT NULL,
+    agent_id                VARCHAR(64) NOT NULL DEFAULT '',
+    line_number             INTEGER NOT NULL,
+    vendor                  VARCHAR(32) NOT NULL,
+    raw_payload             TEXT NOT NULL,
+    normalization_status    VARCHAR(16) NOT NULL,
+    failure_reason          TEXT,
+    cwd                     TEXT,
+    repo_hash               VARCHAR(64),
+    repo_owner              VARCHAR(128),
+    repo_name               VARCHAR(128),
+    received_at             VARCHAR(35) NOT NULL,
+    updated_at              VARCHAR(35) NOT NULL,
+    PRIMARY KEY (session_id, agent_id, line_number)
+);
+
+CREATE TABLE IF NOT EXISTS session_repositories (
+    session_id              VARCHAR(64) NOT NULL,
+    repo_hash               VARCHAR(64) NOT NULL,
+    repo_owner              VARCHAR(128),
+    repo_name               VARCHAR(128),
+    first_seen_line         INTEGER,
+    event_count             BIGINT NOT NULL DEFAULT 0,
+    is_primary              BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at              VARCHAR(35) NOT NULL,
+    updated_at              VARCHAR(35) NOT NULL,
+    PRIMARY KEY (session_id, repo_hash)
 );
 
 CREATE TABLE IF NOT EXISTS session_watermarks (
@@ -194,6 +230,9 @@ CREATE TABLE IF NOT EXISTS dead_letter_entries (
 
 CREATE INDEX IF NOT EXISTS idx_session_events_lookup ON session_events(session_id, timestamp);
 CREATE INDEX IF NOT EXISTS idx_session_events_vendor_model ON session_events(vendor, model);
+CREATE INDEX IF NOT EXISTS idx_session_events_repository ON session_events(session_id, repo_hash, line_number);
+CREATE INDEX IF NOT EXISTS idx_transcript_receipts_stream ON transcript_receipts(session_id, agent_id, line_number);
+CREATE INDEX IF NOT EXISTS idx_session_repositories_repo ON session_repositories(repo_hash, session_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_repo ON sessions(repo_hash, started_at);
 CREATE INDEX IF NOT EXISTS idx_sessions_owner ON sessions(owner_user_id, started_at);
 CREATE INDEX IF NOT EXISTS idx_sessions_machine ON sessions(machine_id, started_at);
