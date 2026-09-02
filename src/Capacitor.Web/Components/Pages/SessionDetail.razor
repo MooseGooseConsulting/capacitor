@@ -326,13 +326,13 @@
     static string EventAccounting(SessionEvent entry) {
         var values = new List<string>();
         if (HasRecordedTokenUsage(entry)) {
-            values.Add(FormatTokens(entry.InputTokens) + " in → " + FormatTokens(entry.OutputTokens)
-                + " out · cache r" + FormatTokens(entry.CacheReadTokens) + " w" + FormatTokens(entry.CacheWriteTokens));
+            values.Add(FormatTokens(entry.InputTokens ?? 0) + " in → " + FormatTokens(entry.OutputTokens ?? 0)
+                + " out · cache r" + FormatTokens(entry.CacheReadTokens ?? 0) + " w" + FormatTokens(entry.CacheWriteTokens ?? 0));
         } else {
             values.Add("Token usage unavailable");
         }
 
-        values.Add(HasRecordedCost(entry) ? FormatCost(entry.CostUsd) : "Cost unavailable");
+        values.Add(HasRecordedCost(entry) ? FormatCost(entry.CostUsd ?? 0m) : "Cost unavailable");
         return string.Join(" · ", values);
     }
     static string TraceLabel(TraceEntry entry) => entry.Turn is { } turn
@@ -346,13 +346,13 @@
 
         var values = new List<string>();
         if (HasRecordedTokenUsage(turn.Events)) {
-            values.Add(FormatTokens(turn.InputTokens) + " in → " + FormatTokens(turn.OutputTokens) + " out");
+            values.Add(FormatTokens(turn.InputTokens ?? 0) + " in → " + FormatTokens(turn.OutputTokens ?? 0) + " out");
         } else {
             values.Add("Token usage unavailable");
         }
         if (turn.ToolCount > 0) values.Add(turn.ToolCount + (turn.ToolCount == 1 ? " tool" : " tools"));
         if (turn.DurationMilliseconds is { } duration) values.Add(FormatDuration(duration));
-        values.Add(HasRecordedCost(turn.Events) ? FormatCost(turn.CostUsd) : "Cost unavailable");
+        values.Add(HasRecordedCost(turn.Events) ? FormatCost(turn.CostUsd ?? 0m) : "Cost unavailable");
         return string.Join(" · ", values);
     }
     static string FormatCount(int? value) => value is { } count ? count.ToString("N0") : string.Empty;

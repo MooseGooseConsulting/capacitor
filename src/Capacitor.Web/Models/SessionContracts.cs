@@ -139,19 +139,19 @@ public sealed record SessionEvent {
     public string? Model { get; init; }
 
     [JsonPropertyName("input_tokens")]
-    public long InputTokens { get; init; }
+    public long? InputTokens { get; init; }
 
     [JsonPropertyName("output_tokens")]
-    public long OutputTokens { get; init; }
+    public long? OutputTokens { get; init; }
 
     [JsonPropertyName("cache_read_tokens")]
-    public long CacheReadTokens { get; init; }
+    public long? CacheReadTokens { get; init; }
 
     [JsonPropertyName("cache_write_tokens")]
-    public long CacheWriteTokens { get; init; }
+    public long? CacheWriteTokens { get; init; }
 
     [JsonPropertyName("cost_usd")]
-    public decimal CostUsd { get; init; }
+    public decimal? CostUsd { get; init; }
 
     [JsonPropertyName("content")]
     public string? Content { get; init; }
@@ -222,19 +222,19 @@ public sealed record TraceTurn {
     public long? DurationMilliseconds { get; init; }
 
     [JsonPropertyName("input_tokens")]
-    public long InputTokens { get; init; }
+    public long? InputTokens { get; init; }
 
     [JsonPropertyName("output_tokens")]
-    public long OutputTokens { get; init; }
+    public long? OutputTokens { get; init; }
 
     [JsonPropertyName("cache_read_tokens")]
-    public long CacheReadTokens { get; init; }
+    public long? CacheReadTokens { get; init; }
 
     [JsonPropertyName("cache_write_tokens")]
-    public long CacheWriteTokens { get; init; }
+    public long? CacheWriteTokens { get; init; }
 
     [JsonPropertyName("cost_usd")]
-    public decimal CostUsd { get; init; }
+    public decimal? CostUsd { get; init; }
 
     [JsonPropertyName("tool_count")]
     public int ToolCount { get; init; }
