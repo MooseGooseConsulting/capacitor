@@ -142,7 +142,7 @@
                 }
             </MudTabPanel>
             <MudTabPanel Text="Evaluation">
-                @if (detail.Evaluation is not { } evaluation) {
+                @if (detail.Evaluation?.Run is not { } evaluation) {
                     <EmptyTab Title="No evaluation" Message="No persisted evaluation has been returned for this session." />
                 } else {
                     <MudPaper Outlined="true" Class="detail-panel">
@@ -160,6 +160,9 @@
                         }
                         @if (evaluation.EvaluatedAt is { } evaluatedAt) {
                             <MudText Typo="Typo.caption" Class="muted">Evaluated @evaluatedAt.LocalDateTime.ToString("g")</MudText>
+                        }
+                        @if (detail.Evaluation.Verdicts.Count > 0) {
+                            <MudText Typo="Typo.caption" Class="muted">@detail.Evaluation.Verdicts.Count persisted verdict@(detail.Evaluation.Verdicts.Count == 1 ? string.Empty : "s")</MudText>
                         }
                     </MudPaper>
                 }

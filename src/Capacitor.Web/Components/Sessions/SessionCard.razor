@@ -38,7 +38,7 @@
                 <Metric Label="Tools" Value="@Session.ToolCount.ToString("N0")" />
             </MudItem>
             <MudItem xs="4" sm="4" md="2">
-                <Metric Label="Errors" Value="@Session.ErrorCount.ToString("N0")" />
+                <Metric Label="Errors" Value="Not reported" />
             </MudItem>
         </MudGrid>
     </MudPaper>
@@ -51,13 +51,9 @@
     string DisplayTitle => string.IsNullOrWhiteSpace(Session.Title) ? "Untitled session" : Session.Title;
     string DisplayStatus => string.IsNullOrWhiteSpace(Session.Status) ? "unknown" : Session.Status;
     string StatusClass => $"status-{DisplayStatus.ToLowerInvariant()}";
-    string TokenFlow => $"{Compact(Session.InputTokens)} in → {Compact(Session.OutputTokens)} out ({Compact(Session.TotalTokens)})";
-    string ContextOccupancy => Session.ContextWindowTokens is > 0
-        ? $"{Compact(Session.ContextUsedTokens ?? 0)} / {Compact(Session.ContextWindowTokens.Value)}"
-        : "Not reported";
-    string Diff => Session.DiffAdditions is null && Session.DiffDeletions is null
-        ? "Not reported"
-        : $"+{Session.DiffAdditions ?? 0:N0} −{Session.DiffDeletions ?? 0:N0}";
+    string TokenFlow => Session.TotalTokens > 0 ? $"{Compact(Session.TotalTokens)} total" : "Not reported";
+    const string ContextOccupancy = "Not reported";
+    const string Diff = "Not reported";
 
     static string Compact(long value) => value switch {
         >= 1_000_000 => $"{value / 1_000_000d:0.#}M",
