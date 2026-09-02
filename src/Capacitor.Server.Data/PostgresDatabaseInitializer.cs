@@ -19,6 +19,7 @@ public static class PostgresDatabaseInitializer {
         }
 
         await ExecuteMigrationAsync(connection, transaction, "001_initial_schema.sql", ct);
+        await ExecuteMigrationAsync(connection, transaction, "003_event_logical_seq.postgres.sql", ct);
         await ExecuteMigrationAsync(connection, transaction, "002_analytics_views.postgres.sql", ct);
         await transaction.CommitAsync(ct);
     }

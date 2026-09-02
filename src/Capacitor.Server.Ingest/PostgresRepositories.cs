@@ -157,9 +157,30 @@ public class PostgresSessionRepository : ISessionRepository {
         var status = string.IsNullOrWhiteSpace(query.Status) ? null : query.Status.Trim();
 
         await using var conn = await _dataSource.OpenConnectionAsync(ct);
+        long total;
+        await using (var count = conn.CreateCommand()) {
+            count.CommandText = @"
+            SELECT COUNT(*)
+            FROM sessions
+            WHERE ($1 IS NULL OR vendor = $1)
+              AND ($2 IS NULL OR status = $2)
+              AND ($3 IS NULL OR repo_hash = $3 OR (repo_owner || '/' || repo_name) = $3)
+              AND ($4 IS NULL
+                   OR title ILIKE '%' || $4 || '%'
+                   OR EXISTS (
+                       SELECT 1
+                       FROM session_events
+                       WHERE session_events.session_id = sessions.session_id
+                         AND content ILIKE '%' || $4 || '%'
+                   ));";
+            AddSearchParameters(count, vendor, status, repo, text);
+            total = Convert.ToInt64(await count.ExecuteScalarAsync(ct), CultureInfo.InvariantCulture);
+        }
+        if (total == 0 || offset >= total) return new SessionSearchPage([], total);
+
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = $@"
-            SELECT {SessionColumns}, COUNT(*) OVER() AS total
+            SELECT {SessionColumns}
             FROM sessions
             WHERE ($1 IS NULL OR vendor = $1)
               AND ($2 IS NULL OR status = $2)
@@ -174,25 +195,31 @@ public class PostgresSessionRepository : ISessionRepository {
                    ))
             ORDER BY COALESCE(last_event_at, started_at) DESC, session_id DESC
             LIMIT $5 OFFSET $6;";
-        // PostgreSQL cannot infer the type of a null parameter when it appears in
-        // an `IS NULL OR column = parameter` predicate.  Keep the optional filters
-        // explicitly text-typed so an unfiltered dashboard query is valid too.
-        cmd.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Text, Value = (object?)vendor ?? DBNull.Value });
-        cmd.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Text, Value = (object?)status ?? DBNull.Value });
-        cmd.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Text, Value = (object?)repo ?? DBNull.Value });
-        cmd.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Text, Value = (object?)text ?? DBNull.Value });
+        AddSearchParameters(cmd, vendor, status, repo, text);
         cmd.Parameters.AddWithValue(limit);
         cmd.Parameters.AddWithValue(offset);
 
         var sessions = new List<SessionHeaderRecord>();
-        long total = 0;
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct)) {
             sessions.Add(ReadSession(reader));
-            total = reader.GetInt64(34);
         }
 
         return new SessionSearchPage(sessions, total);
+    }
+
+    private static void AddSearchParameters(
+        NpgsqlCommand command,
+        string? vendor,
+        string? status,
+        string? repo,
+        string? text) {
+        // PostgreSQL cannot infer the type of a null parameter when it appears in
+        // an `IS NULL OR column = parameter` predicate. Keep optional filters text-typed.
+        command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Text, Value = (object?)vendor ?? DBNull.Value });
+        command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Text, Value = (object?)status ?? DBNull.Value });
+        command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Text, Value = (object?)repo ?? DBNull.Value });
+        command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Text, Value = (object?)text ?? DBNull.Value });
     }
 
     private static SessionHeaderRecord ReadSession(NpgsqlDataReader reader) => new() {
@@ -328,7 +355,21 @@ public class PostgresSessionRepository : ISessionRepository {
         }
     }
 
-    public async Task PatchSessionStartAsync(string sessionId, string? ownerUserId, string? defaultVisibility, CancellationToken ct = default) {
+    public async Task UpdateSessionTitleAsync(string sessionId, string title, CancellationToken ct = default) {
+        await using var conn = await _dataSource.OpenConnectionAsync(ct);
+        await using var cmd = new NpgsqlCommand(
+            "UPDATE sessions SET title = $2 WHERE session_id = $1;", conn);
+        cmd.Parameters.AddWithValue(sessionId);
+        cmd.Parameters.AddWithValue(title);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task PatchSessionStartAsync(
+        string sessionId,
+        string? ownerUserId,
+        string? defaultVisibility,
+        SessionStartPatch? patch = null,
+        CancellationToken ct = default) {
         await using var conn = await _dataSource.OpenConnectionAsync(ct);
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = @"
@@ -340,12 +381,36 @@ public class PostgresSessionRepository : ISessionRepository {
                 visibility = CASE
                     WHEN $3 IS NOT NULL THEN $3
                     ELSE visibility
-                END
+                END,
+                started_at = COALESCE($4, started_at),
+                model = COALESCE($5, model),
+                slug = COALESCE($6, slug),
+                previous_session_id = COALESCE($7, previous_session_id),
+                repo_hash = COALESCE($8, repo_hash),
+                repo_owner = COALESCE($9, repo_owner),
+                repo_name = COALESCE($10, repo_name),
+                branch = COALESCE($11, branch),
+                pr_number = COALESCE($12, pr_number),
+                pr_title = COALESCE($13, pr_title),
+                pr_url = COALESCE($14, pr_url),
+                pr_head_ref = COALESCE($15, pr_head_ref)
             WHERE session_id = $1;
         ";
         cmd.Parameters.AddWithValue(sessionId);
         cmd.Parameters.AddWithValue(string.IsNullOrEmpty(ownerUserId) ? DBNull.Value : ownerUserId);
         cmd.Parameters.AddWithValue(string.IsNullOrEmpty(defaultVisibility) ? DBNull.Value : defaultVisibility);
+        cmd.Parameters.AddWithValue(patch?.StartedAt is { } startedAt ? EventTimestamp.ToUtcString(startedAt) : DBNull.Value);
+        cmd.Parameters.AddWithValue((object?)patch?.Model ?? DBNull.Value);
+        cmd.Parameters.AddWithValue((object?)patch?.Slug ?? DBNull.Value);
+        cmd.Parameters.AddWithValue((object?)patch?.PreviousSessionId ?? DBNull.Value);
+        cmd.Parameters.AddWithValue((object?)patch?.RepoHash ?? DBNull.Value);
+        cmd.Parameters.AddWithValue((object?)patch?.RepoOwner ?? DBNull.Value);
+        cmd.Parameters.AddWithValue((object?)patch?.RepoName ?? DBNull.Value);
+        cmd.Parameters.AddWithValue((object?)patch?.Branch ?? DBNull.Value);
+        cmd.Parameters.AddWithValue((object?)patch?.PrNumber ?? DBNull.Value);
+        cmd.Parameters.AddWithValue((object?)patch?.PrTitle ?? DBNull.Value);
+        cmd.Parameters.AddWithValue((object?)patch?.PrUrl ?? DBNull.Value);
+        cmd.Parameters.AddWithValue((object?)patch?.PrHeadRef ?? DBNull.Value);
         await cmd.ExecuteNonQueryAsync(ct);
     }
 

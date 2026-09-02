@@ -37,13 +37,25 @@ app.MapGet("/health", async (NpgsqlDataSource dataSource, CancellationToken ct) 
 
 async Task<IResult> HandleSessionStart(string vendor, ApiSessionStartPayload payload, ISessionRepository sessions) {
     var sessionId = IdCanonicalizer.Canonicalize(payload.SessionId);
-    var existed = await sessions.GetSessionAsync(sessionId) != null;
     var session = await sessions.GetOrCreatePlaceholderAsync(sessionId, vendor, payload.UserId, payload.DefaultVisibility);
-
-    if (existed && (payload.UserId is { Length: > 0 } || payload.DefaultVisibility is { Length: > 0 })) {
-        await sessions.PatchSessionStartAsync(sessionId, payload.UserId, payload.DefaultVisibility);
-        session = await sessions.GetSessionAsync(sessionId) ?? session;
-    }
+    var repo = payload.Repository;
+    var repoHash = repo is { Owner: { Length: > 0 }, RepoName: { Length: > 0 } }
+        ? RepoHashHelper.ComputeRepoHash(repo.Owner, repo.RepoName)
+        : null;
+    await sessions.PatchSessionStartAsync(sessionId, payload.UserId, payload.DefaultVisibility, new SessionStartPatch(
+        payload.StartedAt,
+        payload.Model,
+        payload.Slug,
+        payload.PreviousSessionId,
+        repoHash,
+        repo?.Owner,
+        repo?.RepoName,
+        repo?.Branch,
+        repo?.PrNumber,
+        repo?.PrTitle,
+        repo?.PrUrl,
+        repo?.PrHeadRef));
+    session = await sessions.GetSessionAsync(sessionId) ?? session;
 
     return Results.Ok(new { status = "started", session_id = session.SessionId });
 }
@@ -74,6 +86,19 @@ app.MapPost("/hooks/session-end/{vendor}", (string vendor, [FromBody] ApiSession
     => HandleSessionEnd(vendor, payload, sessions, projector));
 app.MapPost("/hooks/session-end", ([FromBody] ApiSessionEndPayload payload, ISessionRepository sessions, SessionRollupProjector projector)
     => HandleSessionEnd("claude", payload, sessions, projector));
+
+async Task<IResult> HandleSessionTitle(ApiSessionTitlePayload payload, ISessionRepository sessions) {
+    var sessionId = IdCanonicalizer.Canonicalize(payload.SessionId);
+    if (string.IsNullOrWhiteSpace(payload.Title)) return Results.BadRequest(new { detail = "title is required." });
+    if (await sessions.GetSessionAsync(sessionId) is null) return Results.NotFound();
+    await sessions.UpdateSessionTitleAsync(sessionId, payload.Title.Trim());
+    return Results.Ok(new { status = "updated", session_id = sessionId });
+}
+
+app.MapPost("/hooks/set-title", ([FromBody] ApiSessionTitlePayload payload, ISessionRepository sessions)
+    => HandleSessionTitle(payload, sessions));
+app.MapPost("/hooks/session-title", ([FromBody] ApiSessionTitlePayload payload, ISessionRepository sessions)
+    => HandleSessionTitle(payload, sessions));
 
 // Fail-closed clients (SessionImporter, WatchCommand) must see a 2xx before streaming a
 // subagent's content — this endpoint's whole job is to be that ACK. Unqualified, matching what
@@ -118,6 +143,7 @@ app.MapPost("/hooks/transcript", async (
 
     var agentId = IdCanonicalizer.Canonicalize(batch.AgentId);
     var events = new List<SessionEventRecord>();
+    var acceptedSourceLines = new List<TranscriptSourceLine>();
     var highestLine = 0;
     var failedCount = 0;
 
@@ -127,16 +153,18 @@ app.MapPost("/hooks/transcript", async (
 
         var lineEvents = router.Normalize(vendor, sessionId, agentId, lineNum, batch.Lines[i], out var lineFailed);
         if (lineFailed) failedCount++;
+        else acceptedSourceLines.Add(new TranscriptSourceLine(sessionId, agentId, lineNum));
         foreach (var ev in lineEvents) {
             events.Add(ev with { Vendor = vendor, AgentId = agentId, SessionId = sessionId });
         }
     }
 
-    if (events.Count > 0) {
-        await ingest.IngestAsync(events, firstLineNumber: batch.LineNumbers is null ? 1 : 0);
+    if (events.Count > 0 || acceptedSourceLines.Count > 0) {
+        await ingest.IngestAsync(
+            events,
+            firstLineNumber: batch.LineNumbers is null ? 1 : 0,
+            acceptedSourceLines: acceptedSourceLines);
         await projector.ProjectSessionRollupAsync(sessionId);
-    } else if (batch.Lines.Length > 0) {
-        await watermarks.UpdateWatermarkAsync(sessionId, agentId, highestLine);
     }
 
     if (batch.Strict && failedCount > 0) {
@@ -173,6 +201,7 @@ app.MapGet("/watermarks", async (
 
 app.MapGet("/api/sessions/search", async (
     [FromQuery] string? query,
+    [FromQuery(Name = "q")] string? q,
     [FromQuery] string? repo,
     [FromQuery] string? vendor,
     [FromQuery] string? status,
@@ -181,8 +210,8 @@ app.MapGet("/api/sessions/search", async (
     ISessionRepository sessions,
     CancellationToken ct) => {
     var page = await sessions.SearchSessionsAsync(new SessionSearchQuery(
-        query, repo, vendor, status, limit ?? 50, offset ?? 0), ct);
-    return Results.Ok(new { sessions = page.Sessions, total = page.Total });
+        q ?? query, repo, vendor, status, limit ?? 50, offset ?? 0), ct);
+    return Results.Ok(new { hits = page.Sessions, total = page.Total });
 });
 
 async Task<IResult> RequireSessionAsync(
@@ -236,14 +265,36 @@ app.MapGet("/api/sessions/{id}/events", async (
 
 app.MapGet("/api/sessions/{id}/transcript", async (
     string id,
+    [FromQuery(Name = "agent_id")] string? agentId,
+    [FromQuery(Name = "around_event")] int? aroundEvent,
+    [FromQuery] int? before,
+    [FromQuery] int? after,
+    [FromQuery] int? limit,
+    [FromQuery] int? offset,
+    [FromQuery(Name = "include_thinking")] bool includeThinking,
     ISessionRepository sessions,
     IEventStoreRepository eventStore,
     CancellationToken ct) => {
     var sessionId = IdCanonicalizer.Canonicalize(id);
     var session = await sessions.GetSessionAsync(sessionId, ct);
     if (session is null) return Results.NotFound();
-    var events = await eventStore.GetEventsAsync(sessionId, ct: ct);
-    return Results.Ok(new { session, events });
+    var events = await eventStore.GetEventsAsync(
+        sessionId,
+        string.IsNullOrWhiteSpace(agentId) ? null : IdCanonicalizer.Canonicalize(agentId),
+        ct: ct);
+    var visibleEvents = includeThinking
+        ? events
+        : events.Where(@event => !@event.EventType.Contains("Thinking", StringComparison.OrdinalIgnoreCase)).ToArray();
+    IReadOnlyList<SessionEventRecord> window;
+    if (aroundEvent is int center) {
+        var beforeCount = Math.Max(0, before ?? 5);
+        var afterCount = Math.Max(0, after ?? 15);
+        var start = Math.Clamp(center - beforeCount, 0, visibleEvents.Count);
+        window = visibleEvents.Skip(start).Take(beforeCount + afterCount + 1).ToArray();
+    } else {
+        window = visibleEvents.Skip(Math.Max(0, offset ?? 0)).Take(Math.Clamp(limit ?? 50, 1, 500)).ToArray();
+    }
+    return Results.Ok(new { session, events = window });
 });
 
 app.MapGet("/api/sessions/{id}/turns", async (
@@ -254,7 +305,20 @@ app.MapGet("/api/sessions/{id}/turns", async (
     var sessionId = IdCanonicalizer.Canonicalize(id);
     if (await sessions.GetSessionAsync(sessionId, ct) is null) return Results.NotFound();
     var events = await eventStore.GetEventsAsync(sessionId, ct: ct);
-    return Results.Ok(new { session_id = sessionId, trace = SessionTraceComposer.Compose(events) });
+    return Results.Ok(SessionTraceComposer.SummarizeTurns(events));
+});
+
+app.MapGet("/api/sessions/{id}/turns/{turnIndex:int}", async (
+    string id,
+    int turnIndex,
+    ISessionRepository sessions,
+    IEventStoreRepository eventStore,
+    CancellationToken ct) => {
+    var sessionId = IdCanonicalizer.Canonicalize(id);
+    if (await sessions.GetSessionAsync(sessionId, ct) is null) return Results.NotFound();
+    var events = await eventStore.GetEventsAsync(sessionId, ct: ct);
+    var turn = SessionTraceComposer.GetTurn(events, turnIndex);
+    return turn is null ? Results.NotFound() : Results.Ok(turn);
 });
 
 app.MapGet("/api/sessions/{id}/evaluation", async (
@@ -392,10 +456,7 @@ app.MapPost("/api/analytics/query", async (
     try {
         var requested = request.MaxRows is int n && n > 0 ? n : PostgresAnalyticsService.DefaultMaxRows;
         var cap = Math.Min(requested, PostgresAnalyticsService.DefaultMaxRows);
-        var scope = request.Repos is { Length: > 0 } && request.Repos[0] is { Length: > 0 } repo
-            ? repo
-            : "global";
-        var rows = await analytics.ExecuteGovernedQueryAsync(request.Sql, scope, cap + 1, ct);
+        var rows = await analytics.ExecuteGovernedQueryAsync(request.Sql, request.Repos, cap + 1, ct);
         var truncated = rows.Count > cap;
         if (truncated) rows.RemoveAt(rows.Count - 1);
         return Results.Ok(new { rows, truncated, max_rows = cap });
@@ -437,6 +498,44 @@ namespace Capacitor.Server.Api {
 
         [JsonPropertyName("default_visibility")]
         public string? DefaultVisibility { get; init; }
+
+        [JsonPropertyName("started_at")]
+        public DateTimeOffset? StartedAt { get; init; }
+
+        [JsonPropertyName("model")]
+        public string? Model { get; init; }
+
+        [JsonPropertyName("slug")]
+        public string? Slug { get; init; }
+
+        [JsonPropertyName("previous_session_id")]
+        public string? PreviousSessionId { get; init; }
+
+        [JsonPropertyName("repository")]
+        public ApiRepositoryPayload? Repository { get; init; }
+    }
+
+    public record ApiRepositoryPayload {
+        [JsonPropertyName("owner")]
+        public string? Owner { get; init; }
+
+        [JsonPropertyName("repo_name")]
+        public string? RepoName { get; init; }
+
+        [JsonPropertyName("branch")]
+        public string? Branch { get; init; }
+
+        [JsonPropertyName("pr_number")]
+        public int? PrNumber { get; init; }
+
+        [JsonPropertyName("pr_title")]
+        public string? PrTitle { get; init; }
+
+        [JsonPropertyName("pr_url")]
+        public string? PrUrl { get; init; }
+
+        [JsonPropertyName("pr_head_ref")]
+        public string? PrHeadRef { get; init; }
     }
 
     public record ApiSessionEndPayload {
@@ -445,6 +544,14 @@ namespace Capacitor.Server.Api {
 
         [JsonPropertyName("ended_at")]
         public DateTimeOffset? EndedAt { get; init; }
+    }
+
+    public record ApiSessionTitlePayload {
+        [JsonPropertyName("session_id")]
+        public required string SessionId { get; init; }
+
+        [JsonPropertyName("title")]
+        public required string Title { get; init; }
     }
 }
 

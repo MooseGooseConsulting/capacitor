@@ -23,6 +23,23 @@ public sealed record SessionSearchPage(
     IReadOnlyList<SessionHeaderRecord> Sessions,
     long Total);
 
+public sealed record SessionStartPatch(
+    DateTimeOffset? StartedAt,
+    string? Model,
+    string? Slug,
+    string? PreviousSessionId,
+    string? RepoHash,
+    string? RepoOwner,
+    string? RepoName,
+    string? Branch,
+    int? PrNumber,
+    string? PrTitle,
+    string? PrUrl,
+    string? PrHeadRef);
+
+/// <summary>One source line accepted by a normalizer, including blank lines that emit no event.</summary>
+public sealed record TranscriptSourceLine(string SessionId, string AgentId, int LineNumber);
+
 public sealed record SessionEvaluation(
     EvalRunRecord Run,
     IReadOnlyList<EvalVerdictRecord> Verdicts);
@@ -48,11 +65,17 @@ public interface ISessionRepository {
     Task<SessionHeaderRecord?> GetSessionAsync(string sessionId, CancellationToken ct = default);
     Task<SessionSearchPage> SearchSessionsAsync(SessionSearchQuery query, CancellationToken ct = default);
     Task UpdateSessionAsync(SessionHeaderRecord session, CancellationToken ct = default);
+    Task UpdateSessionTitleAsync(string sessionId, string title, CancellationToken ct = default);
 
     // Owner/visibility only. A concurrent session-end can commit completed between the
     // session-start handler's read and this write; a full-row UpdateSessionAsync would
     // resurrect the stale active status.
-    Task PatchSessionStartAsync(string sessionId, string? ownerUserId, string? defaultVisibility, CancellationToken ct = default);
+    Task PatchSessionStartAsync(
+        string sessionId,
+        string? ownerUserId,
+        string? defaultVisibility,
+        SessionStartPatch? patch = null,
+        CancellationToken ct = default);
 
     // Repository metadata only. Must not write status/ended_at/aggregates — a concurrent
     // session-end can commit completed between the transcript handler's read of the placeholder
@@ -91,6 +114,7 @@ public interface ITranscriptIngest {
         IReadOnlyList<SessionEventRecord> events,
         string? ownerUserId = null,
         int firstLineNumber = 0,
+        IReadOnlyList<TranscriptSourceLine>? acceptedSourceLines = null,
         CancellationToken ct = default);
 }
 

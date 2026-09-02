@@ -5,16 +5,16 @@ using System.Text.Json.Serialization;
 using System.Globalization;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Npgsql;
+using Capacitor.Cli.Core;
 
 namespace Capacitor.Server.Api.Tests.Integration;
 
 public sealed class PostgresGatewayTests {
-    [Test]
+    [Test, NotInParallel]
     public async Task Gateway_persists_every_logical_event_to_the_recovery_postgres_database() {
         var connectionString = RequireRecoveryConnectionString();
         var sessionId = $"integration-{Guid.NewGuid():N}";
-        var previousConnectionString = Environment.GetEnvironmentVariable("ConnectionStrings__Capacitor");
-        Environment.SetEnvironmentVariable("ConnectionStrings__Capacitor", connectionString);
+        using var environment = EnvScope.Exclusive("ConnectionStrings__Capacitor", connectionString);
 
         try {
             using var factory = new GatewayFactory();
@@ -30,14 +30,19 @@ public sealed class PostgresGatewayTests {
             var ingested = await client.PostAsJsonAsync("/hooks/transcript", new {
                 session_id = sessionId,
                 vendor = "antigravity",
-                lines = new[] { """{"type":"PLANNER_RESPONSE","content":"response","thinking":"reasoning"}""" }
+                lines = new[] {
+                    """{"type":"PLANNER_RESPONSE","content":"response","thinking":"reasoning"}""",
+                    "",
+                    """{"type":"PLANNER_RESPONSE","content":"later response","thinking":"later reasoning"}"""
+                },
+                line_numbers = new[] { 1, 2, 3 }
             });
             await Assert.That(ingested.StatusCode).IsEqualTo(HttpStatusCode.OK);
 
             var watermark = await client.GetFromJsonAsync<WatermarkResponse>(
                 $"/api/sessions/{sessionId}/last-line");
             await Assert.That(watermark).IsNotNull();
-            await Assert.That(watermark!.LastLineNumber).IsEqualTo(1);
+            await Assert.That(watermark!.LastLineNumber).IsEqualTo(3);
 
             await using var connection = new NpgsqlConnection(connectionString);
             await connection.OpenAsync();
@@ -45,18 +50,17 @@ public sealed class PostgresGatewayTests {
                 "SELECT COUNT(*) FROM session_events WHERE session_id = $1;", connection);
             command.Parameters.AddWithValue(sessionId);
             var count = Convert.ToInt64(await command.ExecuteScalarAsync(), CultureInfo.InvariantCulture);
-            await Assert.That(count).IsEqualTo(2L);
+            await Assert.That(count).IsEqualTo(4L);
         } finally {
-            Environment.SetEnvironmentVariable("ConnectionStrings__Capacitor", previousConnectionString);
+            await DeleteTestSessionAsync(connectionString, sessionId);
         }
     }
 
-    [Test]
+    [Test, NotInParallel]
     public async Task Gateway_exposes_the_postgres_backed_sessions_dashboard_read_surface() {
         var connectionString = RequireRecoveryConnectionString();
         var sessionId = $"dashboard-{Guid.NewGuid():N}";
-        var previousConnectionString = Environment.GetEnvironmentVariable("ConnectionStrings__Capacitor");
-        Environment.SetEnvironmentVariable("ConnectionStrings__Capacitor", connectionString);
+        using var environment = EnvScope.Exclusive("ConnectionStrings__Capacitor", connectionString);
 
         try {
             using var factory = new GatewayFactory();
@@ -65,7 +69,16 @@ public sealed class PostgresGatewayTests {
             var started = await client.PostAsJsonAsync("/hooks/session-start/codex", new {
                 session_id = sessionId,
                 user_id = "integration-test",
-                default_visibility = "project"
+                default_visibility = "project",
+                started_at = "2026-01-02T03:04:05Z",
+                model = "gpt-test",
+                slug = "dashboard-test",
+                previous_session_id = "previous-test",
+                repository = new {
+                    owner = "integration-owner",
+                    repo_name = "integration-repo",
+                    branch = "review-fix"
+                }
             });
             await Assert.That(started.StatusCode).IsEqualTo(HttpStatusCode.OK);
 
@@ -79,10 +92,10 @@ public sealed class PostgresGatewayTests {
             });
             await Assert.That(ingested.StatusCode).IsEqualTo(HttpStatusCode.OK);
 
-            var search = await client.GetAsync("/api/sessions/search?query=dashboard%20session");
+            var search = await client.GetAsync("/api/sessions/search?q=dashboard%20session");
             await Assert.That(search.StatusCode).IsEqualTo(HttpStatusCode.OK);
             using (var searchDocument = JsonDocument.Parse(await search.Content.ReadAsStringAsync())) {
-                var matches = searchDocument.RootElement.GetProperty("sessions");
+                var matches = searchDocument.RootElement.GetProperty("hits");
                 await Assert.That(matches.EnumerateArray().Any(s =>
                     s.GetProperty("session_id").GetString() == sessionId)).IsTrue();
             }
@@ -92,6 +105,10 @@ public sealed class PostgresGatewayTests {
             using (var detailDocument = JsonDocument.Parse(await detail.Content.ReadAsStringAsync())) {
                 await Assert.That(detailDocument.RootElement.GetProperty("session").GetProperty("session_id").GetString())
                     .IsEqualTo(sessionId);
+                await Assert.That(detailDocument.RootElement.GetProperty("session").GetProperty("model").GetString())
+                    .IsEqualTo("gpt-test");
+                await Assert.That(detailDocument.RootElement.GetProperty("session").GetProperty("repo_name").GetString())
+                    .IsEqualTo("integration-repo");
                 await Assert.That(detailDocument.RootElement.GetProperty("events").GetArrayLength()).IsEqualTo(4);
                 await Assert.That(detailDocument.RootElement.GetProperty("trace").GetProperty("entries").GetArrayLength())
                     .IsGreaterThan(0);
@@ -100,14 +117,48 @@ public sealed class PostgresGatewayTests {
             var transcript = await client.GetAsync($"/api/sessions/{sessionId}/transcript");
             var events = await client.GetAsync($"/api/sessions/{sessionId}/events");
             var turns = await client.GetAsync($"/api/sessions/{sessionId}/turns");
+            var turn = await client.GetAsync($"/api/sessions/{sessionId}/turns/0");
             var evaluation = await client.GetAsync($"/api/sessions/{sessionId}/evaluation");
             await Assert.That(transcript.StatusCode).IsEqualTo(HttpStatusCode.OK);
             await Assert.That(events.StatusCode).IsEqualTo(HttpStatusCode.OK);
             await Assert.That(turns.StatusCode).IsEqualTo(HttpStatusCode.OK);
+            await Assert.That(turn.StatusCode).IsEqualTo(HttpStatusCode.OK);
             await Assert.That(evaluation.StatusCode).IsEqualTo(HttpStatusCode.NoContent);
+
+            using (var turnsDocument = JsonDocument.Parse(await turns.Content.ReadAsStringAsync())) {
+                await Assert.That(turnsDocument.RootElement.ValueKind).IsEqualTo(JsonValueKind.Array);
+                await Assert.That(turnsDocument.RootElement.GetArrayLength()).IsGreaterThan(0);
+            }
+
+            var titled = await client.PostAsJsonAsync("/hooks/set-title", new { session_id = sessionId, title = "Stored title" });
+            await Assert.That(titled.StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+            var repoHash = RepoHashHelper.ComputeRepoHash("integration-owner", "integration-repo");
+            var analytics = await client.PostAsJsonAsync("/api/analytics/query", new {
+                sql = "SELECT session_id, logical_seq FROM v_an_session_steps ORDER BY logical_seq",
+                repos = new[] { repoHash }
+            });
+            await Assert.That(analytics.StatusCode).IsEqualTo(HttpStatusCode.OK);
+            using (var analyticsDocument = JsonDocument.Parse(await analytics.Content.ReadAsStringAsync())) {
+                await Assert.That(analyticsDocument.RootElement.GetProperty("rows").GetArrayLength()).IsGreaterThan(0);
+            }
         } finally {
-            Environment.SetEnvironmentVariable("ConnectionStrings__Capacitor", previousConnectionString);
+            await DeleteTestSessionAsync(connectionString, sessionId);
         }
+    }
+
+    private static async Task DeleteTestSessionAsync(string connectionString, string sessionId) {
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand(@"
+            DELETE FROM eval_verdicts WHERE eval_run_id IN (SELECT eval_run_id FROM eval_runs WHERE session_id = $1);
+            DELETE FROM eval_runs WHERE session_id = $1;
+            DELETE FROM work_item_sessions WHERE session_id = $1;
+            DELETE FROM session_events WHERE session_id = $1;
+            DELETE FROM session_watermarks WHERE session_id = $1;
+            DELETE FROM sessions WHERE session_id = $1;", connection);
+        command.Parameters.AddWithValue(sessionId);
+        await command.ExecuteNonQueryAsync();
     }
 
     private static string RequireRecoveryConnectionString() {

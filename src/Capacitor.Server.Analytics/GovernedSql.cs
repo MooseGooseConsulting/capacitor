@@ -24,7 +24,10 @@ internal static class GovernedSql {
         @"\b([A-Za-z_][A-Za-z0-9_]*)\s+AS\s*\(",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
-    internal static string Rewrite(string sql, IReadOnlySet<string> governedViews) {
+    internal static string Rewrite(
+        string sql,
+        IReadOnlySet<string> governedViews,
+        string scopePredicate = "repo_hash = $scope OR $scope = 'global'") {
         var stripped = StripCommentsAndWhitespaceGlue(sql).Trim();
         if (stripped.Length == 0) {
             throw new InvalidOperationException("Governed analytics query must be a read-only SELECT statement.");
@@ -152,8 +155,7 @@ internal static class GovernedSql {
         var rewritten = new StringBuilder(withoutTrailingSemi);
         for (var r = replacements.Count - 1; r >= 0; r--) {
             var rep = replacements[r];
-            var fragment =
-                $"(SELECT * FROM {rep.View} WHERE repo_hash = $scope OR $scope = 'global') {rep.Alias}";
+            var fragment = $"(SELECT * FROM {rep.View} WHERE {scopePredicate}) {rep.Alias}";
             rewritten.Remove(rep.Start, rep.Length);
             rewritten.Insert(rep.Start, fragment);
         }

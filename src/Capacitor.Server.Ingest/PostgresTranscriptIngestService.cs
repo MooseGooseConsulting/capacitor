@@ -25,8 +25,9 @@ public sealed class PostgresTranscriptIngestService : ITranscriptIngest {
         IReadOnlyList<SessionEventRecord> events,
         string? ownerUserId = null,
         int firstLineNumber = 0,
+        IReadOnlyList<TranscriptSourceLine>? acceptedSourceLines = null,
         CancellationToken ct = default) {
-        if (events.Count == 0) return 0;
+        if (events.Count == 0 && (acceptedSourceLines is null || acceptedSourceLines.Count == 0)) return 0;
 
         await using var connection = await _dataSource.OpenConnectionAsync(ct);
         await using var transaction = await connection.BeginTransactionAsync(ct);
@@ -41,10 +42,17 @@ public sealed class PostgresTranscriptIngestService : ITranscriptIngest {
             inserted += await InsertEventAsync(connection, transaction, @event, ct);
         }
 
-        foreach (var stream in events.GroupBy(@event => (@event.SessionId, AgentId: @event.AgentId ?? string.Empty))) {
-            var stored = await GetStreamEventsAsync(connection, transaction, stream.Key.SessionId, stream.Key.AgentId, ct);
-            if (TranscriptIngestEngine.ContiguousLastLine(stored, firstLineNumber) is int lastLine) {
-                await AdvanceWatermarkAsync(connection, transaction, stream.Key.SessionId, stream.Key.AgentId, lastLine, ct);
+        var streams = events.Select(@event => (@event.SessionId, AgentId: @event.AgentId ?? string.Empty))
+            .Concat((acceptedSourceLines ?? []).Select(line => (line.SessionId, line.AgentId)))
+            .Distinct()
+            .ToArray();
+        foreach (var stream in streams) {
+            var stored = await GetStreamEventsAsync(connection, transaction, stream.SessionId, stream.AgentId, ct);
+            var acceptedLines = acceptedSourceLines?
+                .Where(line => line.SessionId == stream.SessionId && line.AgentId == stream.AgentId)
+                .Select(line => line.LineNumber);
+            if (TranscriptIngestEngine.ContiguousLastLine(stored, acceptedLines, firstLineNumber) is int lastLine) {
+                await AdvanceWatermarkAsync(connection, transaction, stream.SessionId, stream.AgentId, lastLine, ct);
             }
         }
 

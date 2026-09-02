@@ -18,16 +18,30 @@ public sealed class PostgresAnalyticsService {
     }
 
     public async Task<List<Dictionary<string, object?>>> ExecuteGovernedQueryAsync(
-        string sql, string scope, int maxRows = DefaultMaxRows, CancellationToken ct = default) {
-        ArgumentException.ThrowIfNullOrWhiteSpace(scope);
-
-        var scopedSql = GovernedSql.Rewrite(sql, GovernedViews);
+        string sql,
+        IReadOnlyCollection<string>? repoScopes,
+        int maxRows = DefaultMaxRows,
+        CancellationToken ct = default) {
+        var scopes = repoScopes?
+            .Where(scope => !string.IsNullOrWhiteSpace(scope))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray()
+            ?? [];
+        var scopedSql = GovernedSql.Rewrite(
+            sql,
+            GovernedViews,
+            scopes.Length == 0 ? "TRUE" : "repo_hash = ANY($1)");
         var results = new List<Dictionary<string, object?>>();
 
         await using var connection = await _dataSource.OpenConnectionAsync(ct);
         await using var command = connection.CreateCommand();
         command.CommandText = scopedSql;
-        command.Parameters.AddWithValue("scope", scope);
+        if (scopes.Length > 0) {
+            command.Parameters.Add(new NpgsqlParameter {
+                NpgsqlDbType = NpgsqlTypes.NpgsqlDbType.Array | NpgsqlTypes.NpgsqlDbType.Text,
+                Value = scopes
+            });
+        }
 
         await using var reader = await command.ExecuteReaderAsync(ct);
         while (results.Count < maxRows && await reader.ReadAsync(ct)) {

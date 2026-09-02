@@ -299,7 +299,20 @@ public class SqliteSessionRepository : ISessionRepository {
         }
     }
 
-    public async Task PatchSessionStartAsync(string sessionId, string? ownerUserId, string? defaultVisibility, CancellationToken ct = default) {
+    public async Task UpdateSessionTitleAsync(string sessionId, string title, CancellationToken ct = default) {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = "UPDATE sessions SET title = $title WHERE session_id = $session_id;";
+        cmd.Parameters.AddWithValue("$session_id", sessionId);
+        cmd.Parameters.AddWithValue("$title", title);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task PatchSessionStartAsync(
+        string sessionId,
+        string? ownerUserId,
+        string? defaultVisibility,
+        SessionStartPatch? patch = null,
+        CancellationToken ct = default) {
         using var cmd = _connection.CreateCommand();
         cmd.CommandText = @"
             UPDATE sessions SET
@@ -310,12 +323,36 @@ public class SqliteSessionRepository : ISessionRepository {
                 visibility = CASE
                     WHEN $visibility IS NOT NULL THEN $visibility
                     ELSE visibility
-                END
+                END,
+                started_at = COALESCE($started_at, started_at),
+                model = COALESCE($model, model),
+                slug = COALESCE($slug, slug),
+                previous_session_id = COALESCE($previous_session_id, previous_session_id),
+                repo_hash = COALESCE($repo_hash, repo_hash),
+                repo_owner = COALESCE($repo_owner, repo_owner),
+                repo_name = COALESCE($repo_name, repo_name),
+                branch = COALESCE($branch, branch),
+                pr_number = COALESCE($pr_number, pr_number),
+                pr_title = COALESCE($pr_title, pr_title),
+                pr_url = COALESCE($pr_url, pr_url),
+                pr_head_ref = COALESCE($pr_head_ref, pr_head_ref)
             WHERE session_id = $session_id;
         ";
         cmd.Parameters.AddWithValue("$session_id", sessionId);
         cmd.Parameters.AddWithValue("$owner_user_id", string.IsNullOrEmpty(ownerUserId) ? DBNull.Value : ownerUserId);
         cmd.Parameters.AddWithValue("$visibility", string.IsNullOrEmpty(defaultVisibility) ? DBNull.Value : defaultVisibility);
+        cmd.Parameters.AddWithValue("$started_at", patch?.StartedAt is { } startedAt ? EventTimestamp.ToUtcString(startedAt) : DBNull.Value);
+        cmd.Parameters.AddWithValue("$model", (object?)patch?.Model ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$slug", (object?)patch?.Slug ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$previous_session_id", (object?)patch?.PreviousSessionId ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$repo_hash", (object?)patch?.RepoHash ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$repo_owner", (object?)patch?.RepoOwner ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$repo_name", (object?)patch?.RepoName ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$branch", (object?)patch?.Branch ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$pr_number", (object?)patch?.PrNumber ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$pr_title", (object?)patch?.PrTitle ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$pr_url", (object?)patch?.PrUrl ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$pr_head_ref", (object?)patch?.PrHeadRef ?? DBNull.Value);
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
