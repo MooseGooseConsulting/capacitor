@@ -50,10 +50,10 @@ public record SessionSummary {
     public string? Model { get; init; }
 
     [JsonPropertyName("total_tokens")]
-    public long TotalTokens { get; init; }
+    public long? TotalTokens { get; init; }
 
     [JsonPropertyName("tool_count")]
-    public int ToolCount { get; init; }
+    public int? ToolCount { get; init; }
 
     [JsonPropertyName("started_at")]
     public DateTimeOffset? StartedAt { get; init; }
@@ -103,7 +103,7 @@ public sealed record SessionDetailHeader : SessionSummary {
     public int EventCount { get; init; }
 
     [JsonPropertyName("total_cost_usd")]
-    public decimal TotalCostUsd { get; init; }
+    public decimal? TotalCostUsd { get; init; }
 
     [JsonPropertyName("ended_at")]
     public DateTimeOffset? EndedAt { get; init; }

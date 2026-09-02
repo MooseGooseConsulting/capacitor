@@ -21,6 +21,10 @@
     margin-top: .6rem;
 }
 
+.session-detail-page ::deep .unavailable-session-action {
+    display: inline-flex;
+}
+
 .session-detail-page ::deep .session-tabs {
     background: transparent;
 }

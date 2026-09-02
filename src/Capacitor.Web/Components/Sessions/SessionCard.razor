@@ -25,7 +25,7 @@
 
         <div class="session-metrics">
             <span>@TokenFlow</span>
-            <span>@Session.ToolCount.ToString("N0") tool@(Session.ToolCount == 1 ? string.Empty : "s")</span>
+            <span>@ToolCount</span>
         </div>
     </article>
 </a>
@@ -40,7 +40,10 @@
     string DisplayTitle => string.IsNullOrWhiteSpace(Session.Title) ? "Untitled session" : Session.Title;
     string DisplayStatus => string.IsNullOrWhiteSpace(Session.Status) ? "unknown" : Session.Status;
     string StatusClass => $"status-{DisplayStatus.ToLowerInvariant()}";
-    string TokenFlow => Session.TotalTokens > 0 ? $"{Compact(Session.TotalTokens)} total" : "Not reported";
+    string TokenFlow => Session.TotalTokens is { } totalTokens ? $"{Compact(totalTokens)} total" : "Tokens unavailable";
+    string ToolCount => Session.ToolCount is { } toolCount
+        ? $"{toolCount:N0} tool" + (toolCount == 1 ? string.Empty : "s")
+        : "Tools unavailable";
     string CardClass => IsSelected ? "session-card session-card-selected" : "session-card";
 
     static string Compact(long value) => value switch {
