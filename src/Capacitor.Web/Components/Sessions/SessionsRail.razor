@@ -1,46 +1,47 @@
 @namespace Capacitor.Web.Components.Sessions
 
 <aside class="sessions-rail" aria-label="Session repositories">
-    <MudText Typo="Typo.overline" Class="rail-label">Sessions</MudText>
-    <MudStack Spacing="0" Class="rail-links">
-        <MudButton Variant="Variant.Text" FullWidth="true" OnClick="@(() => OnRepositoryChanged.InvokeAsync(null))"
-                   Class="@RailClass(null)" StartIcon="@Icons.Material.Filled.GridView">
-            All
-        </MudButton>
-    </MudStack>
+    <p class="rail-label">SESSIONS</p>
+    <div class="rail-links">
+        <button type="button" class="@RailClass(null)" @onclick="@(() => OnRepositoryChanged.InvokeAsync(null))">All</button>
+    </div>
 
-    <MudDivider Class="rail-divider" />
-    <MudText Typo="Typo.overline" Class="rail-label">My projects</MudText>
+    <hr class="rail-divider" />
+    <p class="rail-label">MY PROJECTS</p>
     @if (MyProjects.Count == 0) {
-        <MudText Typo="Typo.caption" Class="rail-empty">Viewer identity is not provided by this API.</MudText>
+        <p class="rail-empty">Viewer identity is not provided by this API.</p>
     } else {
         @foreach (var repository in MyProjects) {
-            <MudButton Variant="Variant.Text" FullWidth="true" OnClick="@(() => OnRepositoryChanged.InvokeAsync(repository))"
-                       Class="@RailClass(repository)" StartIcon="@Icons.Material.Filled.Folder">
-                @repository
-            </MudButton>
+            <button type="button" class="@RailClass(repository)" @onclick="@(() => OnRepositoryChanged.InvokeAsync(repository))">@repository</button>
         }
     }
 
-    <MudDivider Class="rail-divider" />
-    <MudText Typo="Typo.overline" Class="rail-label">Other repos</MudText>
+    <hr class="rail-divider" />
+    <p class="rail-label">OTHER REPOS</p>
     @if (OtherRepositories.Count == 0) {
-        <MudText Typo="Typo.caption" Class="rail-empty">No other repository sessions returned.</MudText>
+        <p class="rail-empty">No other repository sessions returned.</p>
     } else {
         @foreach (var owner in OtherRepositories.Keys.OrderBy(x => x, StringComparer.OrdinalIgnoreCase)) {
-            <MudText Typo="Typo.caption" Class="owner-label">@owner</MudText>
+            <p class="owner-label">@owner</p>
             @foreach (var repository in OtherRepositories[owner]) {
                 @if (string.Equals(owner, "Unattributed", StringComparison.Ordinal)) {
-                    <MudText Typo="Typo.body2" Class="rail-empty">@repository</MudText>
+                    <p class="rail-empty">@repository</p>
                 } else {
-                    <MudButton Variant="Variant.Text" FullWidth="true" OnClick="@(() => OnRepositoryChanged.InvokeAsync(repository))"
-                               Class="@RailClass(repository)" StartIcon="@Icons.Material.Filled.Folder">
-                        @repository
-                    </MudButton>
+                    <button type="button" class="@RailClass(repository)" @onclick="@(() => OnRepositoryChanged.InvokeAsync(repository))">@repository</button>
                 }
             }
         }
     }
+
+    <div class="rail-spacer"></div>
+    <section class="workspace-setup" aria-label="Workspace setup">
+        <p class="rail-label">SETUP</p>
+        <p class="rail-empty">Setup status is not reported by the persisted Sessions API.</p>
+    </section>
+    <footer class="rail-footer">
+        <strong>Capacitor</strong>
+        <span>Sessions read workspace</span>
+    </footer>
 </aside>
 
 @code {

@@ -1,25 +1,59 @@
 @inherits LayoutComponentBase
 
-<MudLayout Class="capacitor-shell">
-    <MudAppBar Elevation="0" Dense="true" Class="top-shell">
-        <MudText Typo="Typo.h6" Class="product-wordmark">CAPACITOR</MudText>
-        <MudStack Row="true" Spacing="1" Class="top-navigation">
-            <MudButton Href="/sessions" Variant="Variant.Text" Color="Color.Primary">Sessions</MudButton>
-            <MudButton Variant="Variant.Text" Disabled="true">Agents</MudButton>
-            <MudButton Variant="Variant.Text" Disabled="true">Insights</MudButton>
-            <MudButton Variant="Variant.Text" Disabled="true">Flows</MudButton>
-            <MudButton Variant="Variant.Text" Disabled="true">Work items</MudButton>
-        </MudStack>
-        <MudSpacer />
-        <MudText Typo="Typo.caption" Class="shell-status">Recovery · sessions read surface</MudText>
-    </MudAppBar>
-    <MudMainContent Class="shell-main">
-        @Body
-    </MudMainContent>
-</MudLayout>
+<div class="capacitor-console" data-theme="@_theme">
+    <MudLayout Class="capacitor-shell">
+        <MudAppBar Elevation="0" Dense="true" Class="top-shell">
+            <span class="product-wordmark">CAPACITOR</span>
+            <nav class="top-navigation" aria-label="Product navigation">
+                <a href="/sessions" class="top-nav-link top-nav-link-active">Sessions</a>
+                <span class="top-nav-link top-nav-unavailable" title="Agent inventory is not available from the persisted Sessions API.">Agents</span>
+                <span class="top-nav-link top-nav-unavailable" title="Insights are not available from the persisted Sessions API.">Insights</span>
+                <span class="top-nav-link top-nav-unavailable" title="Flows are not available from the persisted Sessions API.">Flows</span>
+                <span class="top-nav-link top-nav-unavailable" title="Work items are not available from the persisted Sessions API.">Work items</span>
+            </nav>
+            <MudSpacer />
+            <details class="global-search-menu">
+                <summary>Search <kbd>Ctrl K</kbd></summary>
+                <div class="global-search-popover">
+                    <strong>Search Sessions</strong>
+                    <span>Use the list-pane search to query persisted titles and transcript content.</span>
+                    <span>Search in other product areas is unavailable.</span>
+                </div>
+            </details>
+            <MudIconButton Icon="@Icons.Material.Filled.DarkMode" OnClick="ToggleTheme" aria-label="@ThemeToggleLabel" title="@ThemeToggleLabel" Class="shell-icon-button" />
+            <span class="shell-utility" title="Help is not available from the persisted Sessions API." aria-label="Help unavailable">?</span>
+            <span class="shell-account" title="No signed-in viewer is provided by the persisted Sessions API." aria-label="Account unavailable">Account</span>
+        </MudAppBar>
+        <div class="console-trial-notice" role="status">
+            <strong>Trial status unavailable</strong>
+            <span>The persisted Sessions API does not report workspace trial or setup state.</span>
+        </div>
+        <MudMainContent Class="shell-main">
+            @Body
+        </MudMainContent>
+    </MudLayout>
+</div>
 
 <div id="blazor-error-ui" data-nosnippet>
     An unhandled error has occurred.
     <a href="." class="reload">Reload</a>
     <span class="dismiss">🗙</span>
 </div>
+
+@code {
+    string _theme = "system";
+
+    string ThemeToggleLabel => _theme switch {
+        "system" => "Use dark theme",
+        "dark" => "Use light theme",
+        _ => "Use system theme"
+    };
+
+    void ToggleTheme() {
+        _theme = _theme switch {
+            "system" => "dark",
+            "dark" => "light",
+            _ => "system"
+        };
+    }
+}

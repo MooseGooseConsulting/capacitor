@@ -1,5 +1,5 @@
 h1:focus-visible {
-    outline: 2px solid #6b9ed2;
+    outline: 2px solid var(--capacitor-accent, #76556d);
     outline-offset: 3px;
 }
 

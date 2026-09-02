@@ -1,11 +1,10 @@
-@page "/sessions/{SessionId}"
 @inject ICapacitorSessionsClient SessionsClient
 @inject NavigationManager Navigation
 @implements IDisposable
 
 <PageTitle>@(_detail?.Session.Title ?? "Session") · Capacitor</PageTitle>
 
-<main class="session-detail-page" aria-live="polite">
+<section class="session-detail-page" aria-live="polite">
     @if (_isLoading) {
         <MudStack Spacing="2" Class="detail-state">
             <MudSkeleton SkeletonType="SkeletonType.Text" Width="45%" Height="3rem" />
@@ -224,13 +223,13 @@
             </MudTabPanel>
         </MudTabs>
     }
-</main>
+</section>
 
 @code {
-    [Parameter]
-    public required string SessionId { get; set; }
+    [Parameter, EditorRequired]
+    public string SessionId { get; set; } = string.Empty;
 
-    [SupplyParameterFromQuery(Name = "tab")]
+    [Parameter]
     public string? Tab { get; set; }
 
     SessionDetailResponse? _detail;
