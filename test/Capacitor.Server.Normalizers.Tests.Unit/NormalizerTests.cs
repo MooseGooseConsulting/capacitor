@@ -191,13 +191,13 @@ public class NormalizerTests {
         // Codex response-item usage is a point-in-time value. The durable stream uses the
         // cumulative token_count records as its sole usage source, so retaining it here
         // would double count the same work when the snapshot arrives.
-        await Assert.That(events[0].InputTokens).IsEqualTo(0);
-        await Assert.That(events[0].CacheReadTokens).IsEqualTo(0);
+        await Assert.That(events[0].InputTokens).IsNull();
+        await Assert.That(events[0].CacheReadTokens).IsNull();
         await Assert.That(events[0].ReasoningTokens).IsNull();
-        await Assert.That(events[0].CostUsd).IsEqualTo(0m);
+        await Assert.That(events[0].CostUsd).IsNull();
         await Assert.That(events[0].LogicalSeq).IsEqualTo(0);
         await Assert.That(events[1].EventType).IsEqualTo("AssistantThinking");
-        await Assert.That(events[1].InputTokens).IsEqualTo(0);
+        await Assert.That(events[1].InputTokens).IsNull();
         await Assert.That(events[1].LogicalSeq).IsEqualTo(1);
         await Assert.That(events[1].RawPayload).IsEqualTo(rawLine);
     }
@@ -252,7 +252,21 @@ public class NormalizerTests {
         await Assert.That(events.Count).IsEqualTo(1);
         await Assert.That(events[0].EventType).IsEqualTo("UsageBackfill");
         await Assert.That(events[0].ItemId).IsEqualTo("msg-42");
-        await Assert.That(events[0].CostUsd).IsEqualTo(0m);
+        await Assert.That(events[0].CostUsd).IsNull();
         await Assert.That(events[0].RawPayload).IsEqualTo(rawLine);
+    }
+
+    [Test]
+    public async Task ClaudeCodeNormalizer_preserves_explicit_zero_usage() {
+        const string rawLine = """{"type":"assistant","message":{"content":[{"type":"text","text":"done"}],"usage":{"input_tokens":0,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"cost_usd":0}}}""";
+
+        var events = _router.Normalize("claude", "sess-zeros", "", 1, rawLine);
+
+        await Assert.That(events).Count().IsEqualTo(1);
+        await Assert.That(events[0].InputTokens).IsEqualTo(0);
+        await Assert.That(events[0].OutputTokens).IsEqualTo(0);
+        await Assert.That(events[0].CacheReadTokens).IsEqualTo(0);
+        await Assert.That(events[0].CacheWriteTokens).IsEqualTo(0);
+        await Assert.That(events[0].CostUsd).IsEqualTo(0m);
     }
 }

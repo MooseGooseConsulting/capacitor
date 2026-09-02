@@ -137,9 +137,9 @@ public class SqliteSessionRepository : ISessionRepository {
             LastEventAt = reader.IsDBNull(22) ? null : DateTimeOffset.Parse(reader.GetString(22), CultureInfo.InvariantCulture),
             DurationMin = reader.IsDBNull(23) ? 0 : reader.GetDecimal(23),
             EventCount = reader.IsDBNull(24) ? 0 : reader.GetInt32(24),
-            ToolCount = reader.IsDBNull(25) ? 0 : reader.GetInt32(25),
-            TotalTokens = reader.IsDBNull(26) ? 0 : reader.GetInt64(26),
-            TotalCostUsd = reader.IsDBNull(27) ? 0 : reader.GetDecimal(27),
+            ToolCount = reader.IsDBNull(25) ? null : reader.GetInt32(25),
+            TotalTokens = reader.IsDBNull(26) ? null : reader.GetInt64(26),
+            TotalCostUsd = reader.IsDBNull(27) ? null : reader.GetDecimal(27),
             PreviousSessionId = reader.IsDBNull(28) ? null : reader.GetString(28),
             NextSessionId = reader.IsDBNull(29) ? null : reader.GetString(29),
             PrimaryPhase = reader.IsDBNull(30) ? null : reader.GetString(30),
@@ -298,9 +298,9 @@ public class SqliteSessionRepository : ISessionRepository {
                 cmd.Parameters.AddWithValue("$last_event_at", session.LastEventAt.HasValue ? SqliteUtc.Format(session.LastEventAt.Value) : (object)DBNull.Value);
                 cmd.Parameters.AddWithValue("$duration_min", session.DurationMin);
                 cmd.Parameters.AddWithValue("$event_count", session.EventCount);
-                cmd.Parameters.AddWithValue("$tool_count", session.ToolCount);
-                cmd.Parameters.AddWithValue("$total_tokens", session.TotalTokens);
-                cmd.Parameters.AddWithValue("$total_cost_usd", session.TotalCostUsd);
+                cmd.Parameters.AddWithValue("$tool_count", (object?)session.ToolCount ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$total_tokens", (object?)session.TotalTokens ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$total_cost_usd", (object?)session.TotalCostUsd ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("$previous_session_id", (object?)session.PreviousSessionId ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("$next_session_id", (object?)session.NextSessionId ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("$primary_phase", (object?)session.PrimaryPhase ?? DBNull.Value);
@@ -633,9 +633,9 @@ public class SqliteSessionRepository : ISessionRepository {
     public async Task UpdateRollupAsync(
             string sessionId,
             int eventCount,
-            int toolCount,
-            long totalTokens,
-            decimal totalCostUsd,
+            int? toolCount,
+            long? totalTokens,
+            decimal? totalCostUsd,
             decimal durationMin,
             DateTimeOffset? lastEventAt,
             CancellationToken ct = default
@@ -650,9 +650,21 @@ public class SqliteSessionRepository : ISessionRepository {
                 END,
                 duration_min = CASE WHEN $duration_min > duration_min THEN $duration_min ELSE duration_min END,
                 event_count = CASE WHEN $event_count > event_count THEN $event_count ELSE event_count END,
-                tool_count = CASE WHEN $tool_count > tool_count THEN $tool_count ELSE tool_count END,
-                total_tokens = CASE WHEN $total_tokens > total_tokens THEN $total_tokens ELSE total_tokens END,
-                total_cost_usd = CASE WHEN $total_cost_usd > total_cost_usd THEN $total_cost_usd ELSE total_cost_usd END
+                tool_count = CASE
+                    WHEN $tool_count IS NULL THEN tool_count
+                    WHEN tool_count IS NULL OR $tool_count > tool_count THEN $tool_count
+                    ELSE tool_count
+                END,
+                total_tokens = CASE
+                    WHEN $total_tokens IS NULL THEN total_tokens
+                    WHEN total_tokens IS NULL OR $total_tokens > total_tokens THEN $total_tokens
+                    ELSE total_tokens
+                END,
+                total_cost_usd = CASE
+                    WHEN $total_cost_usd IS NULL THEN total_cost_usd
+                    WHEN total_cost_usd IS NULL OR $total_cost_usd > total_cost_usd THEN $total_cost_usd
+                    ELSE total_cost_usd
+                END
             WHERE session_id = $session_id;
         ";
 
@@ -660,9 +672,9 @@ public class SqliteSessionRepository : ISessionRepository {
         cmd.Parameters.AddWithValue("$last_event_at", lastEventAt.HasValue ? SqliteUtc.Format(lastEventAt.Value) : (object)DBNull.Value);
         cmd.Parameters.AddWithValue("$duration_min", durationMin);
         cmd.Parameters.AddWithValue("$event_count", eventCount);
-        cmd.Parameters.AddWithValue("$tool_count", toolCount);
-        cmd.Parameters.AddWithValue("$total_tokens", totalTokens);
-        cmd.Parameters.AddWithValue("$total_cost_usd", totalCostUsd);
+        cmd.Parameters.AddWithValue("$tool_count", (object?)toolCount ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$total_tokens", (object?)totalTokens ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$total_cost_usd", (object?)totalCostUsd ?? DBNull.Value);
 
         await cmd.ExecuteNonQueryAsync(ct);
     }

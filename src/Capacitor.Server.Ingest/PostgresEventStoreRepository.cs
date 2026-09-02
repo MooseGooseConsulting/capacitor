@@ -46,14 +46,14 @@ public class PostgresEventStoreRepository : IEventStoreRepository {
             cmd.Parameters.AddWithValue(ev.Vendor);
             cmd.Parameters.AddWithValue((object?)ev.Model ?? DBNull.Value);
             cmd.Parameters.AddWithValue(EventTimestamp.ToUtcString(ev.Timestamp));
-            cmd.Parameters.AddWithValue(ev.InputTokens);
-            cmd.Parameters.AddWithValue(ev.OutputTokens);
-            cmd.Parameters.AddWithValue(ev.CacheReadTokens);
-            cmd.Parameters.AddWithValue(ev.CacheWriteTokens);
+            cmd.Parameters.AddWithValue((object?)ev.InputTokens ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)ev.OutputTokens ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)ev.CacheReadTokens ?? DBNull.Value);
+            cmd.Parameters.AddWithValue((object?)ev.CacheWriteTokens ?? DBNull.Value);
             cmd.Parameters.AddWithValue((object?)ev.ReasoningTokens ?? DBNull.Value);
             cmd.Parameters.AddWithValue((object?)ev.ContextUsedTokens ?? DBNull.Value);
             cmd.Parameters.AddWithValue((object?)ev.ContextWindowTokens ?? DBNull.Value);
-            cmd.Parameters.AddWithValue(ev.CostUsd);
+            cmd.Parameters.AddWithValue((object?)ev.CostUsd ?? DBNull.Value);
             cmd.Parameters.AddWithValue((object?)ev.ItemId ?? DBNull.Value);
             cmd.Parameters.AddWithValue((object?)ev.ToolServer ?? DBNull.Value);
             cmd.Parameters.AddWithValue((object?)ev.ToolName ?? DBNull.Value);
@@ -123,7 +123,16 @@ public class PostgresEventStoreRepository : IEventStoreRepository {
             SELECT
                 COUNT(*) AS event_count,
                 SUM(CASE WHEN tool_name IS NOT NULL THEN 1 ELSE 0 END) AS tool_count,
-                SUM(input_tokens + output_tokens + cache_read_tokens + cache_write_tokens) AS total_tokens,
+                CASE
+                    WHEN COUNT(*) FILTER (WHERE input_tokens IS NOT NULL
+                                           OR output_tokens IS NOT NULL
+                                           OR cache_read_tokens IS NOT NULL
+                                           OR cache_write_tokens IS NOT NULL) = 0 THEN NULL
+                    ELSE SUM(COALESCE(input_tokens, 0)
+                           + COALESCE(output_tokens, 0)
+                           + COALESCE(cache_read_tokens, 0)
+                           + COALESCE(cache_write_tokens, 0))
+                END AS total_tokens,
                 SUM(cost_usd) AS total_cost_usd,
                 MIN(timestamp) AS first_event,
                 MAX(timestamp) AS last_event
@@ -137,9 +146,9 @@ public class PostgresEventStoreRepository : IEventStoreRepository {
         var eventCount = reader.IsDBNull(0) ? 0 : Convert.ToInt32(reader.GetValue(0), CultureInfo.InvariantCulture);
         if (eventCount == 0) return null;
 
-        var toolCount = reader.IsDBNull(1) ? 0 : Convert.ToInt32(reader.GetValue(1), CultureInfo.InvariantCulture);
-        var totalTokens = reader.IsDBNull(2) ? 0L : Convert.ToInt64(reader.GetValue(2), CultureInfo.InvariantCulture);
-        var totalCost = reader.IsDBNull(3) ? 0m : Convert.ToDecimal(reader.GetValue(3), CultureInfo.InvariantCulture);
+        var toolCount = reader.IsDBNull(1) ? null : Convert.ToInt32(reader.GetValue(1), CultureInfo.InvariantCulture);
+        var totalTokens = reader.IsDBNull(2) ? null : Convert.ToInt64(reader.GetValue(2), CultureInfo.InvariantCulture);
+        var totalCost = reader.IsDBNull(3) ? null : Convert.ToDecimal(reader.GetValue(3), CultureInfo.InvariantCulture);
         var firstEventStr = reader.IsDBNull(4) ? null : reader.GetString(4);
         var lastEventStr = reader.IsDBNull(5) ? null : reader.GetString(5);
 
@@ -165,14 +174,14 @@ public class PostgresEventStoreRepository : IEventStoreRepository {
         Vendor = reader.GetString(6),
         Model = reader.IsDBNull(7) ? null : reader.GetString(7),
         Timestamp = DateTimeOffset.Parse(reader.GetString(8), CultureInfo.InvariantCulture),
-        InputTokens = reader.GetInt64(9),
-        OutputTokens = reader.GetInt64(10),
-        CacheReadTokens = reader.GetInt64(11),
-        CacheWriteTokens = reader.GetInt64(12),
+        InputTokens = reader.IsDBNull(9) ? null : reader.GetInt64(9),
+        OutputTokens = reader.IsDBNull(10) ? null : reader.GetInt64(10),
+        CacheReadTokens = reader.IsDBNull(11) ? null : reader.GetInt64(11),
+        CacheWriteTokens = reader.IsDBNull(12) ? null : reader.GetInt64(12),
         ReasoningTokens = reader.IsDBNull(13) ? null : reader.GetInt64(13),
         ContextUsedTokens = reader.IsDBNull(14) ? null : reader.GetInt64(14),
         ContextWindowTokens = reader.IsDBNull(15) ? null : reader.GetInt64(15),
-        CostUsd = reader.GetDecimal(16),
+        CostUsd = reader.IsDBNull(16) ? null : reader.GetDecimal(16),
         ItemId = reader.IsDBNull(17) ? null : reader.GetString(17),
         ToolServer = reader.IsDBNull(18) ? null : reader.GetString(18),
         ToolName = reader.IsDBNull(19) ? null : reader.GetString(19),

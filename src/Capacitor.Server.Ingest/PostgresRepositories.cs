@@ -146,9 +146,9 @@ public class PostgresSessionRepository : ISessionRepository {
             LastEventAt = reader.IsDBNull(22) ? null : DateTimeOffset.Parse(reader.GetString(22), CultureInfo.InvariantCulture),
             DurationMin = reader.IsDBNull(23) ? 0 : reader.GetDecimal(23),
             EventCount = reader.IsDBNull(24) ? 0 : reader.GetInt32(24),
-            ToolCount = reader.IsDBNull(25) ? 0 : reader.GetInt32(25),
-            TotalTokens = reader.IsDBNull(26) ? 0 : reader.GetInt64(26),
-            TotalCostUsd = reader.IsDBNull(27) ? 0 : reader.GetDecimal(27),
+            ToolCount = reader.IsDBNull(25) ? null : reader.GetInt32(25),
+            TotalTokens = reader.IsDBNull(26) ? null : reader.GetInt64(26),
+            TotalCostUsd = reader.IsDBNull(27) ? null : reader.GetDecimal(27),
             PreviousSessionId = reader.IsDBNull(28) ? null : reader.GetString(28),
             NextSessionId = reader.IsDBNull(29) ? null : reader.GetString(29),
             PrimaryPhase = reader.IsDBNull(30) ? null : reader.GetString(30),
@@ -287,9 +287,9 @@ public class PostgresSessionRepository : ISessionRepository {
         LastEventAt = reader.IsDBNull(22) ? null : DateTimeOffset.Parse(reader.GetString(22), CultureInfo.InvariantCulture),
         DurationMin = reader.IsDBNull(23) ? 0 : reader.GetDecimal(23),
         EventCount = reader.IsDBNull(24) ? 0 : reader.GetInt32(24),
-        ToolCount = reader.IsDBNull(25) ? 0 : reader.GetInt32(25),
-        TotalTokens = reader.IsDBNull(26) ? 0 : reader.GetInt64(26),
-        TotalCostUsd = reader.IsDBNull(27) ? 0 : reader.GetDecimal(27),
+        ToolCount = reader.IsDBNull(25) ? null : reader.GetInt32(25),
+        TotalTokens = reader.IsDBNull(26) ? null : reader.GetInt64(26),
+        TotalCostUsd = reader.IsDBNull(27) ? null : reader.GetDecimal(27),
         PreviousSessionId = reader.IsDBNull(28) ? null : reader.GetString(28),
         NextSessionId = reader.IsDBNull(29) ? null : reader.GetString(29),
         PrimaryPhase = reader.IsDBNull(30) ? null : reader.GetString(30),
@@ -364,9 +364,9 @@ public class PostgresSessionRepository : ISessionRepository {
                 cmd.Parameters.AddWithValue(session.LastEventAt.HasValue ? EventTimestamp.ToUtcString(session.LastEventAt.Value) : (object)DBNull.Value);
                 cmd.Parameters.AddWithValue(session.DurationMin);
                 cmd.Parameters.AddWithValue(session.EventCount);
-                cmd.Parameters.AddWithValue(session.ToolCount);
-                cmd.Parameters.AddWithValue(session.TotalTokens);
-                cmd.Parameters.AddWithValue(session.TotalCostUsd);
+                cmd.Parameters.AddWithValue((object?)session.ToolCount ?? DBNull.Value);
+                cmd.Parameters.AddWithValue((object?)session.TotalTokens ?? DBNull.Value);
+                cmd.Parameters.AddWithValue((object?)session.TotalCostUsd ?? DBNull.Value);
                 cmd.Parameters.AddWithValue((object?)session.PreviousSessionId ?? DBNull.Value);
                 cmd.Parameters.AddWithValue((object?)session.NextSessionId ?? DBNull.Value);
                 cmd.Parameters.AddWithValue((object?)session.PrimaryPhase ?? DBNull.Value);
@@ -688,9 +688,9 @@ public class PostgresSessionRepository : ISessionRepository {
     public async Task UpdateRollupAsync(
             string sessionId,
             int eventCount,
-            int toolCount,
-            long totalTokens,
-            decimal totalCostUsd,
+            int? toolCount,
+            long? totalTokens,
+            decimal? totalCostUsd,
             decimal durationMin,
             DateTimeOffset? lastEventAt,
             CancellationToken ct = default
@@ -706,9 +706,21 @@ public class PostgresSessionRepository : ISessionRepository {
                 END,
                 duration_min = GREATEST(duration_min, $3),
                 event_count = GREATEST(event_count, $4),
-                tool_count = GREATEST(tool_count, $5),
-                total_tokens = GREATEST(total_tokens, $6),
-                total_cost_usd = GREATEST(total_cost_usd, $7)
+                tool_count = CASE
+                    WHEN $5 IS NULL THEN tool_count
+                    WHEN tool_count IS NULL OR $5 > tool_count THEN $5
+                    ELSE tool_count
+                END,
+                total_tokens = CASE
+                    WHEN $6 IS NULL THEN total_tokens
+                    WHEN total_tokens IS NULL OR $6 > total_tokens THEN $6
+                    ELSE total_tokens
+                END,
+                total_cost_usd = CASE
+                    WHEN $7 IS NULL THEN total_cost_usd
+                    WHEN total_cost_usd IS NULL OR $7 > total_cost_usd THEN $7
+                    ELSE total_cost_usd
+                END
             WHERE session_id = $1;
         ";
 
@@ -716,9 +728,9 @@ public class PostgresSessionRepository : ISessionRepository {
         cmd.Parameters.AddWithValue(lastEventAt.HasValue ? EventTimestamp.ToUtcString(lastEventAt.Value) : (object)DBNull.Value);
         cmd.Parameters.AddWithValue(durationMin);
         cmd.Parameters.AddWithValue(eventCount);
-        cmd.Parameters.AddWithValue(toolCount);
-        cmd.Parameters.AddWithValue(totalTokens);
-        cmd.Parameters.AddWithValue(totalCostUsd);
+        cmd.Parameters.AddWithValue((object?)toolCount ?? DBNull.Value);
+        cmd.Parameters.AddWithValue((object?)totalTokens ?? DBNull.Value);
+        cmd.Parameters.AddWithValue((object?)totalCostUsd ?? DBNull.Value);
 
         await cmd.ExecuteNonQueryAsync(ct);
     }

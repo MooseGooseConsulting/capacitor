@@ -86,20 +86,20 @@ public sealed class PostgresTranscriptIngestService : ITranscriptIngest {
                 var staleSnapshot = checkpoint is not null && @event.LineNumber <= checkpoint.LastLineNumber;
                 storedEvent = staleSnapshot
                     ? @event with {
-                        InputTokens = 0,
-                        OutputTokens = 0,
-                        CacheReadTokens = 0,
-                        CacheWriteTokens = 0,
+                        InputTokens = null,
+                        OutputTokens = null,
+                        CacheReadTokens = null,
+                        CacheWriteTokens = null,
                         ReasoningTokens = null,
-                        CostUsd = 0m
+                        CostUsd = null
                     }
                     : @event with {
-                        InputTokens = Delta(@event.InputTokens, checkpoint?.InputTokens ?? 0, checkpoint is not null),
-                        OutputTokens = Delta(@event.OutputTokens, checkpoint?.OutputTokens ?? 0, checkpoint is not null),
-                        CacheReadTokens = Delta(@event.CacheReadTokens, checkpoint?.CacheReadTokens ?? 0, checkpoint is not null),
-                        CacheWriteTokens = Delta(@event.CacheWriteTokens, checkpoint?.CacheWriteTokens ?? 0, checkpoint is not null),
+                        InputTokens = Delta(@event.InputTokens, checkpoint?.InputTokens, checkpoint is not null),
+                        OutputTokens = Delta(@event.OutputTokens, checkpoint?.OutputTokens, checkpoint is not null),
+                        CacheReadTokens = Delta(@event.CacheReadTokens, checkpoint?.CacheReadTokens, checkpoint is not null),
+                        CacheWriteTokens = Delta(@event.CacheWriteTokens, checkpoint?.CacheWriteTokens, checkpoint is not null),
                         ReasoningTokens = Delta(@event.ReasoningTokens, checkpoint?.ReasoningTokens, checkpoint is not null),
-                        CostUsd = Delta(@event.CostUsd, checkpoint?.CostUsd ?? 0m, checkpoint is not null)
+                        CostUsd = Delta(@event.CostUsd, checkpoint?.CostUsd, checkpoint is not null)
                     };
             }
 
@@ -192,14 +192,14 @@ public sealed class PostgresTranscriptIngestService : ITranscriptIngest {
         command.Parameters.AddWithValue(@event.Vendor);
         command.Parameters.AddWithValue((object?)@event.Model ?? DBNull.Value);
         command.Parameters.AddWithValue(EventTimestamp.ToUtcString(@event.Timestamp));
-        command.Parameters.AddWithValue(@event.InputTokens);
-        command.Parameters.AddWithValue(@event.OutputTokens);
-        command.Parameters.AddWithValue(@event.CacheReadTokens);
-        command.Parameters.AddWithValue(@event.CacheWriteTokens);
+        command.Parameters.AddWithValue((object?)@event.InputTokens ?? DBNull.Value);
+        command.Parameters.AddWithValue((object?)@event.OutputTokens ?? DBNull.Value);
+        command.Parameters.AddWithValue((object?)@event.CacheReadTokens ?? DBNull.Value);
+        command.Parameters.AddWithValue((object?)@event.CacheWriteTokens ?? DBNull.Value);
         command.Parameters.AddWithValue((object?)@event.ReasoningTokens ?? DBNull.Value);
         command.Parameters.AddWithValue((object?)@event.ContextUsedTokens ?? DBNull.Value);
         command.Parameters.AddWithValue((object?)@event.ContextWindowTokens ?? DBNull.Value);
-        command.Parameters.AddWithValue(@event.CostUsd);
+        command.Parameters.AddWithValue((object?)@event.CostUsd ?? DBNull.Value);
         command.Parameters.AddWithValue((object?)@event.ItemId ?? DBNull.Value);
         command.Parameters.AddWithValue((object?)@event.ToolServer ?? DBNull.Value);
         command.Parameters.AddWithValue((object?)@event.ToolName ?? DBNull.Value);
@@ -525,8 +525,9 @@ public sealed class PostgresTranscriptIngestService : ITranscriptIngest {
         : !checkpointExists || previous is null || current < previous ? current
         : current - previous;
 
-    private static decimal Delta(decimal current, decimal previous, bool checkpointExists) =>
-        !checkpointExists || current < previous ? current : current - previous;
+    private static decimal? Delta(decimal? current, decimal? previous, bool checkpointExists) =>
+        current is null ? null
+        : !checkpointExists || previous is null || current < previous ? current : current - previous;
 
     private static async Task<UsageCheckpoint?> GetUsageCheckpointAsync(
         NpgsqlConnection connection,
@@ -544,8 +545,12 @@ public sealed class PostgresTranscriptIngestService : ITranscriptIngest {
         await using var reader = await command.ExecuteReaderAsync(ct);
         return await reader.ReadAsync(ct)
             ? new UsageCheckpoint(
-                reader.GetInt64(0), reader.GetInt64(1), reader.GetInt64(2), reader.GetInt64(3),
-                reader.IsDBNull(4) ? null : reader.GetInt64(4), reader.GetDecimal(5), reader.GetInt32(6))
+                reader.IsDBNull(0) ? null : reader.GetInt64(0),
+                reader.IsDBNull(1) ? null : reader.GetInt64(1),
+                reader.IsDBNull(2) ? null : reader.GetInt64(2),
+                reader.IsDBNull(3) ? null : reader.GetInt64(3),
+                reader.IsDBNull(4) ? null : reader.GetInt64(4),
+                reader.IsDBNull(5) ? null : reader.GetDecimal(5), reader.GetInt32(6))
             : null;
     }
 
@@ -560,33 +565,33 @@ public sealed class PostgresTranscriptIngestService : ITranscriptIngest {
                 cache_write_tokens, reasoning_tokens, cost_usd, last_line_number
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             ON CONFLICT (session_id, agent_id, vendor) DO UPDATE SET
-                input_tokens = EXCLUDED.input_tokens,
-                output_tokens = EXCLUDED.output_tokens,
-                cache_read_tokens = EXCLUDED.cache_read_tokens,
-                cache_write_tokens = EXCLUDED.cache_write_tokens,
+                input_tokens = COALESCE(EXCLUDED.input_tokens, session_usage_checkpoints.input_tokens),
+                output_tokens = COALESCE(EXCLUDED.output_tokens, session_usage_checkpoints.output_tokens),
+                cache_read_tokens = COALESCE(EXCLUDED.cache_read_tokens, session_usage_checkpoints.cache_read_tokens),
+                cache_write_tokens = COALESCE(EXCLUDED.cache_write_tokens, session_usage_checkpoints.cache_write_tokens),
                 reasoning_tokens = COALESCE(EXCLUDED.reasoning_tokens, session_usage_checkpoints.reasoning_tokens),
-                cost_usd = EXCLUDED.cost_usd,
+                cost_usd = COALESCE(EXCLUDED.cost_usd, session_usage_checkpoints.cost_usd),
                 last_line_number = EXCLUDED.last_line_number;", connection, transaction);
         command.Parameters.AddWithValue(@event.SessionId);
         command.Parameters.AddWithValue(@event.AgentId ?? string.Empty);
         command.Parameters.AddWithValue(@event.Vendor);
-        command.Parameters.AddWithValue(@event.InputTokens);
-        command.Parameters.AddWithValue(@event.OutputTokens);
-        command.Parameters.AddWithValue(@event.CacheReadTokens);
-        command.Parameters.AddWithValue(@event.CacheWriteTokens);
+        command.Parameters.AddWithValue((object?)@event.InputTokens ?? DBNull.Value);
+        command.Parameters.AddWithValue((object?)@event.OutputTokens ?? DBNull.Value);
+        command.Parameters.AddWithValue((object?)@event.CacheReadTokens ?? DBNull.Value);
+        command.Parameters.AddWithValue((object?)@event.CacheWriteTokens ?? DBNull.Value);
         command.Parameters.AddWithValue((object?)@event.ReasoningTokens ?? DBNull.Value);
-        command.Parameters.AddWithValue(@event.CostUsd);
+        command.Parameters.AddWithValue((object?)@event.CostUsd ?? DBNull.Value);
         command.Parameters.AddWithValue(@event.LineNumber);
         await command.ExecuteNonQueryAsync(ct);
     }
 
     private sealed record UsageCheckpoint(
-        long InputTokens,
-        long OutputTokens,
-        long CacheReadTokens,
-        long CacheWriteTokens,
+        long? InputTokens,
+        long? OutputTokens,
+        long? CacheReadTokens,
+        long? CacheWriteTokens,
         long? ReasoningTokens,
-        decimal CostUsd,
+        decimal? CostUsd,
         int LastLineNumber);
 
     private static async Task<int?> GetLastLineNumberAsync(

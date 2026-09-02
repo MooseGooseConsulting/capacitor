@@ -22,6 +22,7 @@ public static class PostgresDatabaseInitializer {
         await ExecuteMigrationAsync(connection, transaction, "003_event_logical_seq.postgres.sql", ct);
         await ExecuteMigrationAsync(connection, transaction, "004_ingest_checkpoints.postgres.sql", ct);
         await ExecuteMigrationAsync(connection, transaction, "005_source_receipts_and_repository_evidence.postgres.sql", ct);
+        await ExecuteMigrationAsync(connection, transaction, "006_nullable_observed_metrics.postgres.sql", ct);
         await transaction.CommitAsync(ct);
     }
 

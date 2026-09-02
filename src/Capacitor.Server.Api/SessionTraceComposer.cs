@@ -39,7 +39,7 @@ public static class SessionTraceComposer {
                     .DistinctBy(tool => tool.Name, StringComparer.OrdinalIgnoreCase)
                     .ToArray(),
                 [],
-                events.Sum(@event => @event.InputTokens + @event.OutputTokens + @event.CacheReadTokens + @event.CacheWriteTokens),
+                SumObservedTokens(events),
                 events.Min(@event => @event.Timestamp),
                 events.Max(@event => @event.Timestamp),
                 null))
@@ -107,15 +107,39 @@ public static class SessionTraceComposer {
             startedAt,
             endedAt,
             Math.Max(0, (long)(endedAt - startedAt).TotalMilliseconds),
-            events.Sum(e => e.InputTokens),
-            events.Sum(e => e.OutputTokens),
-            events.Sum(e => e.CacheReadTokens),
-            events.Sum(e => e.CacheWriteTokens),
-            events.Sum(e => e.CostUsd),
+            SumObserved(events.Select(e => e.InputTokens)),
+            SumObserved(events.Select(e => e.OutputTokens)),
+            SumObserved(events.Select(e => e.CacheReadTokens)),
+            SumObserved(events.Select(e => e.CacheWriteTokens)),
+            SumObserved(events.Select(e => e.CostUsd)),
             events.Count(e => !string.IsNullOrEmpty(e.ToolName) || e.EventType is "ToolCall" or "ToolResult"),
             events), null));
         turnIndex++;
         activeTurn = null;
+    }
+
+    private static long? SumObservedTokens(IEnumerable<SessionEventRecord> events) =>
+        SumObserved(events.SelectMany(@event => new[] {
+            @event.InputTokens,
+            @event.OutputTokens,
+            @event.CacheReadTokens,
+            @event.CacheWriteTokens
+        }));
+
+    private static long? SumObserved(IEnumerable<long?> values) {
+        long? total = null;
+        foreach (var value in values) {
+            if (value is { } observed) total = (total ?? 0) + observed;
+        }
+        return total;
+    }
+
+    private static decimal? SumObserved(IEnumerable<decimal?> values) {
+        decimal? total = null;
+        foreach (var value in values) {
+            if (value is { } observed) total = (total ?? 0m) + observed;
+        }
+        return total;
     }
 }
 
@@ -132,11 +156,11 @@ public sealed record SessionTraceTurn(
     [property: JsonPropertyName("started_at")] DateTimeOffset StartedAt,
     [property: JsonPropertyName("ended_at")] DateTimeOffset EndedAt,
     [property: JsonPropertyName("duration_ms")] long DurationMs,
-    [property: JsonPropertyName("input_tokens")] long InputTokens,
-    [property: JsonPropertyName("output_tokens")] long OutputTokens,
-    [property: JsonPropertyName("cache_read_tokens")] long CacheReadTokens,
-    [property: JsonPropertyName("cache_write_tokens")] long CacheWriteTokens,
-    [property: JsonPropertyName("cost_usd")] decimal CostUsd,
+    [property: JsonPropertyName("input_tokens")] long? InputTokens,
+    [property: JsonPropertyName("output_tokens")] long? OutputTokens,
+    [property: JsonPropertyName("cache_read_tokens")] long? CacheReadTokens,
+    [property: JsonPropertyName("cache_write_tokens")] long? CacheWriteTokens,
+    [property: JsonPropertyName("cost_usd")] decimal? CostUsd,
     [property: JsonPropertyName("tool_count")] int ToolCount,
     [property: JsonPropertyName("events")] IReadOnlyList<SessionEventRecord> Events);
 
@@ -145,7 +169,7 @@ public sealed record SessionTurnSummary(
     [property: JsonPropertyName("user_prompt")] string? UserPrompt,
     [property: JsonPropertyName("tools")] IReadOnlyList<SessionTurnTool> Tools,
     [property: JsonPropertyName("files")] IReadOnlyList<string> Files,
-    [property: JsonPropertyName("total_tokens")] long TotalTokens,
+    [property: JsonPropertyName("total_tokens")] long? TotalTokens,
     [property: JsonPropertyName("first_event_at")] DateTimeOffset FirstEventAt,
     [property: JsonPropertyName("last_event_at")] DateTimeOffset LastEventAt,
     [property: JsonPropertyName("prose")] string? Prose);

@@ -69,6 +69,51 @@ public sealed class AnalyticsServiceTests : IDisposable {
     }
 
     [Test]
+    public async Task SessionRollupProjector_preserves_unknown_metrics_separately_from_observed_zero() {
+        var sessionId = "sess-observed-zero";
+        await _sessions.GetOrCreatePlaceholderAsync(sessionId, "claude", "dev-user");
+
+        await _eventStore.AppendEventsAsync([
+            new() {
+                SessionId = sessionId,
+                LineNumber = 1,
+                EventType = "UserMessage",
+                Vendor = "claude",
+                Timestamp = DateTimeOffset.UtcNow
+            }
+        ]);
+        await _projector.ProjectSessionRollupAsync(sessionId);
+
+        var unknown = await _sessions.GetSessionAsync(sessionId);
+        await Assert.That(unknown).IsNotNull();
+        await Assert.That(unknown!.ToolCount).IsEqualTo(0);
+        await Assert.That(unknown.TotalTokens).IsNull();
+        await Assert.That(unknown.TotalCostUsd).IsNull();
+
+        await _eventStore.AppendEventsAsync([
+            new() {
+                SessionId = sessionId,
+                LineNumber = 2,
+                EventType = "UsageBackfill",
+                Vendor = "claude",
+                Timestamp = DateTimeOffset.UtcNow,
+                InputTokens = 0,
+                OutputTokens = 0,
+                CacheReadTokens = 0,
+                CacheWriteTokens = 0,
+                CostUsd = 0m
+            }
+        ]);
+        await _projector.ProjectSessionRollupAsync(sessionId);
+
+        var observedZero = await _sessions.GetSessionAsync(sessionId);
+        await Assert.That(observedZero).IsNotNull();
+        await Assert.That(observedZero!.ToolCount).IsEqualTo(0);
+        await Assert.That(observedZero.TotalTokens).IsEqualTo(0);
+        await Assert.That(observedZero.TotalCostUsd).IsEqualTo(0m);
+    }
+
+    [Test]
     public async Task SessionRollupProjector_orders_mixed_offset_timestamps_by_instant() {
         var sessionId = "sess-tz-1";
         await _sessions.GetOrCreatePlaceholderAsync(sessionId, "claude", "dev-user");

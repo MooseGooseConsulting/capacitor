@@ -59,17 +59,17 @@ public class AntigravityNormalizer : INormalizer {
             : fallbackTimestamp;
         return Frame(sessionId, agentId, lineNumber, rawLine, timestamp, "UsageBackfill",
             model: root.Str("model"),
-            inputTokens: root.Num("input_tokens") ?? 0,
-            outputTokens: root.Num("output_tokens") ?? 0,
-            cacheRead: root.Num("cache_read_tokens") ?? 0,
-            cacheWrite: root.Num("cache_write_tokens") ?? 0);
+            inputTokens: root.Num("input_tokens"),
+            outputTokens: root.Num("output_tokens"),
+            cacheRead: root.Num("cache_read_tokens"),
+            cacheWrite: root.Num("cache_write_tokens"));
     }
 
     static SessionEventRecord Frame(
             string sessionId, string? agentId, int lineNumber, string rawLine, DateTimeOffset timestamp, string eventType,
             string? model = null, string? content = null, string? toolName = null, string? toolInput = null,
             string? toolOutput = null, bool isError = false,
-            long inputTokens = 0, long outputTokens = 0, long cacheRead = 0, long cacheWrite = 0) =>
+            long? inputTokens = null, long? outputTokens = null, long? cacheRead = null, long? cacheWrite = null) =>
         new SessionEventRecord {
             SessionId = sessionId,
             AgentId = agentId ?? string.Empty,

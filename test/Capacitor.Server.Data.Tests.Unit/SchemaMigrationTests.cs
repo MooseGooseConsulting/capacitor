@@ -150,6 +150,22 @@ public class SchemaMigrationTests {
         await Assert.That(deserialized.ToolName).IsEqualTo("bash");
     }
 
+    [Test]
+    public async Task Session_metric_json_keeps_unknown_values_explicit() {
+        var record = new SessionHeaderRecord {
+            SessionId = "sess-unknown-metrics",
+            Vendor = "codex",
+            OwnerUserId = "dev-user",
+            StartedAt = DateTimeOffset.UtcNow
+        };
+
+        var json = JsonSerializer.Serialize(record);
+
+        await Assert.That(json).Contains("\"tool_count\":null");
+        await Assert.That(json).Contains("\"total_tokens\":null");
+        await Assert.That(json).Contains("\"total_cost_usd\":null");
+    }
+
     static async Task<List<string>> ListTableAndViewNamesAsync(SqliteConnection connection) {
         var names = new List<string>();
         using var cmd = connection.CreateCommand();

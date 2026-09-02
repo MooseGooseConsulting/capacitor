@@ -58,8 +58,8 @@ public class SessionRollupProjector {
 
         long eventCount = 0;
         long toolCount = 0;
-        long totalTokens = 0;
-        decimal totalCost = 0m;
+        long? totalTokens = null;
+        decimal? totalCost = null;
         DateTimeOffset? first = null;
         DateTimeOffset? last = null;
 
@@ -70,9 +70,15 @@ public class SessionRollupProjector {
                     toolCount++;
                 }
 
-                totalTokens += reader.GetInt64(2) + reader.GetInt64(3)
-                    + reader.GetInt64(4) + reader.GetInt64(5);
-                totalCost += reader.GetDecimal(6);
+                if (!reader.IsDBNull(2) || !reader.IsDBNull(3)
+                    || !reader.IsDBNull(4) || !reader.IsDBNull(5)) {
+                    totalTokens = (totalTokens ?? 0)
+                        + (reader.IsDBNull(2) ? 0 : reader.GetInt64(2))
+                        + (reader.IsDBNull(3) ? 0 : reader.GetInt64(3))
+                        + (reader.IsDBNull(4) ? 0 : reader.GetInt64(4))
+                        + (reader.IsDBNull(5) ? 0 : reader.GetInt64(5));
+                }
+                if (!reader.IsDBNull(6)) totalCost = (totalCost ?? 0m) + reader.GetDecimal(6);
 
                 var ts = DateTimeOffset.Parse(reader.GetString(0), CultureInfo.InvariantCulture);
                 if (first is null || ts < first) {
@@ -107,9 +113,9 @@ public class SessionRollupProjector {
               AND event_count <= $event_count;";
         update.Parameters.AddWithValue("$session_id", sessionId);
         update.Parameters.AddWithValue("$event_count", SaturateToInt(eventCount));
-        update.Parameters.AddWithValue("$tool_count", SaturateToInt(toolCount));
-        update.Parameters.AddWithValue("$total_tokens", totalTokens);
-        update.Parameters.AddWithValue("$total_cost_usd", totalCost);
+        update.Parameters.AddWithValue("$tool_count", eventCount == 0 ? DBNull.Value : SaturateToInt(toolCount));
+        update.Parameters.AddWithValue("$total_tokens", (object?)totalTokens ?? DBNull.Value);
+        update.Parameters.AddWithValue("$total_cost_usd", (object?)totalCost ?? DBNull.Value);
         update.Parameters.AddWithValue("$duration_min", durationMin);
         update.Parameters.AddWithValue(
             "$last_event_at",

@@ -4,9 +4,9 @@ namespace Capacitor.Server.Ingest;
 
 public readonly record struct SessionRollupAggregate(
     int EventCount,
-    int ToolCount,
-    long TotalTokens,
-    decimal TotalCostUsd,
+    int? ToolCount,
+    long? TotalTokens,
+    decimal? TotalCostUsd,
     decimal DurationMin,
     DateTimeOffset? LastEventAt);
 
@@ -159,9 +159,9 @@ public interface ISessionRepository {
     Task UpdateRollupAsync(
         string sessionId,
         int eventCount,
-        int toolCount,
-        long totalTokens,
-        decimal totalCostUsd,
+        int? toolCount,
+        long? totalTokens,
+        decimal? totalCostUsd,
         decimal durationMin,
         DateTimeOffset? lastEventAt,
         CancellationToken ct = default);
