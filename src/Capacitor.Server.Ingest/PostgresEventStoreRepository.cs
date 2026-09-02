@@ -80,7 +80,7 @@ public class PostgresEventStoreRepository : IEventStoreRepository {
                 SELECT {EventColumns}
                 FROM session_events
                 WHERE session_id = $1 AND line_number >= $2
-                ORDER BY line_number ASC, logical_seq ASC, agent_id ASC;";
+                ORDER BY timestamp ASC, agent_id ASC, line_number ASC, logical_seq ASC;";
             cmd.Parameters.AddWithValue(sessionId);
             cmd.Parameters.AddWithValue(fromLine);
         } else {

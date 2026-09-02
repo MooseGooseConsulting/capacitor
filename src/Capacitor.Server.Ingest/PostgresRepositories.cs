@@ -369,12 +369,42 @@ public class PostgresSessionRepository : ISessionRepository {
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
-    public async Task<bool> UpdateSessionVisibilityAsync(string sessionId, string visibility, CancellationToken ct = default) {
+    public async Task UpsertSubagentRunAsync(SubagentRunRecord run, CancellationToken ct = default) {
         await using var conn = await _dataSource.OpenConnectionAsync(ct);
-        await using var cmd = new NpgsqlCommand(
-            "UPDATE sessions SET visibility = $2 WHERE session_id = $1;", conn);
-        cmd.Parameters.AddWithValue(sessionId);
-        cmd.Parameters.AddWithValue(visibility);
+        await using var cmd = new NpgsqlCommand(@"
+            INSERT INTO subagent_runs (
+                parent_session_id, agent_id, agent_type, role, prompt, spawned_at
+            ) VALUES ($1, $2, $3::varchar, $4::varchar, $5::varchar, $6)
+            ON CONFLICT (parent_session_id, agent_id) DO UPDATE SET
+                agent_type = COALESCE(NULLIF(EXCLUDED.agent_type, ''), subagent_runs.agent_type),
+                role = COALESCE(NULLIF(EXCLUDED.role, ''), subagent_runs.role),
+                prompt = COALESCE(NULLIF(EXCLUDED.prompt, ''), subagent_runs.prompt);", conn);
+        cmd.Parameters.AddWithValue(run.ParentSessionId);
+        cmd.Parameters.AddWithValue(run.AgentId);
+        cmd.Parameters.AddWithValue((object?)run.AgentType ?? DBNull.Value);
+        cmd.Parameters.AddWithValue((object?)run.Role ?? DBNull.Value);
+        cmd.Parameters.AddWithValue((object?)run.Prompt ?? DBNull.Value);
+        cmd.Parameters.AddWithValue(EventTimestamp.ToUtcString(run.SpawnedAt));
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task<bool> CompleteSubagentRunAsync(
+        string parentSessionId,
+        string agentId,
+        DateTimeOffset stoppedAt,
+        string? exitStatus,
+        CancellationToken ct = default) {
+        await using var conn = await _dataSource.OpenConnectionAsync(ct);
+        await using var cmd = new NpgsqlCommand(@"
+            UPDATE subagent_runs SET
+                stopped_at = $3,
+                duration_ms = GREATEST(0, FLOOR(EXTRACT(EPOCH FROM ($3::timestamptz - spawned_at::timestamptz)) * 1000)::bigint),
+                exit_status = COALESCE($4::varchar, exit_status)
+            WHERE parent_session_id = $1 AND agent_id = $2;", conn);
+        cmd.Parameters.AddWithValue(parentSessionId);
+        cmd.Parameters.AddWithValue(agentId);
+        cmd.Parameters.AddWithValue(EventTimestamp.ToUtcString(stoppedAt));
+        cmd.Parameters.AddWithValue((object?)exitStatus ?? DBNull.Value);
         return await cmd.ExecuteNonQueryAsync(ct) > 0;
     }
 

@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Npgsql;
 using Capacitor.Cli.Core;
@@ -100,16 +99,39 @@ app.MapPost("/hooks/set-title", ([FromBody] ApiSessionTitlePayload payload, ISes
 app.MapPost("/hooks/session-title", ([FromBody] ApiSessionTitlePayload payload, ISessionRepository sessions)
     => HandleSessionTitle(payload, sessions));
 
-// Fail-closed clients (SessionImporter, WatchCommand) must see a 2xx before streaming a
-// subagent's content — this endpoint's whole job is to be that ACK. Unqualified, matching what
-// every harness posts.
-app.MapPost("/hooks/subagent-start", async ([FromBody] JsonElement payload, ISessionRepository sessions) => {
-    var sessionId = IdCanonicalizer.Canonicalize(payload.Str("session_id"));
-    if (sessionId.Length > 0) await sessions.GetOrCreatePlaceholderAsync(sessionId, "claude");
-    return Results.Ok(new { status = "started" });
+// Importers do not stream a child transcript until this returns 2xx, so the ACK is only emitted
+// after the corresponding lifecycle record is durable.
+app.MapPost("/hooks/subagent-start", async ([FromBody] ApiSubagentStartPayload payload, ISessionRepository sessions) => {
+    var sessionId = IdCanonicalizer.Canonicalize(payload.SessionId);
+    var agentId = IdCanonicalizer.Canonicalize(payload.AgentId);
+    if (sessionId.Length == 0 || agentId.Length == 0) {
+        return Results.BadRequest(new { detail = "session_id and agent_id are required." });
+    }
+
+    await sessions.GetOrCreatePlaceholderAsync(sessionId, "claude");
+    await sessions.UpsertSubagentRunAsync(new SubagentRunRecord {
+        ParentSessionId = sessionId,
+        AgentId = agentId,
+        AgentType = payload.AgentType,
+        Role = payload.Role,
+        Prompt = payload.Prompt,
+        SpawnedAt = payload.StartedAt ?? DateTimeOffset.UtcNow
+    });
+    return Results.Ok(new { status = "started", session_id = sessionId, agent_id = agentId });
 });
 
-app.MapPost("/hooks/subagent-stop", ([FromBody] JsonElement payload) => Results.Ok(new { status = "stopped" }));
+app.MapPost("/hooks/subagent-stop", async ([FromBody] ApiSubagentStopPayload payload, ISessionRepository sessions) => {
+    var sessionId = IdCanonicalizer.Canonicalize(payload.SessionId);
+    var agentId = IdCanonicalizer.Canonicalize(payload.AgentId);
+    if (sessionId.Length == 0 || agentId.Length == 0) {
+        return Results.BadRequest(new { detail = "session_id and agent_id are required." });
+    }
+
+    return await sessions.CompleteSubagentRunAsync(
+        sessionId, agentId, payload.StoppedAt ?? DateTimeOffset.UtcNow, payload.ExitStatus)
+        ? Results.Ok(new { status = "stopped", session_id = sessionId, agent_id = agentId })
+        : Results.NotFound();
+});
 
 app.MapPost("/hooks/transcript", async (
     [FromBody] TranscriptBatch batch,
@@ -229,21 +251,11 @@ app.MapGet("/api/sessions/search", async (
     return Results.Ok(new { hits = page.Sessions, total = page.Total });
 });
 
-app.MapPut("/api/sessions/{id}/visibility", async (
-    string id,
-    [FromBody] ApiSessionVisibilityPayload payload,
-    ISessionRepository sessions,
-    CancellationToken ct) => {
-    var visibility = payload.Visibility?.Trim().ToLowerInvariant();
-    if (visibility is not ("none" or "private" or "project" or "org_public" or "public")) {
-        return Results.BadRequest(new { detail = "visibility must be one of: none, private, project, org_public, public." });
-    }
-
-    var sessionId = IdCanonicalizer.Canonicalize(id);
-    return await sessions.UpdateSessionVisibilityAsync(sessionId, visibility, ct)
-        ? Results.Ok(new { status = "updated", session_id = sessionId, visibility })
-        : Results.NotFound();
-});
+// Session-start retains the source visibility label as metadata. Altering access visibility is
+// intentionally unavailable until this recovery API has an authenticated policy evaluator.
+app.MapPut("/api/sessions/{id}/visibility", (string id) => Results.Problem(
+    statusCode: StatusCodes.Status501NotImplemented,
+    detail: "Session visibility policy requires authenticated caller and repository context; the recovery capture API stores source labels but does not enforce access control."));
 
 async Task<IResult> RequireSessionAsync(
     string id,
@@ -426,9 +438,38 @@ namespace Capacitor.Server.Api {
         public required string Title { get; init; }
     }
 
-    public record ApiSessionVisibilityPayload {
-        [JsonPropertyName("visibility")]
-        public string? Visibility { get; init; }
+    public record ApiSubagentStartPayload {
+        [JsonPropertyName("session_id")]
+        public string? SessionId { get; init; }
+
+        [JsonPropertyName("agent_id")]
+        public string? AgentId { get; init; }
+
+        [JsonPropertyName("agent_type")]
+        public string? AgentType { get; init; }
+
+        [JsonPropertyName("role")]
+        public string? Role { get; init; }
+
+        [JsonPropertyName("prompt")]
+        public string? Prompt { get; init; }
+
+        [JsonPropertyName("started_at")]
+        public DateTimeOffset? StartedAt { get; init; }
+    }
+
+    public record ApiSubagentStopPayload {
+        [JsonPropertyName("session_id")]
+        public string? SessionId { get; init; }
+
+        [JsonPropertyName("agent_id")]
+        public string? AgentId { get; init; }
+
+        [JsonPropertyName("stopped_at")]
+        public DateTimeOffset? StoppedAt { get; init; }
+
+        [JsonPropertyName("exit_status")]
+        public string? ExitStatus { get; init; }
     }
 }
 

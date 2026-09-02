@@ -76,7 +76,13 @@ public interface ISessionRepository {
     Task<SessionSearchPage> SearchSessionsAsync(SessionSearchQuery query, CancellationToken ct = default);
     Task UpdateSessionAsync(SessionHeaderRecord session, CancellationToken ct = default);
     Task UpdateSessionTitleAsync(string sessionId, string title, CancellationToken ct = default);
-    Task<bool> UpdateSessionVisibilityAsync(string sessionId, string visibility, CancellationToken ct = default);
+    Task UpsertSubagentRunAsync(SubagentRunRecord run, CancellationToken ct = default);
+    Task<bool> CompleteSubagentRunAsync(
+        string parentSessionId,
+        string agentId,
+        DateTimeOffset stoppedAt,
+        string? exitStatus,
+        CancellationToken ct = default);
 
     // Owner/visibility only. A concurrent session-end can commit completed between the
     // session-start handler's read and this write; a full-row UpdateSessionAsync would
