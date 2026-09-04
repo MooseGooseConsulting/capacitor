@@ -38,8 +38,10 @@ truthfully in the console.
 
 What this repository currently answers — capture routes, Sessions HTTP, five
 normalizers, Postgres, the Sessions console, and the holes that remain — is
-[`reference/REPLICATION-MAP.md`](reference/REPLICATION-MAP.md), pinned to a SHA.
-That file is implementation status, not a substitute for Fleet or Surface.
+[`reference/REPLICATION-MAP-2026-09-04.md`](reference/REPLICATION-MAP-2026-09-04.md),
+pinned to a SHA. That copy is implementation status, not a substitute for Fleet
+or Surface. The 2026-08-29 original is
+[`reference/REPLICATION-MAP-2026-08-29.md`](reference/REPLICATION-MAP-2026-08-29.md).
 
 [`docs/INDEX.md`](docs/INDEX.md) maps the complete documentation corpus without
 moving, renaming, or reducing it to summaries.

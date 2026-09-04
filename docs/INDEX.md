@@ -23,14 +23,15 @@ PROMPT (outcome)
        ├─ EVAL-DIRECTION (evaluation capability retained)
        └─ WAVES (method and gates; sequence is a hypothesis)
             └─ schema and implementation material (derived, never ahead of evidence)
-                 └─ REPLICATION-MAP (SHA-pinned implementation status, not product authority)
+                 └─ REPLICATION-MAP-2026-09-04 (SHA-pinned implementation status, not product authority)
 ```
 
 The initial implementation contract is
 [`SESSION-VERTICAL-SLICE.md`](SESSION-VERTICAL-SLICE.md). It makes the session
 list and detail surface drive the data model instead of treating data ingestion as a
-separate milestone. [`REPLICATION-MAP.md`](../reference/REPLICATION-MAP.md) records
-which of those contract rows this repository answers at a pinned SHA.
+separate milestone. [`REPLICATION-MAP-2026-09-04.md`](../reference/REPLICATION-MAP-2026-09-04.md) records
+which of those contract rows this repository answers at a pinned SHA. The 2026-08-29
+original is [`REPLICATION-MAP-2026-08-29.md`](../reference/REPLICATION-MAP-2026-08-29.md).
 
 ## Corpus inventory
 
@@ -44,7 +45,7 @@ corpus changes rather than treating a historical count as an authority claim.
 | repository root | Brief, inherited client guidance, license/provenance, release notes | `PROMPT.md` is the standalone brief. `CLAUDE.md` preserves client invariants. `LICENSE.md` and `NOTICE.md` bind. `RELEASING.md` is inherited release process, not a deployment decision. |
 | `.github/` | Pull-request authoring template | Contribution-format guidance, not product or delivery authority. |
 | `.sdd/` | Delegated ACP implementation briefs and completion reports | Historical work artifacts for the inherited daemon and a separate server worktree. They neither establish a standalone backend nor define the web console. |
-| `reference/` | Product evidence, measured corrections, and the retained eval boundary | Primary product material. `FLEET.md` wins conflicts. `SURFACE.md` and its assets define the observed console. `REPLICATION-MAP.md` is implementation status at a pinned SHA, not product authority. `CROSS-REPO-SESSIONS.md` and `REPEATING-CALLBACK-AUDIT.md` are measurements, not proposals. |
+| `reference/` | Product evidence, measured corrections, and the retained eval boundary | Primary product material. `FLEET.md` wins conflicts. `SURFACE.md` and its assets define the observed console. `REPLICATION-MAP-2026-09-04.md` is implementation status at a pinned SHA, not product authority. The 2026-08-29 original is `REPLICATION-MAP-2026-08-29.md`. `CROSS-REPO-SESSIONS.md` and `REPEATING-CALLBACK-AUDIT.md` are measurements, not proposals. |
 | `reference/ui-assets/` | Captured console tokens, component CSS, icon mapping, and screenshots | Visual acceptance evidence. Do not substitute default MudBlazor styling or invent a different layout without recording a deliberate divergence. |
 | `docs/` | ACP/harness findings, historical design and change rationale | Useful source-specific constraints and evidence. They do not define the standalone web product. |
 | `docs/eval/` | Legacy evaluation acceptance harness material | Read alongside `reference/EVAL-DIRECTION.md`; the capability stays while inherited taxonomy may change. |

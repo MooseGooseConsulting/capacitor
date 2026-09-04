@@ -183,7 +183,7 @@ Fully determined by the client, which is in this repo. Extracted by enumerating 
 > their only way in. `/api/admin/machines` and `/api/daemons` are core, not product
 > surface.
 
-Implementation status lives in [`REPLICATION-MAP.md`](REPLICATION-MAP.md), pinned to a
+Implementation status lives in [`REPLICATION-MAP-2026-09-04.md`](REPLICATION-MAP-2026-09-04.md), pinned to a
 SHA. The list below is the client contract, not a claim that every route is answered.
 
 ```
@@ -319,7 +319,7 @@ Keep `LICENSE.md` and record provenance in the README. Internal use is fine; Saa
 ## 8. Summary — what is actually left to build
 
 Client layers below are inherited. Server and console status is the map at
-[`REPLICATION-MAP.md`](REPLICATION-MAP.md).
+[`REPLICATION-MAP-2026-09-04.md`](REPLICATION-MAP-2026-09-04.md).
 
 | layer | state |
 |---|---|
