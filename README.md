@@ -38,9 +38,10 @@ truthfully in the console.
 
 What this repository currently answers — capture routes, Sessions HTTP, five
 normalizers, Postgres, the Sessions console, and the holes that remain — is
-[`reference/REPLICATION-MAP-2026-09-04.md`](reference/REPLICATION-MAP-2026-09-04.md),
-pinned to a SHA. That copy is implementation status, not a substitute for Fleet
-or Surface. The 2026-08-29 original is
+[`reference/REPLICATION-MAP-LANDED.md`](reference/REPLICATION-MAP-LANDED.md),
+pinned to SHA `5ae4a671`. The route ledger is
+[`reference/REPLICATION-MAP-2026-09-04.md`](reference/REPLICATION-MAP-2026-09-04.md).
+The 2026-08-29 original is
 [`reference/REPLICATION-MAP-2026-08-29.md`](reference/REPLICATION-MAP-2026-08-29.md).
 
 [`docs/INDEX.md`](docs/INDEX.md) maps the complete documentation corpus without
@@ -61,9 +62,10 @@ The documents serve different jobs. Treat them accordingly:
 | `docs/schema/` | derived design material to reconcile against the sources above before implementation |
 | inherited `docs/`, `kcap/`, and `npm/` material | implementation history and client-specific constraints, not a standalone product decision |
 
-A recovery branch, an unmerged pull request, a local stub, or a test database is
-evidence of work in progress. None defines the target product or proves that the
-standalone system exists.
+The Sessions slice **on `main`** (capture, Postgres, five normalizers, Sessions
+HTTP, `Capacitor.Web`) is code. A leftover recovery branch, a closed unmerged PR,
+or a test database is not a second product and is not a merge queue. None of that
+WIP is a deployed service — see the deployment boundary below.
 
 ## Deployment boundary
 

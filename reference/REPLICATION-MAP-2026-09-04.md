@@ -1,21 +1,13 @@
-# Capacitor Replication Map
+# Capacitor Replication Map — route ledger
 
-New copy of the 2026-08-29 map
-([`REPLICATION-MAP-2026-08-29.md`](REPLICATION-MAP-2026-08-29.md);
-[claude.ai artifact](https://claude.ai/code/artifact/4a6ed393-4991-4d62-9835-4e578a67cce8)).
-The original is untouched. Facts here are from `origin/main` **`5ae4a671`**
-(`feat(server): persist Sessions list and detail from captured events`).
-Every claim traces to that tree, `reference/SURFACE.md`, or
-`reference/WAVES.md`. Percentages in the original were estimates from
-that inspection, not measurements; this copy does not invent a
-replacement percentage.
+Read [`REPLICATION-MAP-LANDED.md`](REPLICATION-MAP-LANDED.md) first.
+This file is the route table and wave-PR footnote at `origin/main`
+**`5ae4a671`**. The 2026-08-29 artifact is frozen at
+[`REPLICATION-MAP-2026-08-29.md`](REPLICATION-MAP-2026-08-29.md).
 
-Repo: MooseGooseConsulting/capacitor, a private derivative of
-kurrent-io/kcap-cli. `main` carries the inherited CLI plus a Sessions
-vertical slice (ingest, five normalizers, Postgres, HTTP, Blazor
-console). Open PRs: none besides the PR that carries this file. Remote
-`feat/schema-wave-*` branches still exist; they are not the authority
-for what answers.
+Repo: MooseGooseConsulting/capacitor. `main` has the inherited CLI plus
+the Sessions slice from **#38** (squash), **#12**, and **#13**. Leftover
+`feat/schema-wave-*` and `recover/*` branches are not a merge queue.
 
 **STATES**
 
@@ -36,39 +28,38 @@ browser, coloured by where its code actually lives.
 
 ```mermaid
 flowchart LR
-  subgraph green [Inherited on main]
-    H["Hooks and CLI · 9 vendors<br/>on main · inherited, real, works vs vendor server"]
-    MCP["MCP tools · 35 in 6 servers<br/>on main · against our API: analytics HTTP unmounted;<br/>sessions partial; review/flows/memory/work-items dark"]
+  subgraph importRead [Import and read · on main]
+    H["Hooks and CLI · 9 vendors"]
+    POST["POST /hooks/transcript · last-line"]
+    ING["Ingest"]
+    NORM["Normalizers · 5 vendors"]
+    SCH["Canonical schema"]
+    PG["Postgres 001-006"]
+    HTTP["Sessions HTTP"]
+    WEB["Capacitor.Web · 6 tabs"]
+    H --> POST --> ING --> NORM --> SCH --> PG --> HTTP --> WEB
   end
-  subgraph amber [Server on main · Sessions slice]
-    POST["POST /hooks/transcript<br/>● · strict last-line · failed lines skip identity"]
-    ING["Ingest · positioned idempotent store<br/>●"]
-    NORM["Normalizers · Claude, Codex, Kiro, ACP, Antigravity<br/>● · 5 of ~9 live / 10 import vendors"]
-    SCH["Canonical schema · 14 tables<br/>spec on main · entities in Server.Data"]
-    PG["Postgres<br/>● · migrations 001–006"]
-    AN["Analytics · 32 views in SQL + library<br/>◐ · HTTP /schema and /query unmounted"]
-    HTTP["HTTP API<br/>◐ · capture + Sessions reads; eval/auth/fleet/analytics HTTP absent"]
-    SIG["SignalR live watcher<br/>× · client dials /hubs/sessions · no hub mapped"]
-    WEB["Web console · 6 session tabs<br/>● · Capacitor.Web Sessions list + detail"]
+  subgraph liveWatch [Live watch · absent]
+    SIG["SignalR /hubs/sessions · not mapped"]
   end
-  H --> POST --> ING --> NORM --> SCH --> PG --> AN --> HTTP --> SIG --> MCP --> WEB
+  subgraph extra [Present in SQL or client, not answering]
+    AN["Analytics views · HTTP unmounted"]
+    MCP["MCP · analytics dark; sessions partial; review/flows/memory/work-items dark"]
+  end
+  HTTP -.-> AN
+  HTTP -.-> MCP
+  H -.-> SIG
 ```
 
-Green at the left end is inherited client code. Capture, ingest,
-normalizers, schema, Postgres, and the Sessions console are on `main`.
-The live path still breaks at the watcher: the client dials
-`/hubs/sessions` and `Program.cs` maps no SignalR hub, so the watcher
-never connects and nothing streams.
+Import → ingest → five normalizers → Postgres → Sessions HTTP →
+`Capacitor.Web` is on `main` (#38). Live watch is a **parallel** hole:
+the client dials `/hubs/sessions` and no hub is mapped. The console
+does not sit behind that hub.
 
-Two of the eleven stages are inherited rather than built here: the
-CLI/hook layer and the MCP tool layer. MCP tools that need our backend
-are only as live as the routes below. Analytics HTTP is unmounted, so
-`kcap-analytics` is dark against this API even though 32 views exist in
-SQL. Sessions tools that call `/search`, `/turns`, and `/transcript`
-can answer; `get_session_summary` cannot (`/recap` absent).
-
-The chain is only as connected as its thinnest link. Today that link is
-the watcher.
+Analytics HTTP is unmounted, so `kcap-analytics` is dark even though
+32 views exist in SQL. Sessions tools that call `/search`, `/turns`,
+and `/transcript` can answer; `get_session_summary` cannot (`/recap`
+absent). `kcap-review` calls `/api/review/...`, not the flows API.
 
 ### What the snapshot called “open PRs by wave”
 
@@ -129,6 +120,7 @@ flowchart LR
     B9["/api/daemons, /api/admin/machines · absent"]
     B10["LLM plane server-side · not built"]
     B11["Capacitor.Web Sessions list + six tabs"]
+    B12["/api/review/{owner}/{repo}/pulls/{n}<br/>/api/review/sessions/.../transcript · absent"]
   end
   C1 --> B3
   C2 --> B4
@@ -141,7 +133,7 @@ flowchart LR
   C8 --> B11
   M1 --> B1
   M2 --> B5
-  M3 --> B6
+  M3 --> B12
   M4 --> B6
   M5 --> B2
   M6 --> B6
@@ -193,46 +185,40 @@ has not been made.
 
 ## DIAGRAM C
 
-What has to happen, in order. A dependency chain, not a menu. The first
-milestone is still the one that de-risks everything after it: make the
-CLI talk to our backend end to end, including live watch.
+Import and the Sessions console are on `main`. The remaining live-watch
+piece is mapping `/hubs/sessions`. That does not block reading a session
+you already imported.
 
 ```mermaid
 flowchart TB
-  subgraph realign [Delete or realign · leftover that is not the client contract]
-    R1["GET /watermarks · still mapped"]
-    R2["POST /api/machines/enroll · not on main"]
-    R3["POST /api/machines/heartbeat · not on main"]
-    R4["POST /api/mcp/sessions · not on main"]
-    R5["hub /hub/capacitor · not on main · live watch needs /hubs/sessions"]
+  subgraph done [On main]
+    T["POST /hooks/transcript + GET last-line"]
+    IMP["kcap import against local server"]
+    WEB["Sessions console · six tabs"]
+    T --> IMP --> WEB
   end
-  subgraph m1 [Milestone 1 · CLI talks to our backend]
-    T["POST /hooks/transcript + GET last-line · ● on main"]
-    HUB["Map SignalR to the client's /hubs/sessions contract<br/>WatcherConnect, SendTranscriptBatchAcked, WatcherDrainComplete,<br/>SendTitle, ActiveSessionAdded/Changed/Removed, agent-launch plane"]
-    IMP["kcap import + live watch working end to end"]
+  subgraph next [Next against this tree]
+    HUB["Map SignalR /hubs/sessions<br/>WatcherConnect, SendTranscriptBatchAcked, WatcherDrainComplete,<br/>SendTitle, ActiveSessionAdded/Changed/Removed, agent-launch plane"]
+    ANH["Mount analytics HTTP over existing views"]
+    S["Sessions remainder · recap, errors, visibility, FTS/vector"]
   end
-  subgraph rest [After the watcher connects]
-    S["Sessions API remainder · recap, errors, visibility, FTS/vector search"]
+  subgraph later [Client contract still absent]
     A["Auth · /auth/config, /auth/refresh"]
-    MEM["Memory · memories table DDL, then /api/memories routes"]
-    F["Flows and work items routes"]
-    E["Eval · catalog HTTP, scoring, evals/v2, evals/v3, judge-facts, eval-summary"]
-    L["LLM plane · titles, summaries, narration, judge, embeddings<br/>blocked on an embedding and summarization provider decision"]
-    ANH["Analytics HTTP · /api/analytics/schema + /query"]
-    W["Web console remainder · Agents, Insights, Flows, Work items, share/copy/delete"]
+    MEM["Memory DDL then routes"]
+    F["Flows, work items, /api/review"]
+    E["Eval catalog HTTP + scoring"]
+    L["LLM plane · blocked on embedding/summarization provider"]
+    W["Console chrome · Agents, Insights, Flows, Work items"]
   end
-  realign -.-> m1
-  T --> HUB --> IMP --> S --> A --> MEM --> F --> E --> L --> ANH --> W
+  WEB --> HUB
+  WEB --> ANH
+  HUB --> S --> A --> MEM --> F --> E --> L --> W
 ```
 
-**Milestone 1** is two items, one of them done. Transcript and last-line
-are on `main`. The remaining piece is mapping SignalR to the client’s
-`/hubs/sessions` contract. There is no `/hub/capacitor` on this tree to
-start from, and the closed PR #16 stub is not a starting point — it
-answered a different contract.
+Do not rebuild `/hub/capacitor`, enroll, heartbeat, or
+`POST /api/mcp/sessions`. Closed #16 is the wrong contract.
 
-- `kcap import` against the local server can complete (capture routes
-  exist). **Live watch cannot.**
+- `kcap import` against the local server can complete. **Live watch cannot.**
 - Sessions API — turns and transcript exist; recap, errors, search
   beyond ILIKE, visibility do not.
 - Auth — `/auth/config` and `/auth/refresh`.
@@ -283,8 +269,8 @@ auth, fleet, memory, flows, and work-items do not.
 | Endpoint | State | Note |
 | --- | --- | --- |
 | **CAPTURE & HOOKS** | | |
-| `POST /hooks/session-start/{vendor}` | ● MERGED | also unprefixed `/session-start/{vendor}` |
-| `POST /hooks/session-end/{vendor}` | ● MERGED | also unprefixed |
+| `POST /hooks/session-start/{vendor}` | ● MERGED | also vendor-less `POST /hooks/session-start` |
+| `POST /hooks/session-end/{vendor}` | ● MERGED | also vendor-less `POST /hooks/session-end` |
 | `POST /hooks/transcript` | ● MERGED | `strict`; failed lines skip event identity |
 | `GET /api/sessions/{id}/last-line` | ● MERGED | watermark for resume |
 | `POST /hooks/subagent-start` | ● MERGED | persists the child session, then ACK |
@@ -332,6 +318,9 @@ auth, fleet, memory, flows, and work-items do not.
 | `POST .../participant/message` | × ABSENT | |
 | `POST .../reviewer/result` | × ABSENT | |
 | `POST /api/work-items/declare` | × ABSENT | |
+| **REVIEW MCP** | | |
+| `GET /api/review/{owner}/{repo}/pulls/{n}` | × ABSENT | `kcap-review` |
+| `GET /api/review/sessions/{id}/transcript` | × ABSENT | `kcap-review` |
 | **AUTH, ORG & ONBOARDING** | | |
 | `GET /auth/config` | × ABSENT | client runs on the unauthenticated escape hatch |
 | `POST /auth/refresh` | × ABSENT | |
@@ -389,45 +378,21 @@ Antigravity. Upstream kcap normalizes about nine live vendors.
 
 ## ACCOUNTING
 
-Where the hours went.
+`SURFACE.md` inventories the client contract. This ledger is the status
+column against `5ae4a671`. Refresh both when a PR changes a route. The
+wire list uses inline “answered on main” / “missing” notes, not a
+separate three-state column.
 
-The enumeration work is real, and it is merged. `SURFACE.md` is a full
-inventory of the kcap surface — CLI, routes, views, hub, the six
-console tabs, and a “what’s left” table. `WAVES.md` defines six gated
-waves. `WIRECRAFT-MAPPING.md` maps wire fields to schema fields.
-`VENDOR-README.md` and the `reference/ui-assets` capture — the vendor’s
-CSS, fonts and icons — are on main too. That is genuine, reusable work
-and it is why the route ledger above could be written at all.
+### Web console
 
-The 2026-09-04 copy is that status column against current `main`, pinned to
-`5ae4a671`. `SURFACE.md` now carries implemented | partial | missing
-on the wire-contract list; refresh both files with every PR that
-changes a route.
+`src/Capacitor.Web/` on `main` via #38: Sessions list, six-tab detail
+(Overview, Transcript, Events, Trace, Evaluation, Details). Agents /
+Insights / Flows / Work items are visible and unavailable. Share,
+copy-link, and delete are disabled.
 
-### Web console whereabouts — resolved
-
-Both sessions named in the snapshot ran on the other machine,
-`C:\_projects\capacitor`, on 2026-08-28.
-
-**PR #18.** Merged. A Claude-in-Chrome capture of the vendor console’s
-design system — CSS tokens, icons, frozen HTML of all six detail tabs.
-Reference only, no runnable code.
-
-**Session 1ca6b3c1.** Chose Blazor Server + MudBlazor and launched 8
-parallel build agents — console shell, list and detail, plus 5 API
-endpoint modules — into agent worktrees under `.claude\worktrees\agent-*`.
-The session hit its usage limit before the results were collected.
-Nothing from those worktrees is this tree’s console.
-
-**What landed.** `src/Capacitor.Web/` on `main` via #38: Sessions list,
-six-tab detail (Overview, Transcript, Events, Trace, Evaluation,
-Details), captured-event persistence. Agents / Insights / Flows / Work
-items remain visible and unavailable. Share, copy-link, and delete are
-disabled.
-
-**Check first** if hunting the 2026-08-28 worktrees: on the other
-machine, in `C:\_projects\capacitor`: `git worktree list` and
-`git branch --list 'agent-*'`.
+PR #18 is the vendor design-system capture (tokens, icons, frozen HTML).
+The 2026-08-28 `agent-*` worktrees on `C:\_projects\capacitor` were not
+collected into this tree.
 
 ---
 
@@ -455,35 +420,28 @@ not say the server is unbuilt.
 
 ---
 
-## BEFORE BUILDING WHAT REMAINS
+## WHAT TO BUILD NEXT
 
-The question the 2026-08-28 retrospective (session `2ecb16fd`) raised:
-the C#/.NET server replication had hit “heavy maintenance friction,
-schema sprawl, Windows tooling friction” and proposed pivoting to the
-simpler agent-corpus design — raw archive first, vendor AgentsView’s
-parsers, no server rebuild. Nothing in that session decided a pivot.
+Against this tree: `/hubs/sessions`, then mount analytics/eval HTTP
+over work that already exists. Auth, memory DDL, flows, `/api/review`,
+and an embedding provider are still open. `PROMPT.md` is the product
+cut.
 
-This tree has the C# server and Sessions console (#38). The product
-cut in `PROMPT.md` is still the operator’s. The three paths remain:
-finish the replication as mapped above; keep only the capture side
-(Milestone 1, including live watch) and put the canonical schema on
-top of AgentsView instead of a new server; or fold the schema and
-analytics work into agent-corpus. The route ledger is the same under
-all three — what changes is who answers the routes.
+Session `2ecb16fd` (2026-08-28) raised pivoting to agent-corpus. Nothing
+in that session decided it. #38 landed the C# Sessions slice. Do not
+treat leftover branches as a second vote.
+
+Do not merge `#14`–`#17` or recover `#31`/`#32`/`#36`. Wave 8 maps
+`/hub/capacitor`. Recover work is inside the #38 squash.
 
 ---
 
-## OPERATIONAL BLOCKERS ON RECORD
+## CURRENT BLOCKERS
 
-Snapshot (2026-08-28): 14 open PRs, 208 unresolved bot review threads;
-GitHub Actions billing-blocked; self-hosted Linux runner needed clang +
-zlib1g-dev, never confirmed; two orchestrator sessions raced the same
-branch chain; console build agents’ output never collected.
+Live watch (no `/hubs/sessions`), unmounted analytics/eval HTTP, no
+embedding provider for FTS/hybrid search. CI runs on
+`[self-hosted, Linux]`. Open PRs besides this documentation change:
+none. Stale `feat/schema-wave-*` remotes are not `main`.
 
-This checkout: GitHub Actions run on `[self-hosted, Linux]`
-(`.github/workflows/ci.yml`). Open PRs besides this documentation
-change: none. Wave branches `feat/schema-wave-6-api` through
-`feat/schema-wave-9-mcp` remain on the remote and are not `main`.
-Live-watch absence, unmounted analytics/eval HTTP, and the embedding
-provider decision are the blockers that still govern what can be built
-next.
+The 2026-08-28 snapshot (14 open PRs, 208 bot threads, billing-blocked
+Actions) is history. It is not the current queue.

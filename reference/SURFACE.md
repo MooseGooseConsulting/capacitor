@@ -183,7 +183,8 @@ Fully determined by the client, which is in this repo. Extracted by enumerating 
 > their only way in. `/api/admin/machines` and `/api/daemons` are core, not product
 > surface.
 
-Implementation status lives in [`REPLICATION-MAP-2026-09-04.md`](REPLICATION-MAP-2026-09-04.md), pinned to a
+Implementation status lives in [`REPLICATION-MAP-LANDED.md`](REPLICATION-MAP-LANDED.md)
+(briefing) and [`REPLICATION-MAP-2026-09-04.md`](REPLICATION-MAP-2026-09-04.md) (ledger), pinned to a
 SHA. The list below is the client contract, not a claim that every route is answered.
 
 ```
@@ -222,6 +223,7 @@ Read answered on main: `/api/sessions/{id}`, `/overview`, `/details`, `/events`,
 `/transcript`, `/turns[/{i}]`, and `GET /api/sessions/search` (title and transcript
 `ILIKE`, not FTS). Missing: `/recap`, `/errors`, `/api/projects`, `/api/repositories/`,
 `/api/memories[/index]`, `/api/attachments/{id}`, `/api/work-items/declare`,
+`/api/review/{owner}/{repo}/pulls/{n}`, `/api/review/sessions/{id}/transcript`,
 `/api/analytics/{schema,query}` (SQL views exist; HTTP is not mapped), `/api/daemons`,
 `/api/admin/machines` (**both core under FLEET.md**), `/api/flows/*`, `/api/eval/*`,
 `/api/sessions/{id}/{eval-context,evals/v2,evals/v3,judge-facts}`,
@@ -319,7 +321,7 @@ Keep `LICENSE.md` and record provenance in the README. Internal use is fine; Saa
 ## 8. Summary — what is actually left to build
 
 Client layers below are inherited. Server and console status is the map at
-[`REPLICATION-MAP-2026-09-04.md`](REPLICATION-MAP-2026-09-04.md).
+[`REPLICATION-MAP-LANDED.md`](REPLICATION-MAP-LANDED.md).
 
 | layer | state |
 |---|---|

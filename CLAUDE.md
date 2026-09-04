@@ -25,7 +25,7 @@ review context via MCP tools.
 The client is the specification for what the server must answer (`reference/SURFACE.md`
 wire contract). Capture, Postgres ingest, five normalizers, and a Sessions console slice
 are on `main`. Live watch, auth, fleet machine routes, analytics HTTP, and most MCP
-backing are not. The live map is `reference/REPLICATION-MAP-2026-09-04.md`. The 2026-08-29 original is `reference/REPLICATION-MAP-2026-08-29.md`.
+backing are not. Start at `reference/REPLICATION-MAP-LANDED.md`. The 2026-08-29 original is `reference/REPLICATION-MAP-2026-08-29.md`.
 
 ## Invariants
 
