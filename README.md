@@ -36,6 +36,11 @@ normalization, and retained source evidence. It exists so that an API, schema, o
 parser cannot be treated as progress unless the real data it produces is rendered
 truthfully in the console.
 
+What this repository currently answers — capture routes, Sessions HTTP, five
+normalizers, Postgres, the Sessions console, and the holes that remain — is
+[`reference/REPLICATION-MAP.md`](reference/REPLICATION-MAP.md), pinned to a SHA.
+That file is implementation status, not a substitute for Fleet or Surface.
+
 [`docs/INDEX.md`](docs/INDEX.md) maps the complete documentation corpus without
 moving, renaming, or reducing it to summaries.
 

@@ -183,16 +183,18 @@ Fully determined by the client, which is in this repo. Extracted by enumerating 
 > their only way in. `/api/admin/machines` and `/api/daemons` are core, not product
 > surface.
 
+Implementation status lives in [`REPLICATION-MAP.md`](REPLICATION-MAP.md), pinned to a
+SHA. The list below is the client contract, not a claim that every route is answered.
 
 ```
-POST /hooks/session-start/{vendor}
-POST /hooks/session-end/{vendor}
-POST /hooks/subagent-start          # must ACK before children stream
-POST /hooks/subagent-stop
-POST /hooks/transcript              # honour `strict`
-GET  /api/sessions/{id}/last-line   # 200 + last_line_number | 204 | 404
-GET  /auth/config
-POST /auth/refresh
+POST /hooks/session-start/{vendor}   # answered on main
+POST /hooks/session-end/{vendor}     # answered on main
+POST /hooks/subagent-start           # must ACK before children stream; persists on main
+POST /hooks/subagent-stop            # answered on main
+POST /hooks/transcript               # honour `strict`; answered on main
+GET  /api/sessions/{id}/last-line    # 200 + last_line_number | 204 | 404; answered on main
+GET  /auth/config                    # missing
+POST /auth/refresh                   # missing
 ```
 
 The `{vendor}` segment is **parameterized, not enumerated**.
@@ -212,17 +214,24 @@ Lifecycle payloads are flat objects keyed by `hook_event_name`
 
 ### Beyond the minimum
 
-Ingestion: `/hooks/session-title`, `/hooks/set-title`, `/hooks/whats-done`,
-`/hooks/notification`, `/hooks/permission-record`, `/hooks/antigravity/subagent-link`.
+Ingestion: `/hooks/session-title` and `/hooks/set-title` are answered on main.
+`/hooks/whats-done`, `/hooks/notification`, `/hooks/permission-record`,
+`/hooks/antigravity/subagent-link` are missing.
 
-Read: `/api/sessions/{id}/turns[/{i}]`, `/recap`, `/errors`, `/visibility` (PUT),
-`/api/sessions/search`, `/api/projects`, `/api/repositories/`, `/api/memories[/index]`,
-`/api/attachments/{id}`, `/api/work-items/declare`, `/api/analytics/{schema,query}`,
-`/api/daemons`, `/api/admin/machines` (**both core under FLEET.md**), `/api/flows/*`, `/api/eval/*`,
+Read answered on main: `/api/sessions/{id}`, `/overview`, `/details`, `/events`,
+`/transcript`, `/turns[/{i}]`, and `GET /api/sessions/search` (title and transcript
+`ILIKE`, not FTS). Missing: `/recap`, `/errors`, `/api/projects`, `/api/repositories/`,
+`/api/memories[/index]`, `/api/attachments/{id}`, `/api/work-items/declare`,
+`/api/analytics/{schema,query}` (SQL views exist; HTTP is not mapped), `/api/daemons`,
+`/api/admin/machines` (**both core under FLEET.md**), `/api/flows/*`, `/api/eval/*`,
 `/api/sessions/{id}/{eval-context,evals/v2,evals/v3,judge-facts}`,
 `/api/me/notification-prefs`, `/api/feedback`, `/api/signup/provision`.
+`PUT /api/sessions/{id}/visibility` returns 501 until an authenticated policy evaluator
+exists.
 
 ### SignalR `/hubs/sessions`
+
+Not mapped. The client still dials this hub.
 
 Ingestion-relevant: `WatcherConnect` → `int`, `SendTranscriptBatchAcked` →
 `TranscriptBatchAck`, `WatcherDrainComplete`, `SendTitle`/`UpdateTitle`; server→client
@@ -309,14 +318,19 @@ Keep `LICENSE.md` and record provenance in the README. Internal use is fine; Saa
 
 ## 8. Summary — what is actually left to build
 
+Client layers below are inherited. Server and console status is the map at
+[`REPLICATION-MAP.md`](REPLICATION-MAP.md).
+
 | layer | state |
 |---|---|
 | discovery, classification, transport, resume, spool | **have it** |
-| live hooks, watcher, daemon, MCP, desktop app | **have it** |
+| live hooks, daemon, MCP, desktop app (client side) | **have it** |
 | CLI UX, config, profiles, plugin install | **have it** |
-| **normalizers** (vendor JSONL → canonical events) | **build** |
-| **canonical model** (event / turn / subagent) | **build** |
-| **store** (idempotent on `session_id, agent_id, line_number`) | **build** |
-| **the eight routes** | **build** |
-| **console** (Blazor + MudBlazor gets you most of the way) | **build** |
-| evals, flows, ACP runtime, analytics, work items, memory | **decide** — see the cut |
+| **normalizers** (vendor JSONL → canonical events) | **partial** — Claude, Codex, Kiro, Universal ACP, Antigravity |
+| **canonical model** (event / turn / subagent) | **partial** — Postgres schema and ingest on main |
+| **store** (idempotent on `session_id, agent_id, line_number`) | **have it** |
+| **capture routes + last-line** | **have it** |
+| **auth config/refresh and machine-token exchange** | **build** |
+| **SignalR `/hubs/sessions`** | **build** |
+| **console** | **partial** — Sessions six tabs; other nav unavailable |
+| eval HTTP, flows, analytics HTTP, work items, memory | **decide** — see the cut; eval *capability* stays |
