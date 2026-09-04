@@ -20,12 +20,6 @@ on:
 permissions:
   contents: read
 
-env:
-  # Keep NuGet/npm/CLI state in the job temp dir, not the persistent runner home.
-  DOTNET_CLI_HOME: ${{ runner.temp }}/dotnet-cli
-  NUGET_PACKAGES: ${{ runner.temp }}/nuget
-  npm_config_cache: ${{ runner.temp }}/npm
-
 jobs:
   build-and-test:
     name: Build and test (${{ matrix.name }})
@@ -47,9 +41,15 @@ jobs:
         working-directory: ${{ github.workspace }}
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
         with:
           persist-credentials: false
+
+      - name: Configure temp dirs
+        run: |
+          echo "DOTNET_CLI_HOME=$RUNNER_TEMP/dotnet-cli" >> "$GITHUB_ENV"
+          echo "NUGET_PACKAGES=$RUNNER_TEMP/nuget" >> "$GITHUB_ENV"
+          echo "npm_config_cache=$RUNNER_TEMP/npm" >> "$GITHUB_ENV"
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v6

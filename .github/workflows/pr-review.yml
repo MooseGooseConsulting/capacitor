@@ -1,0 +1,15 @@
+# Installed by coldaine-codeOps fleet control plane (fleet/fleet.py enroll).
+# Do not edit here: behaviour, model, runner and secrets are org-level.
+name: PR Review
+on:
+  pull_request:
+    types: [opened, ready_for_review, reopened, synchronize, labeled]
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  checks: read
+jobs:
+  review:
+    uses: MooseGooseConsulting/coldaine-codeOps/.github/workflows/fleet-pr-review.yml@main
+    secrets: inherit
