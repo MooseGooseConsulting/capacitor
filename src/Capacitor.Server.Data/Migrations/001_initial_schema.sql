@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS session_events (
     repo_hash           VARCHAR(64),
     repo_owner          VARCHAR(128),
     repo_name           VARCHAR(128),
-    PRIMARY KEY (session_id, agent_id, line_number)
+    PRIMARY KEY (session_id, agent_id, line_number, logical_seq)
 );
 
 -- The receipt is the source-resume boundary. Normalized events retain the same

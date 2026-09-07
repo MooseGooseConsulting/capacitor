@@ -288,4 +288,50 @@ public sealed class IngestRepositoryTests : IDisposable {
         await Assert.That(stored[1].ContextUsedTokens).IsNull();
         await Assert.That(stored[1].ContextWindowTokens).IsNull();
     }
+
+    [Test]
+    public async Task AppendEvents_keeps_missing_usage_as_null_not_zero() {
+        var sessionId = "sess-unknown-usage";
+        await _eventStore.AppendEventsAsync([
+            new() {
+                SessionId = sessionId,
+                LineNumber = 0,
+                EventType = "Raw",
+                Vendor = "codex",
+                Timestamp = DateTimeOffset.UtcNow
+            }
+        ]);
+
+        var stored = await _eventStore.GetEventsAsync(sessionId);
+        await Assert.That(stored[0].InputTokens).IsNull();
+        await Assert.That(stored[0].OutputTokens).IsNull();
+        await Assert.That(stored[0].CacheReadTokens).IsNull();
+        await Assert.That(stored[0].CacheWriteTokens).IsNull();
+
+        var rollup = await _eventStore.GetRollupAggregateAsync(sessionId);
+        await Assert.That(rollup).IsNotNull();
+        await Assert.That(rollup!.Value.TotalTokens).IsNull();
+    }
+
+    [Test]
+    public async Task AppendEvents_distinguishes_logical_seq_on_the_same_line() {
+        var sessionId = "sess-logical-seq";
+        var stamp = DateTimeOffset.UtcNow;
+        await _eventStore.AppendEventsAsync([
+            new() { SessionId = sessionId, AgentId = "sub-1", LineNumber = 4, LogicalSeq = 0, EventType = "Raw", Vendor = "claude", Timestamp = stamp, Content = "first" },
+            new() { SessionId = sessionId, AgentId = "sub-1", LineNumber = 4, LogicalSeq = 1, EventType = "Raw", Vendor = "claude", Timestamp = stamp, Content = "second" }
+        ]);
+
+        await Assert.That(await _eventStore.GetEventCountAsync(sessionId)).IsEqualTo(2);
+
+        var replay = await _eventStore.AppendEventsAsync([
+            new() { SessionId = sessionId, AgentId = "sub-1", LineNumber = 4, LogicalSeq = 0, EventType = "Raw", Vendor = "claude", Timestamp = stamp, Content = "mutated" }
+        ]);
+        await Assert.That(replay).IsEqualTo(0);
+
+        var stored = await _eventStore.GetEventsAsync(sessionId, "sub-1");
+        await Assert.That(stored.Count).IsEqualTo(2);
+        await Assert.That(stored[0].Content).IsEqualTo("first");
+        await Assert.That(stored[1].Content).IsEqualTo("second");
+    }
 }
