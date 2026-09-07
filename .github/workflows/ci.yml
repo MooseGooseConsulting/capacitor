@@ -19,10 +19,6 @@ jobs:
     if: github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association))
     runs-on: [self-hosted, moosegoose-build]
     timeout-minutes: 20
-    env:
-      DOTNET_CLI_HOME: ${{ runner.temp }}/dotnet-cli
-      NUGET_PACKAGES: ${{ runner.temp }}/nuget
-      npm_config_cache: ${{ runner.temp }}/npm
     steps:
       - uses: actions/checkout@v7
         with:
@@ -59,6 +55,16 @@ jobs:
           fi
           printf 'dotnet=%s\nwrapper=%s\n' "$dotnet" "$wrapper" >> "$GITHUB_OUTPUT"
           printf 'Selected checks: dotnet=%s wrapper=%s\n' "$dotnet" "$wrapper" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Isolate tool caches
+        if: steps.changes.outputs.dotnet == 'true' || steps.changes.outputs.wrapper == 'true'
+        shell: bash
+        run: |
+          {
+            echo "DOTNET_CLI_HOME=$RUNNER_TEMP/dotnet-cli"
+            echo "NUGET_PACKAGES=$RUNNER_TEMP/nuget"
+            echo "npm_config_cache=$RUNNER_TEMP/npm"
+          } >> "$GITHUB_ENV"
 
       - name: Setup .NET
         if: steps.changes.outputs.dotnet == 'true'
