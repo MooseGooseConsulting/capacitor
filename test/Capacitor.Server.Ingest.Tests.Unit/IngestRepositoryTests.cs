@@ -142,7 +142,7 @@ public sealed class IngestRepositoryTests : IDisposable {
     [Test]
     public async Task Session_start_keeps_the_first_observed_started_at() {
         const string sessionId = "sess-first-start-observation";
-        var firstObserved = DateTimeOffset.Parse("2026-01-02T03:04:05Z");
+        var firstObserved = new DateTimeOffset(2026, 1, 2, 3, 4, 5, TimeSpan.Zero);
         var repeatedObserved = firstObserved.AddMinutes(10);
 
         await _sessions.GetOrCreatePlaceholderAsync(
