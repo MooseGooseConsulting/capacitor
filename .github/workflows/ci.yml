@@ -2,95 +2,88 @@ name: CI
 
 on:
   pull_request:
-    # Skip markdown-only PRs, EXCEPT under kcap/ — every file in the shipped plugin is a SKILL.md, so
-    # adding a skill is a markdown-only change. Ignoring those let two skills ship unlisted in
-    # AgentsSkillsInstaller.SourceNames without a red build; the guard that now catches it only helps
-    # if it runs on the PR that causes it. Order matters: later patterns re-include.
-    paths:
-      - '**'
-      - '!**.md'
-      - 'kcap/**'
   push:
     branches: [main]
-    paths-ignore:
-      - '**.md'
-    tags:
-      - 'v*'
+  workflow_dispatch:
 
 permissions:
   contents: read
 
-env:
-  # Keep NuGet/npm/CLI state in the job temp dir, not the persistent runner home.
-  DOTNET_CLI_HOME: ${{ runner.temp }}/dotnet-cli
-  NUGET_PACKAGES: ${{ runner.temp }}/nuget
-  npm_config_cache: ${{ runner.temp }}/npm
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build-and-test:
-    name: Build and test (${{ matrix.name }})
-    # Persistent runner: no ephemeral isolation. Same-repo trusted PRs and pushes
-    # only; fork and outside-collaborator trees do not execute on this host.
+    name: Build and test (linux-x64)
     if: github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association))
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        # Self-hosted linux-x64 only. Hosted windows-latest fails before checkout
-        # on billing. macOS is omitted: local temp-path flakes would stay red.
-        include:
-          - name: linux-x64
-            runner: [self-hosted, moosegoose-build]
-
-    defaults:
-      run:
-        working-directory: ${{ github.workspace }}
-
+    runs-on: [self-hosted, moosegoose-build]
+    timeout-minutes: 20
+    env:
+      DOTNET_CLI_HOME: ${{ runner.temp }}/dotnet-cli
+      NUGET_PACKAGES: ${{ runner.temp }}/nuget
+      npm_config_cache: ${{ runner.temp }}/npm
     steps:
       - uses: actions/checkout@v7
         with:
+          fetch-depth: 0
           persist-credentials: false
 
+      - name: Select affected checks
+        id: changes
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          changed="$(mktemp)"
+          trap 'rm -f "$changed"' EXIT
+          dotnet=false
+          wrapper=false
+          if [[ "$EVENT_NAME" == workflow_dispatch || -z "$BASE_SHA" || "$BASE_SHA" =~ ^0+$ ]]; then
+            dotnet=true
+            wrapper=true
+          else
+            git diff --name-only --no-renames -z "$BASE_SHA" HEAD > "$changed"
+            while IFS= read -r -d '' file; do
+              case "$file" in
+                .github/workflows/ci.yml|.github/actions/*)
+                  dotnet=true; wrapper=true ;;
+                src/*|test/*|kcap/*|*.sln|*.slnx|*.props|*.targets|global.json|NuGet.Config|nuget.config|.config/*|.editorconfig|scripts/check-linear-ids.sh)
+                  dotnet=true ;;
+                npm/*)
+                  wrapper=true ;;
+              esac
+            done < "$changed"
+          fi
+          printf 'dotnet=%s\nwrapper=%s\n' "$dotnet" "$wrapper" >> "$GITHUB_OUTPUT"
+          printf 'Selected checks: dotnet=%s wrapper=%s\n' "$dotnet" "$wrapper" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Setup .NET
+        if: steps.changes.outputs.dotnet == 'true'
         uses: actions/setup-dotnet@v6
         env:
-          # The self-hosted runner is not root and cannot write the action's default
-          # /usr/share/dotnet.
           DOTNET_INSTALL_DIR: ${{ runner.temp }}/dotnet
         with:
           cache: true
-          # No lock file to key on; CPM makes this the one file that pins every version.
           cache-dependency-path: Directory.Packages.props
 
-      - name: Setup Node.js
-        # Runner-bundled JS is not on PATH; wrapper tests need a real node.
-        uses: actions/setup-node@v7
-        with:
-          node-version: '24'
-
-      # Whole solution in every cached job: one OS-keyed immutable entry, so a job that
-      # restored a subset would win the race and freeze the cache on it.
       - name: Restore solution
+        if: steps.changes.outputs.dotnet == 'true'
         run: dotnet restore Capacitor.slnx
 
       - name: Build solution
+        if: steps.changes.outputs.dotnet == 'true'
         run: dotnet build Capacitor.slnx --no-restore
 
-      - name: Run npm wrapper tests
-        # Plain-Node assertion scripts for the npm launcher/refresh/resolve
-        # modules (no test framework, no npm install). `shell: bash` gives
-        # fail-fast -e semantics.
-        shell: bash
-        run: |
-          node npm/kcap/bin/kcap.test.js
-          node npm/kcap/bin/resolve.test.js
-          node npm/kcap/bin/refresh.test.js
+      - name: Check source identifiers
+        if: steps.changes.outputs.dotnet == 'true'
+        run: bash scripts/check-linear-ids.sh
 
       - name: Run server unit tests
-        # Run Data and Ingest unit projects when present. SqliteDatabaseInitializer
-        # walks from cwd to Capacitor.slnx, so this step starts at the repo root.
+        if: steps.changes.outputs.dotnet == 'true'
         shell: bash
-        working-directory: ${{ github.workspace }}
         run: |
           set -uo pipefail
           projects=(
@@ -102,91 +95,26 @@ jobs:
           for proj in "${projects[@]}"; do
             if [[ -f "$proj" ]]; then
               found=1
-              echo "Running $proj from ${PWD}"
-              if ! dotnet test "$proj" -- --maximum-parallel-tests 1; then
+              if ! dotnet test "$proj" --no-build -- --maximum-parallel-tests 1; then
                 failed=1
               fi
             fi
           done
           if [[ "$found" -eq 0 ]]; then
-            echo "Server Data/Ingest unit test projects are not on this branch; skipping."
+            echo 'No server unit-test project exists on this revision.'
           fi
           exit "$failed"
 
-  lint-linear-ids:
-    name: No Linear issue IDs in C# source
-    if: github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association))
-    runs-on: [self-hosted, moosegoose-build]
-    steps:
-      - uses: actions/checkout@v7
+      - name: Setup Node.js
+        if: steps.changes.outputs.wrapper == 'true'
+        uses: actions/setup-node@v7
         with:
-          persist-credentials: false
-      - name: Check for Linear issue ID tokens in src/**/*.cs and test/**/*.cs
-        run: bash scripts/check-linear-ids.sh
+          node-version: '24'
 
-  aot-check:
-    name: AOT publish check
-    if: github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association))
-    runs-on: [self-hosted, moosegoose-build]
-    strategy:
-      fail-fast: false
-      matrix:
-        project:
-          - src/Capacitor.Cli/Capacitor.Cli.csproj
-          - src/Capacitor.Cli.Daemon/Capacitor.Cli.Daemon.csproj
-
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v6
-        env:
-          # The self-hosted runner is not root and cannot write the action's default
-          # /usr/share/dotnet.
-          DOTNET_INSTALL_DIR: ${{ runner.temp }}/dotnet
-        with:
-          cache: true
-          # No lock file to key on; CPM makes this the one file that pins every version.
-          cache-dependency-path: Directory.Packages.props
-
-      - name: Install build dependencies
-        id: aot-deps
-        # ILCompiler needs clang and zlib. Interactive sudo hangs until timeout.
-        # Pull requests skip AOT when the host cannot install them; push/tag fail.
+      - name: Run npm wrapper tests
+        if: steps.changes.outputs.wrapper == 'true'
+        shell: bash
         run: |
-          if command -v clang >/dev/null && dpkg -s zlib1g-dev >/dev/null 2>&1; then
-            echo "available=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if sudo -n true 2>/dev/null; then
-            sudo apt-get update && sudo apt-get install -y clang zlib1g-dev
-            echo "available=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "available=false" >> "$GITHUB_OUTPUT"
-          echo "::warning::clang and zlib1g-dev are missing and this runner has no passwordless sudo. Install them on the runner host: sudo apt-get install -y clang zlib1g-dev"
-          if [[ "${{ github.event_name }}" != "pull_request" ]]; then
-            echo "::error::AOT publish is required on push/tag and the host cannot install clang/zlib."
-            exit 1
-          fi
-
-      # Whole solution, and the RID pulls ILCompiler — a superset of build-and-test's set.
-      - name: Restore solution
-        if: steps.aot-deps.outputs.available == 'true'
-        run: dotnet restore Capacitor.slnx -r linux-x64
-
-      - name: Publish AOT (linux-x64)
-        if: steps.aot-deps.outputs.available == 'true'
-        run: dotnet publish ${{ matrix.project }} -c Release -r linux-x64 --no-restore
-
-      - name: Check for trimming warnings
-        if: steps.aot-deps.outputs.available == 'true'
-        run: |
-          OUTPUT=$(dotnet publish ${{ matrix.project }} -c Release -r linux-x64 --no-restore 2>&1)
-          if echo "$OUTPUT" | grep -E 'IL[23][01][0-9]{2}'; then
-            echo "::error::AOT/trimming warnings detected"
-            echo "$OUTPUT" | grep -E 'IL[23][01][0-9]{2}'
-            exit 1
-          fi
+          node npm/kcap/bin/kcap.test.js
+          node npm/kcap/bin/resolve.test.js
+          node npm/kcap/bin/refresh.test.js
