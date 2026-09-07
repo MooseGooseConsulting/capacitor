@@ -79,13 +79,94 @@ public class SchemaMigrationTests {
         var pk = await ListPrimaryKeyColumnsAsync(connection, "session_events");
         await Assert.That(pk).IsEquivalentTo(["session_id", "agent_id", "line_number", "logical_seq"]);
 
-        foreach (var column in new[] { "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens" }) {
+        foreach (var column in new[] {
+            "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens",
+            "reasoning_tokens", "context_used_tokens", "context_window_tokens", "cost_usd"
+        }) {
             await Assert.That(await ColumnIsNotNullAsync(connection, "session_events", column)).IsFalse();
         }
 
         var sessionColumns = await ListColumnNamesAsync(connection, "sessions");
         await Assert.That(sessionColumns).Contains("hidden_reason");
         await Assert.That(sessionColumns).Contains("disposition");
+    }
+
+    [Test]
+    public async Task InitializeAsync_rebuilds_three_column_events_without_dropping_cwd() {
+        using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+        await ExecuteNonQueryAsync(connection, ThreeColumnSessionEventsSql);
+        await ExecuteNonQueryAsync(connection, """
+            INSERT INTO session_events (
+                session_id, agent_id, line_number, event_type, vendor, timestamp, cwd, repo_hash, repo_owner, repo_name
+            ) VALUES (
+                'sess-cwd', '', 1, 'Raw', 'claude', '2026-09-07T00:00:00Z',
+                'C:\work\repo-a', 'hash-a', 'owner-a', 'repo-a'
+            );
+            """);
+
+        await SqliteDatabaseInitializer.InitializeAsync(connection);
+
+        var pk = await ListPrimaryKeyColumnsAsync(connection, "session_events");
+        await Assert.That(pk).IsEquivalentTo(["session_id", "agent_id", "line_number", "logical_seq"]);
+
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = """
+            SELECT cwd, repo_hash, repo_owner, repo_name, logical_seq
+            FROM session_events WHERE session_id = 'sess-cwd';
+            """;
+        using var reader = await cmd.ExecuteReaderAsync();
+        await Assert.That(await reader.ReadAsync()).IsTrue();
+        await Assert.That(reader.GetString(0)).IsEqualTo(@"C:\work\repo-a");
+        await Assert.That(reader.GetString(1)).IsEqualTo("hash-a");
+        await Assert.That(reader.GetString(2)).IsEqualTo("owner-a");
+        await Assert.That(reader.GetString(3)).IsEqualTo("repo-a");
+        await Assert.That(reader.GetInt64(4)).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task InitializeAsync_makes_usage_nullable_when_four_column_key_is_already_current() {
+        using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+        await ExecuteNonQueryAsync(connection, FourColumnNotNullUsageSql);
+        await ExecuteNonQueryAsync(connection, """
+            INSERT INTO session_events (
+                session_id, agent_id, line_number, logical_seq, event_type, vendor, timestamp,
+                input_tokens, cost_usd, cwd
+            ) VALUES (
+                'sess-notnull', '', 1, 7, 'Raw', 'claude', '2026-09-07T00:00:00Z',
+                1, 0.5, 'C:\work\kept'
+            );
+            """);
+
+        await SqliteDatabaseInitializer.InitializeAsync(connection);
+
+        foreach (var column in new[] { "input_tokens", "cost_usd" }) {
+            await Assert.That(await ColumnIsNotNullAsync(connection, "session_events", column)).IsFalse();
+        }
+
+        using (var read = connection.CreateCommand()) {
+            read.CommandText = """
+                SELECT logical_seq, input_tokens, cost_usd, cwd
+                FROM session_events WHERE session_id = 'sess-notnull';
+                """;
+            using var reader = await read.ExecuteReaderAsync();
+            await Assert.That(await reader.ReadAsync()).IsTrue();
+            await Assert.That(reader.GetInt64(0)).IsEqualTo(7);
+            await Assert.That(reader.GetInt64(1)).IsEqualTo(1);
+            await Assert.That(reader.GetDecimal(2)).IsEqualTo(0.5m);
+            await Assert.That(reader.GetString(3)).IsEqualTo(@"C:\work\kept");
+        }
+
+        await ExecuteNonQueryAsync(connection, """
+            INSERT INTO session_events (
+                session_id, agent_id, line_number, logical_seq, event_type, vendor, timestamp,
+                input_tokens, cost_usd
+            ) VALUES (
+                'sess-notnull', '', 2, 0, 'Raw', 'claude', '2026-09-07T00:00:01Z',
+                NULL, NULL
+            );
+            """);
     }
 
     [Test]
@@ -214,4 +295,47 @@ public class SchemaMigrationTests {
         var result = await cmd.ExecuteScalarAsync();
         return Convert.ToInt32(result, CultureInfo.InvariantCulture) != 0;
     }
+
+    static async Task ExecuteNonQueryAsync(SqliteConnection connection, string sql) {
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = sql;
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    const string ThreeColumnSessionEventsSql = """
+        CREATE TABLE session_events (
+            session_id          VARCHAR(64) NOT NULL,
+            agent_id            VARCHAR(64) NOT NULL DEFAULT '',
+            line_number         INTEGER NOT NULL,
+            event_type          VARCHAR(64) NOT NULL,
+            vendor              VARCHAR(32) NOT NULL,
+            model               VARCHAR(64),
+            timestamp           VARCHAR(35) NOT NULL,
+            cwd                 TEXT,
+            repo_hash           VARCHAR(64),
+            repo_owner          VARCHAR(128),
+            repo_name           VARCHAR(128),
+            PRIMARY KEY (session_id, agent_id, line_number)
+        );
+        """;
+
+    const string FourColumnNotNullUsageSql = """
+        CREATE TABLE session_events (
+            session_id          VARCHAR(64) NOT NULL,
+            agent_id            VARCHAR(64) NOT NULL DEFAULT '',
+            line_number         INTEGER NOT NULL,
+            logical_seq         BIGINT NOT NULL DEFAULT 0,
+            event_type          VARCHAR(64) NOT NULL,
+            vendor              VARCHAR(32) NOT NULL,
+            model               VARCHAR(64),
+            timestamp           VARCHAR(35) NOT NULL,
+            input_tokens        BIGINT NOT NULL DEFAULT 0,
+            cost_usd            NUMERIC(10, 6) NOT NULL DEFAULT 0,
+            cwd                 TEXT,
+            repo_hash           VARCHAR(64),
+            repo_owner          VARCHAR(128),
+            repo_name           VARCHAR(128),
+            PRIMARY KEY (session_id, agent_id, line_number, logical_seq)
+        );
+        """;
 }

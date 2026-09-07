@@ -43,33 +43,51 @@ public static class SqliteDatabaseInitializer {
         }
     }
 
-    // SQLite cannot alter a primary key in place. Older Capacitor databases used
-    // (session_id, agent_id, line_number); rebuild only those databases so the
-    // four-part conflict target used by both event stores is valid after upgrade.
+    // SQLite cannot ALTER a primary key or drop NOT NULL in place. Rebuild when
+    // the key is still three-column, or when a preceding upgrade left usage
+    // columns NOT NULL DEFAULT 0 while the key is already current.
+    private static readonly string[] SessionEventPrimaryKey =
+        ["session_id", "agent_id", "line_number", "logical_seq"];
+
+    private static readonly string[] NullableUsageColumns = [
+        "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens",
+        "reasoning_tokens", "context_used_tokens", "context_window_tokens", "cost_usd"
+    ];
+
     private static async Task UpgradeSessionEventPrimaryKeyAsync(
         SqliteConnection connection,
         SqliteTransaction transaction,
         CancellationToken ct) {
-        var keyColumns = new List<(long Ordinal, string Name)>();
+        var columns = new List<(string Name, bool NotNull, long PkOrdinal)>();
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         using (var inspect = connection.CreateCommand()) {
             inspect.Transaction = transaction;
             inspect.CommandText = "PRAGMA table_info(session_events);";
             using var reader = await inspect.ExecuteReaderAsync(ct);
             while (await reader.ReadAsync(ct)) {
-                var ordinal = reader.GetInt64(5);
-                if (ordinal > 0) keyColumns.Add((ordinal, reader.GetString(1)));
+                var name = reader.GetString(1);
+                var notNull = reader.GetInt64(3) != 0;
+                var pkOrdinal = reader.GetInt64(5);
+                columns.Add((name, notNull, pkOrdinal));
+                names.Add(name);
             }
         }
 
-        var expected = new[] { "session_id", "agent_id", "line_number", "logical_seq" };
-        if (keyColumns.OrderBy(column => column.Ordinal).Select(column => column.Name)
-            .SequenceEqual(expected, StringComparer.OrdinalIgnoreCase)) {
+        var keyMatches = columns.Where(column => column.PkOrdinal > 0)
+            .OrderBy(column => column.PkOrdinal)
+            .Select(column => column.Name)
+            .SequenceEqual(SessionEventPrimaryKey, StringComparer.OrdinalIgnoreCase);
+        var usageNotNull = NullableUsageColumns.Any(column =>
+            columns.Any(info => info.NotNull && string.Equals(info.Name, column, StringComparison.OrdinalIgnoreCase)));
+        if (keyMatches && !usageNotNull) {
             return;
         }
 
+        string Copy(string column, string fallback) => names.Contains(column) ? column : fallback;
+
         using (var rebuild = connection.CreateCommand()) {
             rebuild.Transaction = transaction;
-            rebuild.CommandText = @"
+            rebuild.CommandText = $@"
                 CREATE TABLE session_events_upgrade (
                     session_id          VARCHAR(64) NOT NULL,
                     agent_id            VARCHAR(64) NOT NULL DEFAULT '',
@@ -97,19 +115,31 @@ public static class SqliteDatabaseInitializer {
                     is_error            BOOLEAN NOT NULL DEFAULT FALSE,
                     content             TEXT,
                     raw_payload         TEXT,
+                    cwd                 TEXT,
+                    repo_hash           VARCHAR(64),
+                    repo_owner          VARCHAR(128),
+                    repo_name           VARCHAR(128),
                     PRIMARY KEY (session_id, agent_id, line_number, logical_seq)
                 );
                 INSERT INTO session_events_upgrade (
                     session_id, agent_id, line_number, logical_seq, event_id, event_type, vendor, model,
                     timestamp, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
                     reasoning_tokens, context_used_tokens, context_window_tokens, cost_usd, item_id,
-                    tool_server, tool_name, tool_input, tool_output, tool_exit_code, is_error, content, raw_payload
+                    tool_server, tool_name, tool_input, tool_output, tool_exit_code, is_error, content, raw_payload,
+                    cwd, repo_hash, repo_owner, repo_name
                 )
                 SELECT
-                    session_id, agent_id, line_number, 0, event_id, event_type, vendor, model,
-                    timestamp, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
-                    reasoning_tokens, context_used_tokens, context_window_tokens, cost_usd, item_id,
-                    tool_server, tool_name, tool_input, tool_output, tool_exit_code, is_error, content, raw_payload
+                    session_id, agent_id, line_number, {Copy("logical_seq", "0")},
+                    {Copy("event_id", "NULL")}, event_type, vendor, {Copy("model", "NULL")},
+                    timestamp, {Copy("input_tokens", "NULL")}, {Copy("output_tokens", "NULL")},
+                    {Copy("cache_read_tokens", "NULL")}, {Copy("cache_write_tokens", "NULL")},
+                    {Copy("reasoning_tokens", "NULL")}, {Copy("context_used_tokens", "NULL")},
+                    {Copy("context_window_tokens", "NULL")}, {Copy("cost_usd", "NULL")},
+                    {Copy("item_id", "NULL")}, {Copy("tool_server", "NULL")}, {Copy("tool_name", "NULL")},
+                    {Copy("tool_input", "NULL")}, {Copy("tool_output", "NULL")}, {Copy("tool_exit_code", "NULL")},
+                    {Copy("is_error", "FALSE")}, {Copy("content", "NULL")}, {Copy("raw_payload", "NULL")},
+                    {Copy("cwd", "NULL")}, {Copy("repo_hash", "NULL")}, {Copy("repo_owner", "NULL")},
+                    {Copy("repo_name", "NULL")}
                 FROM session_events;
                 DROP TABLE session_events;
                 ALTER TABLE session_events_upgrade RENAME TO session_events;
