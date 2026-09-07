@@ -1,3 +1,4 @@
+using System.Globalization;
 using Microsoft.Data.Sqlite;
 using Capacitor.Server.Data.Entities;
 using System.Text.Json;
@@ -76,7 +77,11 @@ public class SchemaMigrationTests {
         await Assert.That(columns).Contains("context_window_tokens");
 
         var pk = await ListPrimaryKeyColumnsAsync(connection, "session_events");
-        await Assert.That(pk).IsEquivalentTo(["session_id", "agent_id", "line_number"]);
+        await Assert.That(pk).IsEquivalentTo(["session_id", "agent_id", "line_number", "logical_seq"]);
+
+        foreach (var column in new[] { "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens" }) {
+            await Assert.That(await ColumnIsNotNullAsync(connection, "session_events", column)).IsFalse();
+        }
 
         var sessionColumns = await ListColumnNamesAsync(connection, "sessions");
         await Assert.That(sessionColumns).Contains("hidden_reason");
@@ -200,5 +205,13 @@ public class SchemaMigrationTests {
         }
 
         return columns;
+    }
+
+    static async Task<bool> ColumnIsNotNullAsync(SqliteConnection connection, string table, string column) {
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = $"SELECT \"notnull\" FROM pragma_table_info('{table}') WHERE name = $name;";
+        cmd.Parameters.AddWithValue("$name", column);
+        var result = await cmd.ExecuteScalarAsync();
+        return Convert.ToInt32(result, CultureInfo.InvariantCulture) != 0;
     }
 }
