@@ -9,8 +9,14 @@ on:
 permissions:
   contents: read
 
+# PRs share github.event.pull_request.number so superseded review runs cancel.
+# head_ref is the branch name only; two forks named patch-1 would otherwise
+# share a group and cancel each other before the job-level origin check.
+# Pushes have no pull_request, so github.run_id makes each run unique.
+# cancel-in-progress:false is not enough: queue defaults to single and still
+# replaces pending runs.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
 jobs:
@@ -46,9 +52,9 @@ jobs:
               case "$file" in
                 .github/workflows/ci.yml|.github/actions/*)
                   dotnet=true; wrapper=true ;;
-                src/*|test/*|kcap/*|*.sln|*.slnx|*.props|*.targets|global.json|NuGet.Config|nuget.config|.config/*|.editorconfig|scripts/check-linear-ids.sh)
+                src/*|test/*|*.sln|*.slnx|*.props|*.targets|global.json|NuGet.Config|nuget.config|.config/*|.editorconfig|scripts/check-linear-ids.sh)
                   dotnet=true ;;
-                npm/*)
+                npm/*|kcap/.mcp.json|kcap/.codex-mcp.json)
                   wrapper=true ;;
               esac
             done < "$changed"
