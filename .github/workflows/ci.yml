@@ -9,12 +9,14 @@ on:
 permissions:
   contents: read
 
-# PRs share github.head_ref so superseded review runs cancel.
-# Pushes have an empty head_ref, so github.run_id makes each run unique.
+# PRs share github.event.pull_request.number so superseded review runs cancel.
+# head_ref is the branch name only; two forks named patch-1 would otherwise
+# share a group and cancel each other before the job-level origin check.
+# Pushes have no pull_request, so github.run_id makes each run unique.
 # cancel-in-progress:false is not enough: queue defaults to single and still
 # replaces pending runs.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
 jobs:
