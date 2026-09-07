@@ -137,6 +137,15 @@ public class SchemaMigrationTests {
                 'sess-notnull', '', 1, 7, 'Raw', 'claude', '2026-09-07T00:00:00Z',
                 1, 0.5, 'C:\work\kept'
             );
+            INSERT INTO session_events (
+                session_id, agent_id, line_number, logical_seq, event_type, vendor, timestamp,
+                input_tokens, cost_usd
+            ) VALUES (
+                'sess-notnull', '', 3, 0, 'Raw', 'claude', '2026-09-07T00:00:02Z',
+                0, 0
+            );
+            CREATE VIEW v_an_token_usage_by_model AS
+            SELECT input_tokens FROM session_events;
             """);
 
         await SqliteDatabaseInitializer.InitializeAsync(connection);
@@ -148,7 +157,7 @@ public class SchemaMigrationTests {
         using (var read = connection.CreateCommand()) {
             read.CommandText = """
                 SELECT logical_seq, input_tokens, cost_usd, cwd
-                FROM session_events WHERE session_id = 'sess-notnull';
+                FROM session_events WHERE session_id = 'sess-notnull' AND line_number = 1;
                 """;
             using var reader = await read.ExecuteReaderAsync();
             await Assert.That(await reader.ReadAsync()).IsTrue();
@@ -156,6 +165,17 @@ public class SchemaMigrationTests {
             await Assert.That(reader.GetInt64(1)).IsEqualTo(1);
             await Assert.That(reader.GetDecimal(2)).IsEqualTo(0.5m);
             await Assert.That(reader.GetString(3)).IsEqualTo(@"C:\work\kept");
+        }
+
+        using (var zeros = connection.CreateCommand()) {
+            zeros.CommandText = """
+                SELECT input_tokens, cost_usd FROM session_events
+                WHERE session_id = 'sess-notnull' AND line_number = 3;
+                """;
+            using var reader = await zeros.ExecuteReaderAsync();
+            await Assert.That(await reader.ReadAsync()).IsTrue();
+            await Assert.That(reader.IsDBNull(0)).IsTrue();
+            await Assert.That(reader.IsDBNull(1)).IsTrue();
         }
 
         await ExecuteNonQueryAsync(connection, """

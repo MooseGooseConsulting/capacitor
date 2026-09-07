@@ -84,10 +84,23 @@ public static class SqliteDatabaseInitializer {
         }
 
         string Copy(string column, string fallback) => names.Contains(column) ? column : fallback;
+        string CopyUsage(string column) {
+            if (!names.Contains(column)) {
+                return "NULL";
+            }
+
+            // Match 006_nullable_observed_metrics.postgres.sql: DEFAULT 0 on a
+            // NOT NULL usage column was the unreported sentinel, not an observed zero.
+            return usageNotNull ? $"NULLIF({column}, 0)" : column;
+        }
 
         using (var rebuild = connection.CreateCommand()) {
             rebuild.Transaction = transaction;
             rebuild.CommandText = $@"
+                DROP VIEW IF EXISTS v_an_token_usage_by_model;
+                DROP VIEW IF EXISTS v_an_tool_usage;
+                DROP VIEW IF EXISTS v_an_cost;
+                DROP VIEW IF EXISTS v_an_session_steps;
                 CREATE TABLE session_events_upgrade (
                     session_id          VARCHAR(64) NOT NULL,
                     agent_id            VARCHAR(64) NOT NULL DEFAULT '',
@@ -131,10 +144,10 @@ public static class SqliteDatabaseInitializer {
                 SELECT
                     session_id, agent_id, line_number, {Copy("logical_seq", "0")},
                     {Copy("event_id", "NULL")}, event_type, vendor, {Copy("model", "NULL")},
-                    timestamp, {Copy("input_tokens", "NULL")}, {Copy("output_tokens", "NULL")},
-                    {Copy("cache_read_tokens", "NULL")}, {Copy("cache_write_tokens", "NULL")},
+                    timestamp, {CopyUsage("input_tokens")}, {CopyUsage("output_tokens")},
+                    {CopyUsage("cache_read_tokens")}, {CopyUsage("cache_write_tokens")},
                     {Copy("reasoning_tokens", "NULL")}, {Copy("context_used_tokens", "NULL")},
-                    {Copy("context_window_tokens", "NULL")}, {Copy("cost_usd", "NULL")},
+                    {Copy("context_window_tokens", "NULL")}, {CopyUsage("cost_usd")},
                     {Copy("item_id", "NULL")}, {Copy("tool_server", "NULL")}, {Copy("tool_name", "NULL")},
                     {Copy("tool_input", "NULL")}, {Copy("tool_output", "NULL")}, {Copy("tool_exit_code", "NULL")},
                     {Copy("is_error", "FALSE")}, {Copy("content", "NULL")}, {Copy("raw_payload", "NULL")},
