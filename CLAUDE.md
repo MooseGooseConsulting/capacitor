@@ -5,7 +5,7 @@ point. See `NOTICE.md` for provenance, `PROMPT.md` for what we are building, and
 `reference/FLEET.md` for the objective. The technical conventions below are inherited and
 still correct — Kurrent's *process* is not ours and has been removed.
 
-**File paths:** CLI source at `src/Capacitor.Cli/`, shared core at `src/Capacitor.Cli.Core/`, daemon at `src/Capacitor.Cli.Daemon/`, desktop app at `src/Capacitor.App/`, npm packages at `npm/`, Claude Code plugin at `kcap/`.
+**File paths:** CLI source at `src/Capacitor.Cli/`, shared core at `src/Capacitor.Cli.Core/`, daemon at `src/Capacitor.Cli.Daemon/`, desktop app at `src/Capacitor.App/`, server at `src/Capacitor.Server.{Data,Ingest,Normalizers,Analytics,Api}/`, web console at `src/Capacitor.Web/`, npm packages at `npm/`, Claude Code plugin at `kcap/`.
 
 **Harness layout:** vendor-specific code lives under `Harness/`. Vendors: Antigravity, Claude, Codex, Copilot, Cursor, Gemini, Kiro, OpenCode, Pi.
 
@@ -22,9 +22,10 @@ The CLI records coding-agent sessions by forwarding hook payloads and transcript
 Capacitor server. It also hosts an agent daemon for remote agent management and provides PR
 review context via MCP tools.
 
-**The server half does not exist yet — building it is the job.** The client in this repo
-is complete and battle-tested; treat it as the specification for what the server must
-answer. See `reference/SURFACE.md` §4 for the wire contract.
+The client is the specification for what the server must answer (`reference/SURFACE.md`
+wire contract). Capture, Postgres ingest, five normalizers, and a Sessions console slice
+are on `main`. Live watch, auth, fleet machine routes, analytics HTTP, and most MCP
+backing are not. Start at `reference/REPLICATION-MAP-LANDED.md`. The 2026-08-29 original is `reference/REPLICATION-MAP-2026-08-29.md`.
 
 ## Invariants
 
